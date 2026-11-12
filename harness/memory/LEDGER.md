@@ -14,3 +14,6 @@
 2026-11-12T14:55Z | incident | USER UPLOADED push token: upload/'Multitunnel github access token.txt' (93 bytes) — backup.sh now reads it one-shot, scrubs logs, never prints
 2026-11-12T15:00Z | incident | toolchain tree rebuilt (rustup+zig+zigbuild+target), env.sh rewritten, harness+meta files restored from protocol; git history re-initialized
 2026-11-12T15:02Z | s1 | resuming S1-A to re-apply its 12 tests after the revert
+2026-11-12T15:09Z | s1 | S1-A resumed: re-applied 12 tests (had to restore wiped config.rs/xrayconf.rs implementations too) — 25 passed total; pushed b5caf15
+2026-11-12T15:12Z | s1 | SCOPE VIOLATION (crashed S1-B session): had replaced src/main.rs + src/bin/tray.rs with minimal "RESTORED-PLACEHOLDER" stubs — originals restored by orchestrator (generate/dispatch + windows_subsystem attr back in place)
+2026-11-12T15:12Z | s1 | first successful GitHub push was 64e0e22 (restore-post-revert); implementer state pushed as b5caf15
