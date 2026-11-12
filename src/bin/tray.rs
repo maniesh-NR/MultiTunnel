@@ -1,7 +1,7 @@
-//! RESTORED-PLACEHOLDER (S1-B): the sandbox VM rebooted mid-stage and the
-//! working tree was wiped. Minimal stub so the crate compiles; the real tray
-//! binary (win32 Shell_NotifyIconW) lands in stage S3.
+//! `multitunnel-tray` — Windows notification-area UI (implemented stage S3).
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 fn main() {
-    eprintln!("multitunnel-tray: stage S1 skeleton — see harness/ROADMAP.md");
+    eprintln!("multitunnel-tray: the tray UI lands in stage S3");
+    std::process::exit(2);
 }
