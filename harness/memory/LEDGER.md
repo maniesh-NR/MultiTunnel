@@ -20,3 +20,6 @@
 2026-11-12T15:15Z | s1-review | consensus round: S1-REV-C APPROVE (0P0/2P1/5P2), S1-REV-B APPROVE (0P0/1P1/6P2) — both ran tests+cross-build independently
 2026-11-12T15:18Z | s1 | P1+P2 fixes applied by orchestrator: run_strict for on/off, 0600 credential write, #[cfg(unix)] gates, checked_add deadlines, has_root paths, golden tests (proxyOverride + example.json equality), fingerprint/spiderX asserts, release.yml Test-Path guards, stale ROADMAP note removed
 2026-11-12T15:20Z | s1 | post-fix suite: 30 passed 0 failed; zigbuild green; S1 CLOSED (harness/memory/consensus/S1-consensus.md)
+2026-11-12T15:25Z | s1-close | pushed consensus + reports; ROADMAP S1 marked [x]
+2026-11-12T15:30Z | s2 | deps added (winreg 0.56, windows-sys 0.61.2 w/ 7 features, cfg(windows)); S2 module stubs + contracts written by orchestrator; lib.rs mods added
+2026-11-12T15:31Z | s2 | skeleton green; launching parallel implementers S2-A (core_proc+supervisor+main doctor/connect) and S2-B (sysproxy+elevate)
