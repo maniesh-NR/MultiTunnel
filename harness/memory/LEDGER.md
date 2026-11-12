@@ -23,3 +23,7 @@
 2026-11-12T15:25Z | s1-close | pushed consensus + reports; ROADMAP S1 marked [x]
 2026-11-12T15:30Z | s2 | deps added (winreg 0.56, windows-sys 0.61.2 w/ 7 features, cfg(windows)); S2 module stubs + contracts written by orchestrator; lib.rs mods added
 2026-11-12T15:31Z | s2 | skeleton green; launching parallel implementers S2-A (core_proc+supervisor+main doctor/connect) and S2-B (sysproxy+elevate)
+2026-11-12T15:47Z | s2 | S2-A1 done: core_proc.rs (531 lines, 5 tests, zigbuild green) — but THIRD infra event: sandbox reset mid-session again
+2026-11-12T15:48Z | INCIDENT-2 | reset wiped MultiTunnel/.git + all src except agent's minimal harness; S2-B's real sysproxy/elevate implementations LOST (never pushed — process gap between agent completion and backup)
+2026-11-12T15:50Z | recovery | repo restored from GitHub remote (d5a33ab) + core_proc from /tmp bak; merged suite 35 passed ×3 (S1 30 + core_proc 5); one flaky failure seen once under first-compile load — flagged for S2 review
+2026-11-12T15:51Z | process | NEW RULE (D7 hardening): backup.sh runs IMMEDIATELY after every agent completion, before the next agent launches
