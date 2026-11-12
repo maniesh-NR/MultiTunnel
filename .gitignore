@@ -1,0 +1,8 @@
+/target
+/logs
+/state
+/bin
+config.json
+xray-client.json
+*.exe
+harness/memory/tmp/
