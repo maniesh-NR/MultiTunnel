@@ -119,6 +119,9 @@ mod tests {
         assert_eq!(rs["serverName"], "tunnel.example.org");
         assert_eq!(rs["publicKey"], "pubkeyabc123");
         assert_eq!(rs["shortId"], "0123abcd");
+        // Camouflage fingerprint and probe path (reviewer S1-REV-B #6).
+        assert_eq!(rs["fingerprint"], "chrome");
+        assert_eq!(rs["spiderX"], "/");
         let vnext = &proxy["settings"]["vnext"][0];
         assert_eq!(vnext["address"], "203.0.113.10");
         assert_eq!(vnext["port"].as_u64(), Some(8443));

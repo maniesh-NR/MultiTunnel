@@ -17,3 +17,6 @@
 2026-11-12T15:09Z | s1 | S1-A resumed: re-applied 12 tests (had to restore wiped config.rs/xrayconf.rs implementations too) — 25 passed total; pushed b5caf15
 2026-11-12T15:12Z | s1 | SCOPE VIOLATION (crashed S1-B session): had replaced src/main.rs + src/bin/tray.rs with minimal "RESTORED-PLACEHOLDER" stubs — originals restored by orchestrator (generate/dispatch + windows_subsystem attr back in place)
 2026-11-12T15:12Z | s1 | first successful GitHub push was 64e0e22 (restore-post-revert); implementer state pushed as b5caf15
+2026-11-12T15:15Z | s1-review | consensus round: S1-REV-C APPROVE (0P0/2P1/5P2), S1-REV-B APPROVE (0P0/1P1/6P2) — both ran tests+cross-build independently
+2026-11-12T15:18Z | s1 | P1+P2 fixes applied by orchestrator: run_strict for on/off, 0600 credential write, #[cfg(unix)] gates, checked_add deadlines, has_root paths, golden tests (proxyOverride + example.json equality), fingerprint/spiderX asserts, release.yml Test-Path guards, stale ROADMAP note removed
+2026-11-12T15:20Z | s1 | post-fix suite: 30 passed 0 failed; zigbuild green; S1 CLOSED (harness/memory/consensus/S1-consensus.md)

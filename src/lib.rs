@@ -15,8 +15,12 @@
 //! 3. LAN/private traffic bypasses the tunnel.
 
 pub mod config;
+pub mod core_proc;
+pub mod elevate;
 pub mod error;
 pub mod netmerge;
+pub mod supervisor;
+pub mod sysproxy;
 pub mod xrayconf;
 
 pub use error::Error;

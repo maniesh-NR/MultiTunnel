@@ -84,17 +84,53 @@ fn metric_re() -> &'static Regex {
 
 /// Run `bin args…` under a hard time bound and capture its combined output.
 ///
+/// Lenient variant (used by [`status`]): a nonzero exit WITH captured output
+/// still yields `Ok(output)` — the CLI may print useful diagnostics on
+/// failure and the text beats an error.
+///
 /// - the child's stdin is null; stdout/stderr are piped and drained on
 ///   threads, so a chatty child can never fill the OS pipe buffer and wedge
 ///   us while we poll;
 /// - the child is polled every 50 ms; past `timeout` it is killed and reaped
 ///   and a timeout error naming `bin` and `args` is returned;
 /// - exit 0 → `Ok(output)`, trimmed;
-/// - nonzero exit WITH captured output → still `Ok(output)`: the CLI may
-///   print useful diagnostics on failure and the text beats an error;
 /// - nonzero exit without any output → `Err` naming the exit status;
 /// - spawn failure (binary missing) → `Err` with the underlying io error.
 pub fn run(bin: &str, timeout: Duration, args: &[&str]) -> Result<String> {
+    let (status, combined) = run_full(bin, timeout, args)?;
+    if status.success() || !combined.is_empty() {
+        return Ok(combined);
+    }
+    Err(err!(
+        "`{bin} {}` failed with {status} and produced no output",
+        args.join(" ")
+    ))
+}
+
+/// Strict variant used by [`on`]/[`off`]: a nonzero exit is ALWAYS an error,
+/// even with output — a failed `net-merge on` must never look like success
+/// to the supervisor (reviewer finding S1-REV-C #2).
+pub fn run_strict(bin: &str, timeout: Duration, args: &[&str]) -> Result<String> {
+    let (status, combined) = run_full(bin, timeout, args)?;
+    if status.success() {
+        return Ok(combined);
+    }
+    if combined.is_empty() {
+        Err(err!("`{bin} {}` failed with {status}", args.join(" ")))
+    } else {
+        Err(err!(
+            "`{bin} {}` failed with {status}: {combined}",
+            args.join(" ")
+        ))
+    }
+}
+
+/// Core bounded execution shared by [`run`] and [`run_strict`].
+fn run_full(
+    bin: &str,
+    timeout: Duration,
+    args: &[&str],
+) -> Result<(std::process::ExitStatus, String)> {
     let mut cmd = Command::new(bin);
     cmd.args(args)
         .stdin(Stdio::null())
@@ -124,7 +160,9 @@ pub fn run(bin: &str, timeout: Duration, args: &[&str]) -> Result<String> {
         buf
     });
 
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| err!("timeout {timeout:?} is too large"))?;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -134,13 +172,7 @@ pub fn run(bin: &str, timeout: Duration, args: &[&str]) -> Result<String> {
                 combined.push_str(&String::from_utf8_lossy(&stderr));
                 let combined = combined.trim().to_string();
 
-                if status.success() || !combined.is_empty() {
-                    return Ok(combined);
-                }
-                return Err(err!(
-                    "`{bin} {}` failed with {status} and produced no output",
-                    args.join(" ")
-                ));
+                return Ok((status, combined));
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
@@ -172,14 +204,16 @@ fn join_reader(handle: std::thread::JoinHandle<Vec<u8>>) -> Vec<u8> {
     Vec::new()
 }
 
-/// Start merging (`net-merge on`).
+/// Start merging (`net-merge on`). Strict: failure is an error even when the
+/// CLI prints a diagnostic, so the supervisor never believes bonding is up
+/// when it is not.
 pub fn on(bin: &str) -> Result<()> {
-    run(bin, Duration::from_secs(10), &["on"]).map(|_| ())
+    run_strict(bin, Duration::from_secs(10), &["on"]).map(|_| ())
 }
 
-/// Pause merging (`net-merge off`).
+/// Pause merging (`net-merge off`). Strict like [`on`].
 pub fn off(bin: &str) -> Result<()> {
-    run(bin, Duration::from_secs(10), &["off"]).map(|_| ())
+    run_strict(bin, Duration::from_secs(10), &["off"]).map(|_| ())
 }
 
 /// Parsed `net-merge status`.
@@ -213,7 +247,9 @@ pub fn ensure_running(bin: &str, timeout: Duration) -> Result<()> {
     std::thread::spawn(move || {
         let _ = child.wait();
     });
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| err!("timeout {timeout:?} is too large"))?;
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_secs(1));
         if status(bin).is_ok() {
@@ -380,12 +416,40 @@ mod tests {
     }
 
     #[test]
+    fn run_strict_missing_binary_is_err() {
+        let err = run_strict("definitely-missing-binary-xyz", Duration::from_secs(1), &["x"])
+            .expect_err("strict: missing binary must error");
+        assert!(err.to_string().contains("definitely-missing-binary-xyz"), "{err}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_strict_nonzero_with_output_is_err() {
+        // The lenient `run` returns Ok for this input; strict must not.
+        let lenient = run("sh", Duration::from_secs(5), &["-c", "echo boom; exit 3"]);
+        assert!(lenient.is_ok());
+        let err = run_strict("sh", Duration::from_secs(5), &["-c", "echo boom; exit 3"])
+            .expect_err("strict: nonzero exit must error even with output");
+        let msg = err.to_string();
+        assert!(msg.contains("boom"), "{msg}");
+        assert!(msg.contains("3"), "{msg}");
+    }
+
+    #[test]
+    fn on_missing_binary_is_err() {
+        // on/off must surface failures (strict), never swallow them.
+        assert!(on("definitely-missing-binary-xyz").is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn run_echo_returns_trimmed_output() {
         let out = run("echo", Duration::from_secs(1), &["hi"]).expect("echo must succeed");
         assert_eq!(out, "hi");
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_kills_child_on_timeout() {
         let started = Instant::now();
         let err = run("sleep", Duration::from_millis(100), &["2"])
@@ -398,6 +462,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_large_output_does_not_deadlock() {
         // 200 KB through a 64 KB pipe buffer: reading only after wait() would
         // deadlock; the concurrent readers must keep up instead.
@@ -411,6 +476,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_failure_with_output_beats_error() {
         // net-merge may print diagnostics with a nonzero exit; keep the text.
         let out = run("sh", Duration::from_secs(5), &["-c", "echo boom; exit 3"])
@@ -419,6 +485,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_captures_stderr_too() {
         let out = run(
             "sh",
@@ -430,6 +497,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_failure_without_output_is_err_with_status() {
         let err = run("sh", Duration::from_secs(5), &["-c", "exit 7"])
             .expect_err("no-output failure must error");

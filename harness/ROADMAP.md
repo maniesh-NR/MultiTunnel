@@ -11,7 +11,7 @@ reached + backup completed).
 - Acceptance: `cargo test` green on host; `cargo zigbuild
   --target x86_64-pc-windows-gnu` green for the skeleton.
 
-## S1 — Foundation: config + xrayconf + netmerge `[ ]`
+## S1 — Foundation: config + xrayconf + netmerge `[x]`
 - `src/netmerge.rs`: bounded `run()` (spawn/poll/kill), `parse_status`
   heuristic parser per module contract, fixtures tests (must not panic on
   garbage), `on/off/status/ensure_running` wired.
@@ -53,10 +53,9 @@ reached + backup completed).
 - Acceptance: zips verified (exe present, `file` says PE32+); docs reviewed;
   adversarial APPROVE; final backup.
 
-> NOTE (S1-B, 2026-11-12): the sandbox VM rebooted mid-stage and the working
-> tree + Rust toolchain were wiped. The crate skeleton below `src/` was
-> restored by agent S1-B from session reads: `Cargo.toml`, `src/lib.rs`,
-> `src/error.rs`, `harness/ROADMAP.md` are verbatim; `src/config.rs`,
-> `src/xrayconf.rs`, `src/main.rs`, `src/bin/tray.rs` are marked
-> RESTORED-PLACEHOLDER stubs that their owners (S1-A / S2 / S3) must replace.
-> zig + cargo-zigbuild were NOT reinstalled (not needed for `cargo test`).
+> S1 CLOSED 2026-11-12: consensus 2×APPROVE (S1-REV-C correctness/security,
+> S1-REV-B build/portability/license). P1 fixes applied post-approval:
+> strict on/off semantics, 0600 credential file, #[cfg(unix)] gating of
+> POSIX-dependent process tests. Mid-stage sandbox revert + scope-violation
+> incident fully remediated (see LEDGER 14:50–15:12Z). Full verdicts:
+> harness/memory/consensus/S1-consensus.md.

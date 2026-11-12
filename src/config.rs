@@ -14,6 +14,12 @@
 //!                 "probeIntervalSec": 60, "restartMax": 5 }
 //! }
 //! ```
+//!
+//! Conventions (reviewer S1-REV-C #6): numeric fields set to 0 and strings
+//! left empty fall back to the documented defaults on load — so
+//! `server.port: 0` silently becomes 8443. Paths that are absolute or rooted
+//! (`C:\tools\x`, `\tools\x`) are used as-is; purely relative paths are
+//! joined onto the executable's directory.
 
 use std::path::{Path, PathBuf};
 
@@ -206,7 +212,10 @@ impl Config {
             &mut self.paths.log_dir,
             &mut self.paths.state_dir,
         ] {
-            if p.is_relative() {
+            // Rooted-but-relative paths (`\tools\x` on Windows) are treated as
+            // resolved: joining them onto the exe dir would re-root them
+            // (reviewer S1-REV-C #7).
+            if p.is_relative() && !p.has_root() {
                 *p = base.join(&*p);
             }
         }
@@ -497,5 +506,29 @@ mod tests {
         );
         assert_eq!(v["behavior"]["restartMax"].as_u64(), Some(5));
         assert_eq!(v["behavior"]["probeIntervalSec"].as_u64(), Some(60));
+    }
+
+    #[test]
+    fn proxy_override_default_is_the_full_documented_string() {
+        // Golden string — reviewer S1-REV-B #6: pin the exact value so the
+        // generated config and the docs cannot drift apart silently.
+        let mut want = String::from("localhost;127.*;10.*;192.168.*");
+        for i in 16..=31 {
+            want.push_str(&format!(";172.{i}.*"));
+        }
+        want.push_str(";<local>");
+        assert_eq!(Config::defaults().behavior.proxy_override, want);
+    }
+
+    #[test]
+    fn config_example_json_matches_defaults() {
+        // config.example.json must stay consistent with what the binary's
+        // template writer produces (reviewer S1-REV-B #6).
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let raw = std::fs::read_to_string(manifest.join("config.example.json"))
+            .expect("config.example.json must exist next to Cargo.toml");
+        let example: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+        let defaults = serde_json::to_value(Config::defaults()).expect("serialize defaults");
+        assert_eq!(example, defaults, "config.example.json drifted from defaults()");
     }
 }

@@ -92,12 +92,34 @@ fn load_config(explicit: Option<PathBuf>) -> Result<Config, multitunnel::Error> 
 fn generate(cfg: &Config) -> Result<(), multitunnel::Error> {
     let out = cfg.paths.xray_config.clone();
     let blob = xrayconf::render(cfg)?;
-    std::fs::write(&out, blob + "\n")?;
+    write_private(&out, blob + "\n")?;
     println!("wrote {}", out.display());
     println!(
         "note: mux is disabled by design so net-merge can spread individual connections across links"
     );
     Ok(())
+}
+
+/// The generated config embeds the VLESS credential — keep it private
+/// (POSIX 0600; on Windows the default user-profile ACL applies).
+/// (reviewer finding S1-REV-C #1)
+fn write_private(path: &std::path::Path, contents: String) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(contents.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)
+    }
 }
 
 fn usage() {
