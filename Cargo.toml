@@ -1,0 +1,28 @@
+[package]
+name = "multitunnel"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Windows supervisor that combines an Xray VLESS+REALITY tunnel with net-merge multi-link bonding"
+publish = false
+
+[lib]
+name = "multitunnel"
+path = "src/lib.rs"
+
+[[bin]]
+name = "multitunnel"
+path = "src/main.rs"
+
+[[bin]]
+name = "multitunnel-tray"
+path = "src/bin/tray.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Networking_WinInet"] }
+winreg = "0.56.0"

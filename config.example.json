@@ -1,0 +1,32 @@
+{
+  "server": {
+    "address": "35.208.99.240",
+    "port": 8443,
+    "uuid": "",
+    "sni": "",
+    "publicKey": "",
+    "shortId": ""
+  },
+  "local": {
+    "listen": "127.0.0.1",
+    "socksPort": 10808,
+    "httpPort": 10809
+  },
+  "paths": {
+    "xray": "bin/xray.exe",
+    "netMerge": "net-merge",
+    "xrayConfig": "xray-client.json",
+    "logDir": "logs",
+    "stateDir": "state"
+  },
+  "netMerge": {
+    "enable": true
+  },
+  "behavior": {
+    "systemProxy": true,
+    "proxyOverride": "localhost;127.*;10.*;192.168.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;<local>",
+    "probeTarget": "example.com:80",
+    "probeIntervalSec": 60,
+    "restartMax": 5
+  }
+}
