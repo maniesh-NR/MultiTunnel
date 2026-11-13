@@ -112,8 +112,15 @@ impl CoreProc {
         // Join a leftover waiter from the previous cycle: the child slot is
         // empty, so that waiter has observed the death (or is between its
         // final poll and thread-exit) — the join is instant. Prevents leaks.
+        // Hardening (S2-REV-C round-2 P1): join only FINISHED handles. A
+        // still-live waiter here means another caller is mid-cycle
+        // (unreachable via Supervisor: op_lock serializes all call sites) —
+        // waiter_loop self-terminates (empty slot / stop flag), so
+        // detaching instead of blocking is always safe.
         if let Some(h) = lock(&self.waiter).take() {
-            let _ = h.join();
+            if h.is_finished() {
+                let _ = h.join();
+            }
         }
 
         let mut slot = lock(&self.child);
@@ -493,6 +500,11 @@ mod tests {
                 }
             }
             let Some(mut s) = sock else { return }; // probe never came
+                                                    // Winsock does not DOCUMENT whether accept()ed sockets inherit
+                                                    // the listener's NONBLOCKING mode (S2-REV-B round-2 P1); force
+                                                    // blocking explicitly so read_exact on the windows-latest CI
+                                                    // leg can never WouldBlock-race the probe's greeting.
+            let _ = s.set_nonblocking(false);
             let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
             let mut g = [0u8; 3];
             s.read_exact(&mut g).expect("stub: read greeting");

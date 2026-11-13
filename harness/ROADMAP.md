@@ -21,7 +21,7 @@ reached + backup completed).
 - Acceptance: `cargo test` green; `cargo zigbuild --target
   x86_64-pc-windows-gnu` green; two adversarial reviews APPROVE.
 
-## S2 — Runtime: supervisor + sysproxy + elevate `[ ]`
+## S2 — Runtime: supervisor + sysproxy + elevate `[x]`
 - `src/core_proc.rs`: Xray process start/stop, log redirection, port wait,
   hand-rolled SOCKS5 end-to-end probe (greeting -> CONNECT -> drain reply).
 - `src/supervisor.rs`: connect/disconnect ordering
@@ -31,6 +31,14 @@ reached + backup completed).
   snapshot (winreg), IsElevated/RelaunchElevated; non-windows stubs.
 - `doctor` + headless `connect` implemented in main.rs.
 - Acceptance: host tests green; windows-gnu build green; adversarial APPROVE.
+
+> S2 CLOSED 2026-11-13: round 1 BLOCK (S2-REV-C: 2×P0 — start() waiter-join
+> hang + double-start; connect/disconnect not serialized, both demo'd) / APPROVE
+> (S2-REV-B); all findings fixed; round 2 2×APPROVE with both residual P1s
+> applied at close. 57 tests, host + windows-target clippy clean, zigbuild
+> green. Two mid-stage infra incidents + one premature-push incident fully
+> remediated (see LEDGER 05:12Z–06:40Z). Full verdicts:
+> harness/memory/consensus/S2-consensus.md.
 
 ## S3 — Interface: tray + icon + release binaries `[ ]`
 - `src/tray.rs` module (windows): raw win32 via windows-sys —

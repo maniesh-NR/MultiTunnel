@@ -678,9 +678,14 @@ fn write_private(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read as _, Write as _};
-    use std::net::TcpListener;
     use std::sync::atomic::AtomicUsize;
+    // Unix-only test imports (rig/stub/process tests) — gating keeps the
+    // windows-target test build clean (S2 close: cross-target clippy).
+    #[cfg(unix)]
+    use std::io::{Read as _, Write as _};
+    #[cfg(unix)]
+    use std::net::TcpListener;
+    #[cfg(unix)]
     use std::sync::mpsc;
 
     /// Unique temp dir (pid + counter): keeps parallel tests apart.
@@ -697,6 +702,7 @@ mod tests {
     }
 
     /// Grab an ephemeral loopback port and release it (the port is then dead).
+    #[cfg(unix)]
     fn free_loopback_port() -> u16 {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind 127.0.0.1:0");
         l.local_addr().expect("local_addr").port()

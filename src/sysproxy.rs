@@ -359,7 +359,6 @@ mod tests {
     #[test]
     fn snapshot_file_save_load_remove_roundtrip() {
         let dir = temp_state_dir("save-load-remove");
-        let path = snapshot_path(&dir);
         let s = sample();
 
         assert!(load_snapshot(&dir).unwrap().is_none(), "no snapshot yet");
@@ -368,10 +367,12 @@ mod tests {
         let loaded = load_snapshot(&dir).unwrap().expect("snapshot saved");
         assert_eq!(loaded, s);
 
-        // 0600-ish permissions on unix.
+        // 0600-ish permissions on unix. (Binding lives inside the cfg block
+        // so the windows-target test build has no unused variable.)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let path = snapshot_path(&dir);
             let mode = fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "snapshot file must be 0600");
         }

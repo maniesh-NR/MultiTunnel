@@ -37,3 +37,5 @@ jobs:
           targets: x86_64-pc-windows-gnu
       - uses: taiki-e/install-action@cargo-zigbuild
       - run: cargo zigbuild --target x86_64-pc-windows-gnu
+      # S2-REV-B round-2 P2: lint the windows cfg surface too, not just Linux.
+      - run: cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings
