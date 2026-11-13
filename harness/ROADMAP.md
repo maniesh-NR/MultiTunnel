@@ -40,7 +40,7 @@ reached + backup completed).
 > remediated (see LEDGER 05:12Z–06:40Z). Full verdicts:
 > harness/memory/consensus/S2-consensus.md.
 
-## S3 — Interface: tray + icon + release binaries `[ ]`
+## S3 — Interface: tray + icon + release binaries `[x]`
 - `src/tray.rs` module (windows): raw win32 via windows-sys —
   Shell_NotifyIconW, popup menu (Connect/Disconnect/links/raw status/logs/
   config/Exit), tooltip state, embedded `assets/icon.ico`.
@@ -49,6 +49,15 @@ reached + backup completed).
 - Acceptance: both bins link for x86_64-pc-windows-gnu; tray module unit
   tests (non-UI logic) pass; adversarial APPROVE (one reviewer must
   specifically audit the unsafe FFI).
+
+> S3 CLOSED 2026-11-13: implementer round 0fb81f0 (77 tests, 32 SAFETY-
+> commented unsafe blocks); review round 2×APPROVE with a line-by-line
+> 32/32 unsafe audit (REV-C) and 13/13 stability runs incl. loaded 2-core
+> host (REV-B); all 3 P1s fixed in 799f6cd (op_lock-free emergency_stop +
+> Exit escalation; TaskbarCreated re-add; hidden top-level window for the
+> KB135788 foreground fix). 78 tests, fmt/clippy host+target clean,
+> zigbuild green. Residual: first REAL-Windows run is the smoke test.
+> Full verdicts: harness/memory/consensus/S3-consensus.md.
 
 ## S4 — Ship: server script, docs, release `[ ]`
 - `server/setup-xray-reality.sh` (VLESS+REALITY on the VM, REALITY dest
