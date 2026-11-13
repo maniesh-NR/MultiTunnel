@@ -48,6 +48,9 @@
 //! - `disconnect` is best-effort and ALWAYS ends `Disconnected`/Ok: a failed
 //!   `net-merge off` is recorded in `bond_error` rather than failing the
 //!   call — matching the fail-open philosophy of the connect path.
+//! - `emergency_stop(&self)`: additive (S3-REV-C P1-1) op-lock-free emergency
+//!   teardown for the tray's exit-timeout path — kill the core, restore the
+//!   system proxy, flip to `Failed`; see the method docs for the semantics.
 //! - `Snapshot::restarts` counts spawn attempts made by restart campaigns
 //!   since the last successful connect (reset at the connect reset point).
 
@@ -448,6 +451,44 @@ impl Supervisor {
         inner.error = None;
         inner.state = State::Disconnected;
         Ok(())
+    }
+
+    /// Emergency teardown for the tray's exit-timeout path (S3-REV-C P1-1).
+    ///
+    /// When a normal [`disconnect`](Self::disconnect) worker is still blocked
+    /// on the `op_lock` (an in-flight `connect` can hold it up to ~50 s) or
+    /// sits inside a probe / `wait_for_port` / `netmerge::off` window, and the
+    /// process must exit NOW, this brings the dangerous parts down WITHOUT
+    /// taking the operation lock:
+    ///
+    /// 1. set the poll-loop stop flag (the loop exits within ~100 ms; the
+    ///    next `spawn_loop` resets it, so future connects are not poisoned),
+    /// 2. `core.stop()` — kill + reap the xray child (CoreProc owns its own
+    ///    mutexes; no `op_lock` involved, idempotent),
+    /// 3. `sysproxy::restore(state_dir)` — clear the system proxy from the
+    ///    saved snapshot (best-effort, fast registry IO),
+    /// 4. snapshot: `State::Failed` with a "emergency stop after exit
+    ///    timeout" error; `merging`/`system_proxy` flags cleared.
+    ///
+    /// net-merge is deliberately NOT turned off here: `netmerge::off` runs
+    /// the CLI with a 10 s timeout (it could itself exceed the exit budget
+    /// and race a lock-holding worker); the next `connect()` re-syncs it via
+    /// `ensure_running`. Never blocks on `op_lock`; does not synchronize
+    /// with an in-flight `connect`/`disconnect` (that is the point — it is
+    /// the lock-free last resort); idempotent and safe from any thread.
+    pub fn emergency_stop(&self) {
+        // 1. Ask the current cycle's poll loop to stop (see doc point 1).
+        self.shared.stop.store(true, Ordering::SeqCst);
+        // 2. Kill + reap the core.
+        self.core.stop();
+        // 3. Clear the system proxy.
+        let _ = sysproxy::restore(self.state_dir());
+        // 4. Reflect the emergency state in the snapshot.
+        let mut inner = lock(&self.shared.inner);
+        inner.state = State::Failed;
+        inner.error = Some("emergency stop after exit timeout".into());
+        inner.merging = false;
+        inner.system_proxy = false;
     }
 }
 
@@ -1036,6 +1077,54 @@ mod tests {
         t.join().expect("connect thread");
         assert!(matches!(rig.sup.snapshot().state, State::Failed));
         rig.joined_disconnect();
+    }
+
+    /// (3e) Emergency stop (S3-REV-C P1-1): the tray's exit path calls this
+    /// when the normal disconnect worker exceeds its budget — it must work
+    /// WHILE op_lock is held by someone else (never block), kill the core,
+    /// clear the proxy/merging flags and flip the state to Failed with the
+    /// emergency error, promptly.
+    #[test]
+    #[cfg(unix)]
+    fn emergency_stop_works_while_op_lock_is_held() {
+        let rig = Rig::build(false, None, None, 3);
+        rig.sup.connect().expect("connect against the working stub");
+        assert!(matches!(rig.sup.snapshot().state, State::Connected));
+        assert!(
+            rig.sup.core.running(),
+            "fake core must be alive after connect"
+        );
+
+        // The exit-race: an operation holds op_lock, so a normal
+        // disconnect() would block behind it for the op's full budget.
+        let guard = lock(&rig.sup.shared.op_lock);
+
+        let started = std::time::Instant::now();
+        rig.sup.emergency_stop();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "emergency_stop must not block on op_lock (took {elapsed:?})"
+        );
+
+        assert!(!rig.sup.core.running(), "core must be killed + reaped");
+        let s = rig.sup.snapshot();
+        assert!(matches!(s.state, State::Failed), "state: {:?}", s.state);
+        assert_eq!(
+            s.error.as_deref(),
+            Some("emergency stop after exit timeout"),
+            "error: {:?}",
+            s.error
+        );
+        assert!(!s.merging, "merging flag cleared");
+        assert!(!s.system_proxy, "proxy flag cleared");
+        drop(guard);
+
+        // The old cycle's loop saw the stop flag and exits; the rig's
+        // deterministic disconnect (op_lock now free) joins it and lands
+        // Disconnected — proving emergency_stop left no stuck state.
+        rig.joined_disconnect();
+        assert!(matches!(rig.sup.snapshot().state, State::Disconnected));
     }
 
     /// (4) Probe-driven failure path: the in-test stub refuses every probe →

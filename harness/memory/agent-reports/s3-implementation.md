@@ -147,3 +147,91 @@ cwd fallback config loads; Windows-only stub message + exit 2).
   at click time — a 10 s CLI call would block the menu handler.
 - P2 backlog from S2 (config loopback check, temp+rename writes, etc.)
   untouched — out of S3 scope.
+
+---
+
+# Round 2 — P1 fixes (post 2×APPROVE review round)
+
+Base: 81c7e72 (reviews s3-rev-c.md / s3-rev-b.md on top of my 0fb81f0).
+All three P1s fixed; supervisor change is the ONE additive pub fn approved by
+the orchestrator — no frozen signature touched.
+
+## Fix 1 — Reviewer-C P1-1: Exit could orphan the tunnel
+
+- `src/supervisor.rs`: additive `pub fn emergency_stop(&self)` (module-doc
+  contract line added; full semantics in the method docs). Takes NO op_lock:
+  (1) sets the poll-loop stop flag — `spawn_loop` resets it at the next
+  cycle, so future connects are not poisoned; (2) `core.stop()` (kill+reap,
+  CoreProc's own mutexes, idempotent); (3) `sysproxy::restore(state_dir)`
+  best-effort; (4) snapshot → `State::Failed` with error "emergency stop
+  after exit timeout", `merging`/`system_proxy` cleared. `netmerge::off` is
+  deliberately NOT called (10 s CLI timeout would defeat the fast path; next
+  `connect()` re-syncs via `ensure_running`) — reasoning in the doc comment.
+- `src/tray.rs` `exit_app`: NIM_DELETE → normal disconnect worker →
+  `recv_timeout(EXIT_WAIT=2 s)`; **on timeout** → `emergency_stop()` on the
+  message thread (kill+reap+registry restore only — pump-block bounded) →
+  `recv_timeout(EMERGENCY_WAIT=1 s)` → `PostQuitMessage`. New const
+  `EMERGENCY_WAIT`.
+- Test `supervisor::tests::emergency_stop_works_while_op_lock_is_held`
+  (host-runnable, unix rig): connect against the working stub, HOLD op_lock
+  directly (the serialization-test pattern), call `emergency_stop()` —
+  asserts < 2 s elapsed (never blocks on op_lock), core killed+reaped
+  (`core.running()==false`), state Failed, exact error string, merging +
+  proxy flags cleared; then the rig's deterministic disconnect proves no
+  stuck state remains (lands Disconnected). Suite 77 → 78; supervisor subset
+  11/11 ×3 single-threaded, test itself 0.06 s.
+
+## Fix 2 — Reviewer-C P1-2: TaskbarCreated not handled
+
+- `run()` registers `RegisterWindowMessageW("TaskbarCreated")` at init
+  (id stored in `UiState.taskbar_msg`; 0 = registration failed → handler
+  disabled, tray still works).
+- `tray_wndproc` checks the runtime-known id before the const match
+  (registered ids are 0xC000–0xFFFF, cannot be a pattern) →
+  `on_taskbar_created` re-adds the icon via the SAME `add_tray_icon` path
+  (identical NOTIFYICONDATAW identity: hWnd/uID/callback/icon/last tip).
+  No-op when `icon_added == false` (mid-Exit) or the icon is null.
+  Comments explain the explorer-restart scenario.
+- Note the interlock with fix 3: TaskbarCreated is a shell BROADCAST —
+  message-only windows never receive broadcasts, so the top-level window
+  switch is what makes this handler reachable at all.
+
+## Fix 3 — Reviewer-B P1: SetForegroundWindow on a message-only window
+
+- `create_window` now builds a hidden **top-level** window: `CreateWindowExW`
+  with NULL parent, `"STATIC"` class, `WS_OVERLAPPED`, never `ShowWindow`'d
+  (invisible, no taskbar button — the .NET NotifyIcon / tray-icon-crate
+  pattern). `HWND_MESSAGE` import removed.
+- `show_menu`: the pre-menu `SetForegroundWindow(hwnd)` **return is checked**
+  (`activated`); the post-menu `PostMessageW(WM_NULL)` (second half of KB
+  Q135788) is always posted and documented as the fallback dismissal path;
+  a best-effort `log_err` fires when activation could not engage.
+- Consequence handled: a top-level window receives broadcasts
+  (WM_SETTINGCHANGE etc.) — all unhandled messages still fall to
+  `DefWindowProcW`; the wndproc remains panic-free (no new indexing/unwrap).
+
+## Round-2 gate results (run after all fixes)
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check` | clean |
+| `cargo clippy --all-targets` (host) | 0 warnings |
+| `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings` | clean |
+| `cargo test` | **78/78** (+1 emergency_stop) |
+| `cargo zigbuild --target x86_64-pc-windows-gnu` | both bins link |
+| `file …/multitunnel-tray.exe` | PE32+ GUI x86-64 (console bin PE32+ console) |
+| `objdump -p multitunnel-tray.exe` | `RegisterWindowMessageW` present in the import table (the new path really compiled/linked) |
+
+## Notes for the reviewer (round 2)
+
+- Known residual micro-race (documented, accepted): if a connect worker is
+  between probe-success and `sysproxy::set` in the ~1 s `EMERGENCY_WAIT`
+  window, the proxy could be re-set microseconds before process death;
+  ~15× narrower than the P1 being fixed and self-healed by the next
+  launch's connect step-0 (`sysproxy::restore`). Closing it fully would
+  require holding op_lock, defeating the point of the emergency path.
+- The seven Reviewer-C P2s and four Reviewer-B P2s remain open (noted for
+  S4 smoke-testing/backlog): MessageBoxW error surfacing, elevated notepad,
+  worker-threaded raw-status/log handlers, `snippet` cap-0 guard, run-once
+  assert, GetCursorPos-fail menu skip, dump-test temp-dir cleanup, 16×16
+  asset hardening, `spawn_detached` failure logging.

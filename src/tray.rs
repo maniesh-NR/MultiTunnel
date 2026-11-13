@@ -6,14 +6,26 @@
 //!   Win32 message loop until the user picks Exit, returns `Ok(())` after
 //!   clean teardown. Must be called exactly once, from the thread that
 //!   owns the window (the binary's main thread). Non-Windows stub: `Err`.
-//! - Message-only window built from the predefined `"STATIC"` system class
-//!   (no `RegisterClass`) with `HWND_MESSAGE` as parent, subclassed via
-//!   `SetWindowLongPtrW(GWLP_WNDPROC)`; unhandled messages fall through to
-//!   `DefWindowProcW`.
+//! - Hidden TOP-LEVEL window (S3-REV-B P1: `SetForegroundWindow` on a
+//!   message-only HWND_MESSAGE child is not guaranteed to work, and shell
+//!   broadcasts like `TaskbarCreated` never reach message-only windows):
+//!   built from the predefined `"STATIC"` system class (no `RegisterClass`)
+//!   with a NULL parent + `WS_OVERLAPPED`, never `ShowWindow`'d, subclassed
+//!   via `SetWindowLongPtrW(GWLP_WNDPROC)`; unhandled messages fall through
+//!   to `DefWindowProcW`.
 //! - Tray icon via `Shell_NotifyIconW` (NIF_MESSAGE + NIF_ICON + NIF_TIP),
 //!   popup menu rebuilt FRESH from the supervisor [`Snapshot`] at every
 //!   open, tooltip refreshed by a 1 s `WM_TIMER` (only when the text
 //!   changed), clean `NIM_DELETE` teardown.
+//! - Explorer-restart recovery (S3-REV-C P1): `RegisterWindowMessageW(
+//!   "TaskbarCreated")` handled in the procedure — the shell broadcasts it
+//!   after an explorer.exe restart, and the icon is re-added (same
+//!   NOTIFYICONDATAW identity) so the app can never become an unreachable
+//!   elevated zombie.
+//! - Exit (S3-REV-C P1): NIM_DELETE first, ≤2 s wait for the normal
+//!   disconnect worker, then the op-lock-free `Supervisor::emergency_stop`
+//!   plus ≤1 s grace before `WM_QUIT` — the core can never be orphaned
+//!   with the system proxy still set.
 //! - Supervisor ops (`connect`/`disconnect` hold an op_lock and can block
 //!   up to ~15 s) ALWAYS run on worker threads — never inside the window
 //!   procedure, which must keep pumping messages.
@@ -374,11 +386,11 @@ mod win {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
         DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
-        KillTimer, LoadIconW, PostMessageW, PostQuitMessage, SetForegroundWindow, SetTimer,
-        SetWindowLongPtrW, TrackPopupMenuEx, TranslateMessage, GWLP_WNDPROC, HICON, HMENU,
-        HWND_MESSAGE, IDI_APPLICATION, LR_DEFAULTCOLOR, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-        TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NULL,
-        WM_RBUTTONUP, WM_TIMER,
+        KillTimer, LoadIconW, PostMessageW, PostQuitMessage, RegisterWindowMessageW,
+        SetForegroundWindow, SetTimer, SetWindowLongPtrW, TrackPopupMenuEx, TranslateMessage,
+        GWLP_WNDPROC, HICON, HMENU, IDI_APPLICATION, LR_DEFAULTCOLOR, MF_GRAYED, MF_SEPARATOR,
+        MF_STRING, MSG, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY,
+        WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WS_OVERLAPPED,
     };
 
     use super::{
@@ -401,6 +413,10 @@ mod win {
     /// Upper bound on how long Exit waits for the best-effort disconnect
     /// worker (the supervisor op_lock can block ~15 s; we never do).
     const EXIT_WAIT: Duration = Duration::from_secs(2);
+    /// Extra grace after the emergency stop (kill+reap+registry restore)
+    /// before the process quits — the teardown-completeness backstop of
+    /// S3-REV-C P1-1.
+    const EMERGENCY_WAIT: Duration = Duration::from_secs(1);
 
     /// Window/thread state. `ui` is only ever touched from the message-loop
     /// thread, so a `RefCell` is enough (no lock contention with workers).
@@ -420,6 +436,9 @@ mod win {
         icon_owned: bool,
         /// False after NIM_DELETE (Exit deletes the icon before quitting).
         icon_added: bool,
+        /// Registered "TaskbarCreated" message id (0 = registration failed,
+        /// handler disabled). Runtime-known, hence not a match pattern.
+        taskbar_msg: u32,
         /// Last tooltip pushed to the shell (skips redundant NIM_MODIFY).
         last_tip: String,
     }
@@ -464,10 +483,22 @@ mod win {
                 icon: std::ptr::null_mut(),
                 icon_owned: false,
                 icon_added: false,
+                taskbar_msg: 0,
                 last_tip: String::new(),
             }),
         }));
         CTX.with(|c| *c.borrow_mut() = Some(ctx));
+
+        // Shell-restart recovery (S3-REV-C P1-2): register the message id
+        // the shell broadcasts after an explorer.exe restart so the icon
+        // can be re-added (see `on_taskbar_created`). 0 (failure) leaves
+        // the handler disabled — the tray still works, it just would not
+        // survive a shell restart.
+        // SAFETY: "TaskbarCreated" is a NUL-terminated wide buffer we own;
+        // the call only maps a string to a message id and cannot touch any
+        // window (none exists yet).
+        let taskbar_msg = unsafe { RegisterWindowMessageW(to_wide("TaskbarCreated").as_ptr()) };
+        ctx.ui.borrow_mut().taskbar_msg = taskbar_msg;
 
         let (icon, icon_owned) = load_tray_icon();
         ctx.ui.borrow_mut().icon = icon;
@@ -562,7 +593,7 @@ mod win {
             // SAFETY: the timer and window belong to this thread; both calls
             // are safe/idempotent for handles we own.
             unsafe { KillTimer(hwnd, TIMER_ID) };
-            // SAFETY: hwnd is the message-only window we created.
+            // SAFETY: hwnd is the hidden top-level window we created.
             unsafe { DestroyWindow(hwnd) };
         }
         if icon_owned && !icon.is_null() {
@@ -609,27 +640,36 @@ mod win {
 
     // ---- window ---------------------------------------------------------------
 
-    /// Create the message-only window from the predefined STATIC class and
-    /// subclass it with our procedure.
+    /// Create the hidden TOP-LEVEL window from the predefined STATIC class
+    /// and subclass it with our procedure.
+    ///
+    /// Top-level (NULL parent), not a message-only HWND_MESSAGE child
+    /// (S3-REV-B P1): activation works for top-level windows — the KB
+    /// Q135788 pre-menu `SetForegroundWindow` needs a foreground-able owner
+    /// for the menu-dismiss behavior — and shell broadcasts (notably the
+    /// registered "TaskbarCreated") reach top-level windows, which is what
+    /// makes explorer-restart recovery possible at all. The window is
+    /// never `ShowWindow`'d, so it stays invisible and off the taskbar
+    /// (same pattern as .NET NotifyIcon / the tray-icon crate).
     fn create_window() -> crate::error::Result<HWND> {
         let class = to_wide("STATIC");
         let title = to_wide("MultiTunnelTray");
-        // SAFETY: message-only window (HWND_MESSAGE parent) from the
-        // predefined STATIC system class — no RegisterClass needed; the
-        // hinstance is ignored for system classes and lpparam is unused.
-        // Geometry is all zero (never shown); both wide strings are
-        // NUL-terminated buffers we own.
+        // SAFETY: hidden top-level window from the predefined STATIC system
+        // class — no RegisterClass needed; the hinstance is ignored for
+        // system classes and lpparam is unused. WS_OVERLAPPED without
+        // WS_VISIBLE means never shown; geometry is all zero; both wide
+        // strings are NUL-terminated buffers we own.
         let hwnd = unsafe {
             CreateWindowExW(
                 0,              // dwExStyle: none
                 class.as_ptr(), // system "STATIC" class
                 title.as_ptr(), // window name (diagnostics only)
-                0,              // dwStyle: none — message-only, never shown
+                WS_OVERLAPPED,  // top-level style, no WS_VISIBLE → hidden
                 0,
                 0,
                 0,
                 0,                    // position/size: unused
-                HWND_MESSAGE,         // parent: makes it message-only
+                std::ptr::null_mut(), // parent: NULL → top-level window
                 std::ptr::null_mut(), // hmenu: not a child window
                 std::ptr::null_mut(), // hinstance: ignored for system classes
                 std::ptr::null(),     // lpparam: no creation data
@@ -669,15 +709,28 @@ mod win {
 
     // ---- window procedure -------------------------------------------------------
 
-    /// Subclass procedure installed over the STATIC window. Handles the tray
-    /// callback, tooltip timer and menu commands; everything else falls to
-    /// DefWindowProcW. Runs only on the message-loop thread.
+    /// Subclass procedure installed over the STATIC window. Handles the
+    /// tray callback, tooltip timer, shell-restart re-add and menu commands;
+    /// everything else falls to DefWindowProcW. Runs only on the
+    /// message-loop thread.
     unsafe extern "system" fn tray_wndproc(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        // "TaskbarCreated" is a REGISTERED message (id 0xC000–0xFFFF,
+        // runtime-known — hence not a `match` pattern): the shell
+        // broadcasts it after an explorer.exe restart, and re-adding the
+        // icon keeps the app reachable instead of an invisible elevated
+        // zombie (S3-REV-C P1-2).
+        if let Some(ctx) = ctx() {
+            let taskbar_msg = ctx.ui.borrow().taskbar_msg;
+            if taskbar_msg != 0 && msg == taskbar_msg {
+                on_taskbar_created(ctx, hwnd);
+                return 0;
+            }
+        }
         match msg {
             WM_TIMER if wparam == TIMER_ID => {
                 if let Some(ctx) = ctx() {
@@ -720,6 +773,24 @@ mod win {
     }
 
     // ---- handlers ---------------------------------------------------------------
+
+    /// Shell-restart recovery (S3-REV-C P1-2): explorer.exe died and came
+    /// back — the old tray icon died with the old shell. Re-register the
+    /// SAME icon identity (hWnd/uID/callback/message/icon/tip — the exact
+    /// NOTIFYICONDATAW of the initial add) so the user keeps a reachable
+    /// UI. No-op when the icon is already gone (mid-Exit).
+    fn on_taskbar_created(ctx: &'static TrayCtx, hwnd: HWND) {
+        let (icon, added, tip) = {
+            let ui = ctx.ui.borrow();
+            (ui.icon, ui.icon_added, ui.last_tip.clone())
+        };
+        if !added || icon.is_null() || hwnd.is_null() {
+            return; // never registered or mid-Exit: nothing to restore
+        }
+        if let Err(e) = add_tray_icon(hwnd, icon, &tip) {
+            log_err("Shell_NotifyIconW(NIM_ADD after TaskbarCreated)", &e);
+        }
+    }
 
     /// WM_TIMER: refresh the tooltip from a fresh snapshot when it changed.
     fn on_timer(ctx: &'static TrayCtx, hwnd: HWND) {
@@ -804,8 +875,13 @@ mod win {
         let _ = std::process::Command::new(program).arg(arg).spawn();
     }
 
-    /// Exit: remove the tray icon first (no ghost), best-effort disconnect
-    /// on a worker bounded by [`EXIT_WAIT`], then quit the message loop.
+    /// Exit: remove the tray icon first (no ghost), then tear the tunnel
+    /// down with a hard bound (S3-REV-C P1-1): ≤ [`EXIT_WAIT`] for the normal
+    /// disconnect worker; if it is still stuck (op_lock held by an in-flight
+    /// connect, a probe / wait_for_port window, or the net-merge CLI), run
+    /// the op-lock-free `emergency_stop` (core kill + proxy restore + state
+    /// Failed) and allow ≤ [`EMERGENCY_WAIT`] more before quitting — the
+    /// core can never be orphaned with the system proxy still set.
     fn exit_app(ctx: &'static TrayCtx, hwnd: HWND) {
         let was_added = {
             let mut ui = ctx.ui.borrow_mut();
@@ -817,7 +893,7 @@ mod win {
             // the icon by; deleting an already-deleted icon returns FALSE.
             let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &d) };
         }
-        // Best-effort disconnect off-thread; bounded wait so a stuck
+        // Best-effort normal disconnect off-thread; bounded wait so a stuck
         // op_lock (up to ~15 s) cannot hold the exit hostage.
         let sup = ctx.supervisor.clone();
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -825,9 +901,17 @@ mod win {
             let _ = sup.disconnect(); // best-effort by contract
             let _ = done_tx.send(());
         });
-        let _ = done_rx.recv_timeout(EXIT_WAIT); // elapsed, done or dropped
-                                                 // SAFETY: no preconditions — posts WM_QUIT to this thread's queue,
-                                                 // which makes the GetMessageW loop in `run` return 0.
+        if done_rx.recv_timeout(EXIT_WAIT).is_err() {
+            // The worker did not finish in time (it is inside disconnect()'s
+            // op_lock / probe / net-merge window): take the lock-free
+            // emergency path so the process cannot exit with an orphaned
+            // core and a still-set system proxy. Safe to run here on the
+            // message thread: core kill+reap and a registry restore only.
+            ctx.supervisor.emergency_stop();
+            let _ = done_rx.recv_timeout(EMERGENCY_WAIT);
+        }
+        // SAFETY: no preconditions — posts WM_QUIT to this thread's queue,
+        // which makes the GetMessageW loop in `run` return 0.
         unsafe { PostQuitMessage(0) };
     }
 
@@ -857,11 +941,26 @@ mod win {
         let mut pt = POINT { x: 0, y: 0 };
         // SAFETY: pt is a writable, aligned out-slot for the cursor pos.
         let have_pos = unsafe { GetCursorPos(&mut pt) } != 0;
-        if have_pos {
-            // KB Q135788: the owner must be foreground before showing a
-            // tray menu or it will not dismiss when the user clicks away.
+        let activated = if have_pos {
+            // KB Q135788, first half: activate the owner so the menu
+            // dismisses when the user clicks elsewhere. The hidden TOP-LEVEL
+            // window is foreground-able (S3-REV-B P1 — a message-only
+            // HWND_MESSAGE child is not). The return is CHECKED: if
+            // activation is denied, the post-menu WM_NULL below (second
+            // half of the KB pattern) is the documented fallback path.
             // SAFETY: hwnd is our valid window.
-            unsafe { SetForegroundWindow(hwnd) };
+            (unsafe { SetForegroundWindow(hwnd) }) != 0
+        } else {
+            false
+        };
+        if !activated {
+            // Best-effort diagnostic when the primary dismissal mechanism
+            // could not engage (cursor position unavailable or activation
+            // denied) — the WM_NULL fallback below still runs.
+            log_err(
+                "SetForegroundWindow",
+                &crate::err!("menu-dismissal fallback engaged (WM_NULL)"),
+            );
         }
         // SAFETY: hmenu was created above and is valid; the flags are
         // documented constants; a NULL lptpm means "no exclusion rect".
@@ -877,9 +976,10 @@ mod win {
             )
         };
         if have_pos {
-            // SAFETY: hwnd is our window; WM_NULL is the documented
-            // post-menu no-op from KB Q135788.
-            unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
+            // SAFETY: hwnd is our window; WM_NULL is the documented post-menu
+            // no-op (KB Q135788, second half) — always posted, and the sole
+            // dismissal fallback when SetForegroundWindow failed above.
+            let _ = unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
         }
         // SAFETY: destroys the menu we created (it owns its items).
         unsafe { DestroyMenu(hmenu) };
