@@ -6,6 +6,7 @@
 //! - [`config`]: JSON config load/save/validate (defaults, path resolution)
 //! - [`xrayconf`]: Xray client config generation (mux OFF — see crate docs)
 //! - [`netmerge`]: net-merge CLI integration + tolerant status parser
+//! - [`tray`]: Windows notification-area UI (stage S3; raw win32 per D4)
 //!
 //! Architecture contract (do not break):
 //! 1. mux is always disabled: net-merge bonds by spreading individual TCP
@@ -21,6 +22,7 @@ pub mod error;
 pub mod netmerge;
 pub mod supervisor;
 pub mod sysproxy;
+pub mod tray;
 pub mod xrayconf;
 
 pub use error::Error;
