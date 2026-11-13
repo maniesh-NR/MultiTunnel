@@ -8,8 +8,7 @@
 //!   `disconnect(&self) -> Result<()>`, `snapshot(&self) -> Snapshot`,
 //!   accessors log_dir()/state_dir()/net_merge_enabled().
 //! - CONNECT ORDER (must not change):
-//!   1 write xrayconf::render to paths.xray_config (0600 via main-style
-//!  private write — reuse core_proc helper or OpenOptions)
+//!   1 write xrayconf::render to paths.xray_config (0600 private write)
 //!   2 core start + wait_for_port socks (15s)
 //!   3 socks_probe (fail fast → stop core, restore proxy, State::Failed)
 //!   4 netmerge::ensure_running + netmerge::on (NON-FATAL: bond_error set)
