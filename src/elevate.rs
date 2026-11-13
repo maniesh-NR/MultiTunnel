@@ -204,9 +204,9 @@ mod tests {
         // A path with no whitespace/quotes passes through untouched — a
         // lone trailing backslash re-parses correctly WITHOUT quoting.
         assert_eq!(join_args(&["C:\\".to_string()]), "C:\\");
-        // Interior backslash stays literal, the quote is escaped:
+        // Interior backslash stays literal (single), the quote is escaped:
         // `a\b"c` → `"a\b\"c"` → re-parses to `a\b"c`.
-        assert_eq!(join_args(&["a\\b\"c".to_string()]), "\"a\\\\b\\\"c\"");
+        assert_eq!(join_args(&["a\\b\"c".to_string()]), "\"a\\b\\\"c\"");
         // No whitespace/quotes → untouched, backslashes included.
         assert_eq!(join_args(&["a\\b".to_string()]), "a\\b");
     }

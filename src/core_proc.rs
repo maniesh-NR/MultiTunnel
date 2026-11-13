@@ -283,8 +283,7 @@ impl CoreProc {
         s.write_all(&[0x05, 0x01, 0x00])
             .map_err(|e| crate::err!("socks5: send greeting: {}", e))?;
         let mut g = [0u8; 2];
-        refresh_socket_budget(&mut s, deadline)?;
-        socks_read_exact(&mut s, &mut g)?;
+        socks_read_exact(&mut s, &mut g, deadline)?;
         if g[0] != 0x05 || g[1] != 0x00 {
             return Err(crate::err!(
                 "socks5: greeting refused (ver 0x{:02x}, method 0x{:02x})",
@@ -302,13 +301,13 @@ impl CoreProc {
         req.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, hb.len() as u8]);
         req.extend_from_slice(hb);
         req.extend_from_slice(&port.to_be_bytes());
+        refresh_socket_budget(&mut s, deadline)?; // write budget for CONNECT
         s.write_all(&req)
             .map_err(|e| crate::err!("socks5: send CONNECT: {}", e))?;
 
         // Reply head: VER, REP, RSV, ATYP.
         let mut head = [0u8; 4];
-        refresh_socket_budget(&mut s, deadline)?;
-        socks_read_exact(&mut s, &mut head)?;
+        socks_read_exact(&mut s, &mut head, deadline)?;
         if head[0] != 0x05 {
             return Err(crate::err!("socks5: bad reply version 0x{:02x}", head[0]));
         }
@@ -322,21 +321,17 @@ impl CoreProc {
         match head[3] {
             0x01 => {
                 let mut b = [0u8; 6];
-                refresh_socket_budget(&mut s, deadline)?;
-                socks_read_exact(&mut s, &mut b)?;
+                socks_read_exact(&mut s, &mut b, deadline)?;
             }
             0x03 => {
                 let mut l = [0u8; 1];
-                refresh_socket_budget(&mut s, deadline)?;
-                socks_read_exact(&mut s, &mut l)?;
+                socks_read_exact(&mut s, &mut l, deadline)?;
                 let mut b = vec![0u8; l[0] as usize + 2];
-                refresh_socket_budget(&mut s, deadline)?;
-                socks_read_exact(&mut s, &mut b)?;
+                socks_read_exact(&mut s, &mut b, deadline)?;
             }
             0x04 => {
                 let mut b = [0u8; 18];
-                refresh_socket_budget(&mut s, deadline)?;
-                socks_read_exact(&mut s, &mut b)?;
+                socks_read_exact(&mut s, &mut b, deadline)?;
             }
             a => return Err(crate::err!("socks5: unknown ATYP 0x{:02x}", a)),
         }
@@ -424,10 +419,33 @@ fn refresh_socket_budget(s: &mut TcpStream, deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-/// read_exact with SOCKS5 context (timeouts surface as io errors here).
-fn socks_read_exact<S: Read>(s: &mut S, buf: &mut [u8]) -> Result<()> {
-    s.read_exact(buf)
-        .map_err(|e| crate::err!("socks5: short read ({} bytes): {}", buf.len(), e))
+/// read_exact with SOCKS5 context AND a total deadline (S2-REV-C P1-1):
+/// the socket timeout is re-armed to the remaining budget before EVERY
+/// underlying read. Per-read timeouts alone never expire while each byte
+/// arrives inside the current window — a byte-dripping proxy could
+/// otherwise stretch one logical read (and the whole probe) indefinitely.
+fn socks_read_exact(s: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<()> {
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        refresh_socket_budget(s, deadline)?;
+        match s.read(&mut buf[filled..]) {
+            Ok(0) => {
+                return Err(crate::err!(
+                    "socks5: short read ({} bytes): connection closed",
+                    buf.len()
+                ));
+            }
+            Ok(n) => filled += n,
+            Err(e) => {
+                return Err(crate::err!(
+                    "socks5: short read ({} bytes): {}",
+                    buf.len(),
+                    e
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
