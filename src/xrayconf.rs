@@ -163,9 +163,9 @@ mod tests {
         let hit = rules.iter().any(|r| {
             r["type"] == "field"
                 && r["outboundTag"] == "direct"
-                && r["ip"].as_array().map_or(false, |ips| {
-                    ips.iter().any(|ip| ip.as_str() == Some("geoip:private"))
-                })
+                && r["ip"]
+                    .as_array()
+                    .is_some_and(|ips| ips.iter().any(|ip| ip.as_str() == Some("geoip:private")))
         });
         assert!(
             hit,
