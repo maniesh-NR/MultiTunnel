@@ -116,9 +116,8 @@ impl CoreProc {
         }
 
         // 1. log dir + header (must exist even if the spawn then fails).
-        fs::create_dir_all(&self.log_dir).map_err(|e| {
-            crate::err!("cannot create log dir {}: {}", self.log_dir.display(), e)
-        })?;
+        fs::create_dir_all(&self.log_dir)
+            .map_err(|e| crate::err!("cannot create log dir {}: {}", self.log_dir.display(), e))?;
         let log_path = self.log_dir.join(LOG_FILE);
         let mut log = OpenOptions::new()
             .create(true)
@@ -522,10 +521,16 @@ mod tests {
             Ok(()) => panic!("spawn of a missing binary must fail"),
             Err(e) => e.0,
         };
-        assert!(msg.contains("xray-core"), "error must mention the bin: {msg}");
+        assert!(
+            msg.contains("xray-core"),
+            "error must mention the bin: {msg}"
+        );
         assert!(log_dir.is_dir(), "start() must create log_dir first");
         let log = fs::read_to_string(log_dir.join("xray.log")).expect("log file");
-        assert!(log.contains("run -c"), "header must record the command: {log}");
+        assert!(
+            log.contains("run -c"),
+            "header must record the command: {log}"
+        );
         let _ = fs::remove_dir_all(&log_dir); // best-effort cleanup
     }
 }

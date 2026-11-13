@@ -142,7 +142,11 @@ fn cmd_doctor(cfg_path: Option<PathBuf>) -> Result<(), multitunnel::Error> {
     // 1. elevation: net-merge bonding and HKCU/proxy changes want admin
     //    rights; the stub reports "elevated" on non-Windows hosts.
     if multitunnel::elevate::is_elevated() {
-        doctor_line("ok", "elevation", "elevated (administrator rights available)");
+        doctor_line(
+            "ok",
+            "elevation",
+            "elevated (administrator rights available)",
+        );
     } else {
         doctor_line(
             "warn",
@@ -154,7 +158,11 @@ fn cmd_doctor(cfg_path: Option<PathBuf>) -> Result<(), multitunnel::Error> {
     // 2. xray binary exists and answers `xray version` (first line shown).
     let xray = &cfg.paths.xray;
     if !xray.exists() {
-        doctor_line("fail", "xray binary", &format!("not found at {}", xray.display()));
+        doctor_line(
+            "fail",
+            "xray binary",
+            &format!("not found at {}", xray.display()),
+        );
         fails += 1;
     } else {
         match std::process::Command::new(xray).arg("version").output() {
@@ -221,7 +229,10 @@ fn cmd_doctor(cfg_path: Option<PathBuf>) -> Result<(), multitunnel::Error> {
     }
 
     // 4. local socks/http ports must be free (bind probe).
-    for (label, port) in [("socks port", cfg.local.socks_port), ("http port", cfg.local.http_port)] {
+    for (label, port) in [
+        ("socks port", cfg.local.socks_port),
+        ("http port", cfg.local.http_port),
+    ] {
         let addr = format!("{}:{}", cfg.local.listen, port);
         match addr.parse::<std::net::SocketAddr>() {
             Ok(a) => match std::net::TcpListener::bind(a) {
@@ -235,14 +246,21 @@ fn cmd_doctor(cfg_path: Option<PathBuf>) -> Result<(), multitunnel::Error> {
                 }
             },
             Err(e) => {
-                doctor_line("fail", label, &format!("invalid listen address {addr}: {e}"));
+                doctor_line(
+                    "fail",
+                    label,
+                    &format!("invalid listen address {addr}: {e}"),
+                );
                 fails += 1;
             }
         }
     }
 
     // 5. writable dirs (create).
-    for (label, dir) in [("log dir", &cfg.paths.log_dir), ("state dir", &cfg.paths.state_dir)] {
+    for (label, dir) in [
+        ("log dir", &cfg.paths.log_dir),
+        ("state dir", &cfg.paths.state_dir),
+    ] {
         match std::fs::create_dir_all(dir) {
             Ok(()) => doctor_line("ok", label, &format!("{} writable", dir.display())),
             Err(e) => {
@@ -273,7 +291,9 @@ fn cmd_doctor(cfg_path: Option<PathBuf>) -> Result<(), multitunnel::Error> {
     }
 
     if fails > 0 {
-        Err(multitunnel::Error(format!("doctor: {fails} check(s) failed")))
+        Err(multitunnel::Error(format!(
+            "doctor: {fails} check(s) failed"
+        )))
     } else {
         println!("\nall checks passed");
         Ok(())

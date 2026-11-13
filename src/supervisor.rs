@@ -288,7 +288,8 @@ impl Supervisor {
                 ));
             }
         };
-        if let Err(e) = CoreProc::socks_probe(&socks_addr(&self.cfg), &probe_host, probe_port, PROBE_WAIT)
+        if let Err(e) =
+            CoreProc::socks_probe(&socks_addr(&self.cfg), &probe_host, probe_port, PROBE_WAIT)
         {
             self.core.stop();
             let _ = sysproxy::restore(self.state_dir());
@@ -509,7 +510,12 @@ enum CampaignOutcome {
 
 /// Try to bring a dead core back: backoff 1s,2s,4s… capped at 30 s, at most
 /// `behavior.restart_max` spawn attempts (0 = never → immediate give-up).
-fn restart_campaign(core: &CoreProc, shared: &Shared, cfg: &Config, socks: &str) -> CampaignOutcome {
+fn restart_campaign(
+    core: &CoreProc,
+    shared: &Shared,
+    cfg: &Config,
+    socks: &str,
+) -> CampaignOutcome {
     lock(&shared.inner).state = State::Connecting;
     let max = cfg.behavior.restart_max;
     let mut attempt: u32 = 0;
@@ -562,8 +568,9 @@ fn restart_campaign(core: &CoreProc, shared: &Shared, cfg: &Config, socks: &str)
                     core.stop();
                     let mut inner = lock(&shared.inner);
                     inner.restarts = inner.restarts.saturating_add(1);
-                    inner.error =
-                        Some(format!("restart attempt {attempt}/{max}: core did not open {socks}: {e}"));
+                    inner.error = Some(format!(
+                        "restart attempt {attempt}/{max}: core did not open {socks}: {e}"
+                    ));
                 }
             }
         }
@@ -687,15 +694,31 @@ mod tests {
 
     /// SOCKS5 stub in the spirit of core_proc's tests: answers each CONNECT
     /// with a success reply, or — when `refuse` — accepts and immediately
-    /// drops the socket so the probe can never complete. Loops until the
-    /// listener is closed (accept error), so several connects are served.
+    /// drops the socket so the probe can never complete. Serves any number
+    /// of connects.
+    ///
+    /// Deterministic shutdown (root cause of the S2 suite hang): the listener
+    /// is set NONBLOCKING and the loop re-checks `quit` every ~10 ms. Merely
+    /// dropping the rig's listener fd is NOT enough — the stub owns a
+    /// try_clone'd fd, so the socket stays open and accept() blocks forever;
+    /// Drop's join then hung the whole suite on every rig test.
     #[cfg(unix)]
-    fn spawn_stub(listener: TcpListener, refuse: bool) -> JoinHandle<()> {
+    fn spawn_stub(listener: TcpListener, refuse: bool, quit: Arc<AtomicBool>) -> JoinHandle<()> {
+        listener
+            .set_nonblocking(true)
+            .expect("set stub listener nonblocking");
         thread::spawn(move || {
             loop {
+                if quit.load(Ordering::SeqCst) {
+                    break;
+                }
                 let mut s = match listener.accept() {
                     Ok((s, _)) => s,
-                    Err(_) => break, // listener dropped → stub exits
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(_) => break, // listener closed for real
                 };
                 if refuse {
                     drop(s);
@@ -740,6 +763,7 @@ mod tests {
         sup: Arc<Supervisor>,
         socks_listener: Option<TcpListener>,
         stub: Option<JoinHandle<()>>,
+        quit: Arc<AtomicBool>,
         dir: PathBuf,
     }
 
@@ -747,8 +771,14 @@ mod tests {
     impl Rig {
         /// `refuse` makes the SOCKS stub kill every probe; `die_after` makes
         /// the fake core exit after N seconds; `net_merge_bin` enables the
-        /// (non-fatal) bonding step against a given CLI path.
-        fn build(refuse: bool, die_after: Option<&str>, net_merge_bin: Option<&str>) -> Rig {
+        /// (non-fatal) bonding step against a given CLI path; `restart_max`
+        /// feeds behavior.restartMax (0 = never restart, give up at once).
+        fn build(
+            refuse: bool,
+            die_after: Option<&str>,
+            net_merge_bin: Option<&str>,
+            restart_max: u32,
+        ) -> Rig {
             let dir = unique_dir("rig");
             let socks_listener = TcpListener::bind("127.0.0.1:0").expect("bind socks listener");
             let socks_port = socks_listener.local_addr().expect("addr").port();
@@ -768,18 +798,31 @@ mod tests {
                     log_dir: dir.join("logs"),
                     state_dir: dir.join("state"),
                 },
-                net_merge: crate::config::NetMerge { enable: net_merge_bin.is_some() },
+                net_merge: crate::config::NetMerge {
+                    enable: net_merge_bin.is_some(),
+                },
                 behavior: crate::config::Behavior {
                     system_proxy: true,
                     proxy_override: "localhost".into(),
                     probe_target: "example.com:443".into(),
                     probe_interval_sec: 60,
-                    restart_max: 3,
+                    restart_max,
                 },
             };
             let sup = Arc::new(Supervisor::new(cfg));
-            let stub = spawn_stub(socks_listener.try_clone().expect("clone listener"), refuse);
-            Rig { sup, socks_listener: Some(socks_listener), stub: Some(stub), dir }
+            let quit = Arc::new(AtomicBool::new(false));
+            let stub = spawn_stub(
+                socks_listener.try_clone().expect("clone listener"),
+                refuse,
+                Arc::clone(&quit),
+            );
+            Rig {
+                sup,
+                socks_listener: Some(socks_listener),
+                stub: Some(stub),
+                quit,
+                dir,
+            }
         }
 
         /// Deterministic disconnect: joined via channel + recv_timeout so a
@@ -802,8 +845,11 @@ mod tests {
     #[cfg(unix)]
     impl Drop for Rig {
         fn drop(&mut self) {
+            // Flip quit FIRST: the stub's nonblocking loop exits within
+            // ~10 ms, so the join below is bounded (this was the hang).
+            self.quit.store(true, Ordering::SeqCst);
             let _ = self.sup.disconnect(); // no-op when already down
-            drop(self.socks_listener.take()); // unblock the stub's accept
+            drop(self.socks_listener.take());
             if let Some(h) = self.stub.take() {
                 let _ = h.join();
             }
@@ -816,7 +862,12 @@ mod tests {
     fn backoff_sequence_doubles_then_caps_at_thirty() {
         let want = [1u64, 2, 4, 8, 16, 30, 30, 30, 30];
         for (i, w) in want.iter().enumerate() {
-            assert_eq!(backoff_delay(i as u32 + 1).as_secs(), *w, "attempt {}", i + 1);
+            assert_eq!(
+                backoff_delay(i as u32 + 1).as_secs(),
+                *w,
+                "attempt {}",
+                i + 1
+            );
         }
         assert_eq!(backoff_delay(500).as_secs(), 30, "far past the cap");
         assert_eq!(backoff_delay(u32::MAX).as_secs(), 30, "no overflow panic");
@@ -834,7 +885,10 @@ mod tests {
             sys_error: None,
             probe_error: Some("timeout".into()),
             merging: true,
-            links: vec![Link { name: "Wi-Fi".into(), detail: "12.4 Mbit/s".into() }],
+            links: vec![Link {
+                name: "Wi-Fi".into(),
+                detail: "12.4 Mbit/s".into(),
+            }],
             raw_status: "Merging: on".into(),
             system_proxy: true,
             restarts: 2,
@@ -880,7 +934,10 @@ mod tests {
             parse_probe_target("example.com:80"),
             Some(("example.com".into(), 80))
         );
-        assert_eq!(parse_probe_target(" 9.9.9.9:53 "), Some(("9.9.9.9".into(), 53)));
+        assert_eq!(
+            parse_probe_target(" 9.9.9.9:53 "),
+            Some(("9.9.9.9".into(), 53))
+        );
         assert_eq!(parse_probe_target("no-port"), None);
         assert_eq!(parse_probe_target(":80"), None);
         assert_eq!(parse_probe_target("host:notaport"), None);
@@ -894,9 +951,12 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn connect_fails_cleanly_when_probe_is_refused() {
-        let rig = Rig::build(true, None, None);
+        let rig = Rig::build(true, None, None, 3);
 
-        let err1 = rig.sup.connect().expect_err("refused probe must fail connect");
+        let err1 = rig
+            .sup
+            .connect()
+            .expect_err("refused probe must fail connect");
         assert!(err1.to_string().contains("probe"), "{err1}");
         let s1 = rig.sup.snapshot();
         assert!(matches!(s1.state, State::Failed), "state: {:?}", s1.state);
@@ -911,9 +971,15 @@ mod tests {
 
         // Retry: must fail at the probe again, NOT with "core already
         // running" (which would mean the first core was never stopped).
-        let err2 = rig.sup.connect().expect_err("retry also fails at the probe");
+        let err2 = rig
+            .sup
+            .connect()
+            .expect_err("retry also fails at the probe");
         let msg2 = err2.to_string();
-        assert!(!msg2.contains("already running"), "core was not stopped: {msg2}");
+        assert!(
+            !msg2.contains("already running"),
+            "core was not stopped: {msg2}"
+        );
         assert!(msg2.contains("probe"), "{msg2}");
         assert!(matches!(rig.sup.snapshot().state, State::Failed));
     }
@@ -924,7 +990,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn connect_succeeds_reconnect_is_noop_disconnect_joins_loop() {
-        let rig = Rig::build(false, None, None);
+        let rig = Rig::build(false, None, None, 3);
         rig.sup.connect().expect("connect against the working stub");
         let s = rig.sup.snapshot();
         assert!(matches!(s.state, State::Connected), "{:?}", s.state);
@@ -953,8 +1019,10 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn bonding_failure_is_non_fatal() {
-        let rig = Rig::build(false, None, Some("definitely-missing-net-merge-xyz"));
-        rig.sup.connect().expect("connect must succeed despite bond failure");
+        let rig = Rig::build(false, None, Some("definitely-missing-net-merge-xyz"), 3);
+        rig.sup
+            .connect()
+            .expect("connect must succeed despite bond failure");
         let s = rig.sup.snapshot();
         assert!(matches!(s.state, State::Connected), "{:?}", s.state);
         let bond = s
@@ -970,7 +1038,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn core_death_with_restart_max_zero_fails_fast() {
-        let rig = Rig::build(false, Some("0.3"), None);
+        let rig = Rig::build(false, Some("0.3"), None, 0);
         rig.sup.connect().expect("initial connect");
         assert!(matches!(rig.sup.snapshot().state, State::Connected));
 
@@ -990,7 +1058,10 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(200));
         }
-        assert!(!rig.sup.loop_running(), "loop must have ended after give-up");
+        assert!(
+            !rig.sup.loop_running(),
+            "loop must have ended after give-up"
+        );
         rig.joined_disconnect(); // joins the finished loop + cleans up
     }
 
@@ -1012,9 +1083,11 @@ mod tests {
             behavior: crate::config::Behavior::default(),
         };
         let sup = Supervisor::new(cfg);
-        sup.disconnect().expect("disconnect from scratch is a no-op");
+        sup.disconnect()
+            .expect("disconnect from scratch is a no-op");
         assert!(matches!(sup.snapshot().state, State::Disconnected));
-        sup.disconnect().expect("second disconnect is still a no-op");
+        sup.disconnect()
+            .expect("second disconnect is still a no-op");
         assert!(matches!(sup.snapshot().state, State::Disconnected));
         assert!(!sup.loop_running());
         let _ = fs::remove_dir_all(&dir);

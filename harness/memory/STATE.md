@@ -1,38 +1,38 @@
-# STATE — rewritten at the end of every stage. Last update: RECOVERY-3 (2026-11-13T05:13Z)
+# STATE — rewritten at the end of every stage. Last update: S2 verified (2026-11-13T05:57Z)
 
 ## Current position
-- Stage: **S2 in progress** (Runtime: supervisor + sysproxy + elevate).
-- Verified + pushed: S1 closed with consensus (30 tests); core_proc.rs
-  (5 tests, commit a3b9e5f "recovery-incident2-fixed").
-- Recovered from the persisted local tree (previously believed lost in
-  INCIDENT-2): sysproxy.rs + elevate.rs (S2-B, 10+6 tests reported green at
-  15:45Z by its agent) and supervisor.rs (989 lines) + main.rs doctor/connect
-  wiring — **the supervisor+main slice was never compiled or tested by any
-  session** (S2-A crashed twice; verify before trusting).
-- Known flags for the S2 review round: one flaky test failure seen once under
-  first-compile load (LEDGER 15:50Z); run the suite ≥2× to check stability.
+- Stage: **S2 implementation complete and locally verified**; adversarial
+  review round is the remaining gate before S2 closes.
+- The recovered supervisor slice had NEVER compiled under any session (the
+  suite hang masked everything). Verification found and fixed two bugs:
+  1. Rig test stub deadlock: `spawn_stub` owned a try_clone'd listener fd,
+     so `Rig::drop`'s join on its accept loop hung every rig test forever
+     (this was also the original multi-minute "hang" that killed the dying
+     session's runs). Fix: nonblocking accept + quit flag.
+  2. `Rig::build` hardwired `restart_max: 3` while test 7 needs the
+     restartMax=0 give-up path; rig now parameterizes it.
+- Suite: 52/52 green ×2 (5.65 s each). Cross-build: windows-gnu green,
+  both binaries PE32+ (console + GUI subsystem).
 
 ## Next actions
-1. Push the recovered superset FIRST (D7): `harness/backup.sh s2-recovery-merge`.
-2. Reinstall toolchain per D2 (rustup + zig + cargo-zigbuild + windows-gnu
-   target under /home/z/my-project/tools/, source tools/env.sh).
-3. `cargo test` (expect S1 30 + core_proc 5 + S2-B 16 ≈ 51; supervisor tests
-   unknown until first run). Fix compile/test failures in the unverified slice.
-4. `cargo zigbuild --target x86_64-pc-windows-gnu` — both bins must link.
-5. S2 adversarial review round: Reviewer-C + Reviewer-B IN PARALLEL (D6),
-   consensus → fixes → `harness/backup.sh s2-close`.
-6. Proceed to S3 (tray via raw win32, D4) per ROADMAP.
+1. `harness/backup.sh s2-verified` (run before anything else — D7).
+2. S2 adversarial review round, Reviewer-C + Reviewer-B IN PARALLEL (D6):
+   both must APPROVE; BLOCK findings fixed then re-reviewed; verdicts go to
+   harness/memory/consensus/S2-consensus.md.
+3. `harness/backup.sh s2-close`; ROADMAP S2 → [x].
+4. S3 (tray via raw win32 per D4) — implementer round, then same review gate.
 
 ## Blockers / open items
-- None. GitHub push token available in upload/ (never printed, one-shot use
-  by backup.sh). Remote access verified working 2026-11-13T05:12Z.
-- Repo-local git identity must be set (was lost with the recycle): set before
-  commit — "MultiTunnel Harness" <maniesh-NR@users.noreply.github.com>.
+- None blocking. Push token available via upload/ (one-shot, never printed).
+- Watch item: the earlier "flaky failure under first-compile load" did not
+  reappear in two consecutive runs; reviewers should still glance at
+  timing-sensitive assertions.
 
 ## Environment map (sandbox)
 - Repo: /home/z/my-project/MultiTunnel — branch main, remote
-  github.com/maniesh-NR/MultiTunnel (token embedded in remote URL by a prior
-  session; prefer backup.sh's one-shot URL so tokens stay out of git config).
-- Toolchains: /home/z/my-project/tools/ — source tools/env.sh first
-  (RUSTUP_HOME/CARGO_HOME/PATH incl. zig). Reinstall recipe = DECISIONS D2.
-- Cross build: cargo zigbuild --target x86_64-pc-windows-gnu
+  github.com/maniesh-NR/MultiTunnel (backup.sh pushes with the one-shot URL).
+- Toolchains: `. /home/z/my-project/tools/env.sh` FIRST (RUSTUP_HOME /
+  CARGO_HOME / PATH incl. zig; CARGO_TARGET_DIR=/tmp/mt-target).
+  Rust 1.100.0 + zig 0.17.1 + cargo-zigbuild, target x86_64-pc-windows-gnu.
+- Cross build: `cargo zigbuild --target x86_64-pc-windows-gnu`
+- Tests: `cargo test` (~5.7 s full suite).

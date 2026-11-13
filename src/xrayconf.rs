@@ -163,11 +163,14 @@ mod tests {
         let hit = rules.iter().any(|r| {
             r["type"] == "field"
                 && r["outboundTag"] == "direct"
-                && r["ip"]
-                    .as_array()
-                    .map_or(false, |ips| ips.iter().any(|ip| ip.as_str() == Some("geoip:private")))
+                && r["ip"].as_array().map_or(false, |ips| {
+                    ips.iter().any(|ip| ip.as_str() == Some("geoip:private"))
+                })
         });
-        assert!(hit, "no rule maps geoip:private -> direct; rules: {rules:?}");
+        assert!(
+            hit,
+            "no rule maps geoip:private -> direct; rules: {rules:?}"
+        );
     }
 
     #[test]
@@ -189,8 +192,7 @@ mod tests {
     fn render_output_is_valid_json_matching_generate() {
         let cfg = test_config();
         let text = render(&cfg).expect("render");
-        let parsed: Value =
-            serde_json::from_str(&text).expect("render output must be valid JSON");
+        let parsed: Value = serde_json::from_str(&text).expect("render output must be valid JSON");
         assert_eq!(parsed, generate(&cfg));
     }
 }

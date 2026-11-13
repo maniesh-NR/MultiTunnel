@@ -31,3 +31,8 @@
 2026-11-12T15:51Z | process | NEW RULE (D7 hardening): backup.sh runs IMMEDIATELY after every agent completion, before the next agent launches
 2026-11-13T05:12Z | recovery | RECOVERY-3: new sandbox resumed from repo memory after context loss; /home/z/my-project tree persisted and holds a SUPERSET of origin/main: S2-B sysproxy+elevate (believed lost in INCIDENT-2) + full supervisor.rs (989L, UNVERIFIED) + main.rs doctor/connect wiring — all uncommitted; LEDGER branches merged chronologically
 2026-11-13T05:13Z | recovery | toolchain tree wiped for the THIRD time (only env.sh survived) — reinstalling per D2 before any verification
+2026-11-13T05:20Z | recovery | toolchain reinstalled per D2 (rust 1.100.0, zig 0.17.1, cargo-zigbuild); env.sh rewritten under tools/ by orchestrator
+2026-11-13T05:30Z | s2 | first cargo test of the recovered supervisor slice HUNG (>10 min, killed twice at 300s/600s); per-test bisection: ALL rig tests hang, pure tests pass
+2026-11-13T05:45Z | s2 | breadcrumb bisection isolated the hang: test bodies complete fully; hang is Rig::drop joining the SOCKS-stub accept thread — the stub owns a try_clone'd listener fd, so the "listener dropped → stub exits" premise was false and the join hung forever; fix: nonblocking accept loop + quit flag (join now bounded ~10 ms)
+2026-11-13T05:50Z | s2 | second finding (masked by the hang): Rig::build hardwired restart_max=3 while test 7 exercises the restartMax=0 give-up path → "never reached Failed"; rig now takes restart_max as a parameter
+2026-11-13T05:57Z | s2 | full suite 52/52 green ×2 (5.65 s each, no flake re-seen); zigbuild windows-gnu green: multitunnel.exe (console) + multitunnel-tray.exe (GUI) both PE32+ — S2 host+cross acceptance met; adversarial review round next

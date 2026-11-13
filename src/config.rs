@@ -49,7 +49,11 @@ pub struct Local {
 
 impl Default for Local {
     fn default() -> Self {
-        Self { listen: "127.0.0.1".into(), socks_port: 10808, http_port: 10809 }
+        Self {
+            listen: "127.0.0.1".into(),
+            socks_port: 10808,
+            http_port: 10809,
+        }
     }
 }
 
@@ -133,7 +137,11 @@ impl Config {
     /// built for; change it if you reserve a different static IP.
     pub fn defaults() -> Self {
         Self {
-            server: Server { address: "35.208.99.240".into(), port: 8443, ..Default::default() },
+            server: Server {
+                address: "35.208.99.240".into(),
+                port: 8443,
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -150,10 +158,10 @@ impl Config {
     /// Load the config, apply fallback defaults for anything left unset,
     /// resolve relative paths against the executable's directory, validate.
     pub fn load(path: &Path) -> Result<Self> {
-        let raw = std::fs::read_to_string(path)
-            .map_err(|e| err!("read {}: {e}", path.display()))?;
-        let mut cfg: Self = serde_json::from_str(&raw)
-            .map_err(|e| err!("parse {}: {e}", path.display()))?;
+        let raw =
+            std::fs::read_to_string(path).map_err(|e| err!("read {}: {e}", path.display()))?;
+        let mut cfg: Self =
+            serde_json::from_str(&raw).map_err(|e| err!("parse {}: {e}", path.display()))?;
         cfg.apply_fallback_defaults();
         let base = std::env::current_exe()
             .ok()
@@ -329,7 +337,11 @@ mod tests {
         assert_eq!(cfg.behavior.restart_max, 5);
         assert_eq!(cfg.behavior.probe_interval_sec, 60);
         // Relative paths survive the round trip (resolved against the exe dir).
-        let base = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let base = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
         assert_eq!(cfg.paths.xray, base.join("bin/xray.exe"));
         assert_eq!(cfg.paths.log_dir, base.join("logs"));
     }
@@ -373,7 +385,11 @@ mod tests {
         assert_eq!(c.server.port, 8443);
         // Empty path fields fall back to the documented relative defaults,
         // which load then resolves against the executable's directory.
-        let base = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let base = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
         assert_eq!(c.paths.net_merge, base.join("net-merge"));
         assert_eq!(c.paths.xray_config, base.join("xray-client.json"));
         assert_eq!(c.paths.state_dir, base.join("state"));
@@ -422,7 +438,11 @@ mod tests {
         let loaded = Config::load(&path);
         let _ = std::fs::remove_file(&path);
         let c = loaded.expect("load with relative paths");
-        let base = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let base = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
         for (got, rel) in [
             (&c.paths.xray, "bin/xray.exe"),
             (&c.paths.net_merge, "net-merge"),
@@ -473,7 +493,10 @@ mod tests {
         let top = v.as_object().expect("top-level object");
         let mut top_keys: Vec<&str> = top.keys().map(String::as_str).collect();
         top_keys.sort_unstable();
-        assert_eq!(top_keys, ["behavior", "local", "netMerge", "paths", "server"]);
+        assert_eq!(
+            top_keys,
+            ["behavior", "local", "netMerge", "paths", "server"]
+        );
 
         let server = v["server"].as_object().unwrap();
         for key in ["publicKey", "shortId", "address", "port", "uuid", "sni"] {
@@ -497,8 +520,13 @@ mod tests {
         assert_eq!(v["netMerge"]["enable"], true);
 
         let behavior = v["behavior"].as_object().unwrap();
-        for key in ["systemProxy", "proxyOverride", "probeTarget", "probeIntervalSec", "restartMax"]
-        {
+        for key in [
+            "systemProxy",
+            "proxyOverride",
+            "probeTarget",
+            "probeIntervalSec",
+            "restartMax",
+        ] {
             assert!(behavior.contains_key(key), "behavior.{key} missing");
         }
         assert!(
@@ -529,6 +557,9 @@ mod tests {
             .expect("config.example.json must exist next to Cargo.toml");
         let example: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
         let defaults = serde_json::to_value(Config::defaults()).expect("serialize defaults");
-        assert_eq!(example, defaults, "config.example.json drifted from defaults()");
+        assert_eq!(
+            example, defaults,
+            "config.example.json drifted from defaults()"
+        );
     }
 }

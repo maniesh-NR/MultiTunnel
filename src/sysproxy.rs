@@ -97,9 +97,9 @@ fn save_snapshot(state_dir: &Path, snap: &Snapshot) -> crate::error::Result<()> 
         opts.mode(0o600);
     }
     match opts.open(&path) {
-        Ok(mut f) => f.write_all(body.as_bytes()).map_err(|e| {
-            crate::err!("failed to write proxy snapshot {}: {}", path.display(), e)
-        }),
+        Ok(mut f) => f
+            .write_all(body.as_bytes())
+            .map_err(|e| crate::err!("failed to write proxy snapshot {}: {}", path.display(), e)),
         // Snapshot already present (previous run not restored): keep it.
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(crate::err!(
@@ -156,16 +156,14 @@ fn open_inet_settings(rights: u32) -> crate::error::Result<RegKey> {
 
 #[cfg(windows)]
 fn reg_set_dword(key: &RegKey, name: &str, value: u32) -> crate::error::Result<()> {
-    key.set_value(name, &value).map_err(|e| {
-        crate::err!("failed to write HKCU\\{}\\{}: {}", INET_SETTINGS, name, e)
-    })
+    key.set_value(name, &value)
+        .map_err(|e| crate::err!("failed to write HKCU\\{}\\{}: {}", INET_SETTINGS, name, e))
 }
 
 #[cfg(windows)]
 fn reg_set_string(key: &RegKey, name: &str, value: &str) -> crate::error::Result<()> {
-    key.set_value(name, &value).map_err(|e| {
-        crate::err!("failed to write HKCU\\{}\\{}: {}", INET_SETTINGS, name, e)
-    })
+    key.set_value(name, &value)
+        .map_err(|e| crate::err!("failed to write HKCU\\{}\\{}: {}", INET_SETTINGS, name, e))
 }
 
 /// Delete a registry string value, tolerating "already absent" so restore
@@ -354,8 +352,7 @@ mod tests {
         assert_eq!(empty.proxy_server, Some(String::new()));
         assert_ne!(absent, empty);
         // The distinction survives a round-trip.
-        let back: Snapshot =
-            serde_json::from_str(&serde_json::to_string(&empty).unwrap()).unwrap();
+        let back: Snapshot = serde_json::from_str(&serde_json::to_string(&empty).unwrap()).unwrap();
         assert_eq!(back, empty);
     }
 

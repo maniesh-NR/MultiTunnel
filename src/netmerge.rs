@@ -178,8 +178,8 @@ fn run_full(
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait(); // reap the killed child
-                    // Reader threads are dropped (detached): they wind down
-                    // at EOF and cannot hang this call.
+                                          // Reader threads are dropped (detached): they wind down
+                                          // at EOF and cannot hang this call.
                     return Err(err!(
                         "`{bin} {}` timed out after {timeout:?} and was killed",
                         args.join(" ")
@@ -417,9 +417,16 @@ mod tests {
 
     #[test]
     fn run_strict_missing_binary_is_err() {
-        let err = run_strict("definitely-missing-binary-xyz", Duration::from_secs(1), &["x"])
-            .expect_err("strict: missing binary must error");
-        assert!(err.to_string().contains("definitely-missing-binary-xyz"), "{err}");
+        let err = run_strict(
+            "definitely-missing-binary-xyz",
+            Duration::from_secs(1),
+            &["x"],
+        )
+        .expect_err("strict: missing binary must error");
+        assert!(
+            err.to_string().contains("definitely-missing-binary-xyz"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -458,7 +465,10 @@ mod tests {
         assert!(msg.contains("timed out"), "{msg}");
         assert!(msg.contains("sleep"), "{msg}");
         assert!(msg.contains('2'), "{msg}");
-        assert!(started.elapsed() < Duration::from_secs(5), "kill must be prompt");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "kill must be prompt"
+        );
     }
 
     #[test]
