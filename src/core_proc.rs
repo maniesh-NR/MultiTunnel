@@ -103,15 +103,23 @@ impl CoreProc {
     /// spawns are diagnosable; spawn errors mention the binary path.
     /// Returns an error if a child is already running.
     pub fn start(&self) -> Result<()> {
-        // Join a leftover waiter from a previous cycle (instant if the
-        // previous child already died on its own). Prevents leaks.
-        let leftover = lock(&self.waiter).take();
-        if let Some(h) = leftover {
+        // Contract check FIRST (S2-REV-C P0-1): while a child is alive its
+        // waiter never exits, so joining before this check blocked
+        // indefinitely (and then silently double-started).
+        if lock(&self.child).is_some() {
+            return Err(crate::err!("core already running: {}", self.bin.display()));
+        }
+        // Join a leftover waiter from the previous cycle: the child slot is
+        // empty, so that waiter has observed the death (or is between its
+        // final poll and thread-exit) — the join is instant. Prevents leaks.
+        if let Some(h) = lock(&self.waiter).take() {
             let _ = h.join();
         }
 
         let mut slot = lock(&self.child);
         if slot.is_some() {
+            // Unreachable given the first check (nothing else spawns), but a
+            // cheap re-check under the slot lock costs nothing.
             return Err(crate::err!("core already running: {}", self.bin.display()));
         }
 
@@ -260,17 +268,22 @@ impl CoreProc {
         let target: SocketAddr = proxy_addr
             .parse()
             .map_err(|e| crate::err!("invalid proxy address '{}': {}", proxy_addr, e))?;
+        // Total deadline (S2-REV-C P1-1): per-read timeouts alone let a
+        // byte-dripping proxy keep every individual read just inside its
+        // window and stall the probe forever. The budget is re-armed on the
+        // socket before every read below.
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| crate::err!("socks5: timeout {timeout:?} is too large"))?;
         let mut s = TcpStream::connect_timeout(&target, timeout)
             .map_err(|e| crate::err!("socks5: cannot reach proxy {}: {}", proxy_addr, e))?;
-        s.set_read_timeout(Some(timeout))
-            .map_err(|e| crate::err!("socks5: set_read_timeout: {}", e))?;
-        s.set_write_timeout(Some(timeout))
-            .map_err(|e| crate::err!("socks5: set_write_timeout: {}", e))?;
+        refresh_socket_budget(&mut s, deadline)?;
 
         // Greeting: offer no-auth (00) only.
         s.write_all(&[0x05, 0x01, 0x00])
             .map_err(|e| crate::err!("socks5: send greeting: {}", e))?;
         let mut g = [0u8; 2];
+        refresh_socket_budget(&mut s, deadline)?;
         socks_read_exact(&mut s, &mut g)?;
         if g[0] != 0x05 || g[1] != 0x00 {
             return Err(crate::err!(
@@ -294,6 +307,7 @@ impl CoreProc {
 
         // Reply head: VER, REP, RSV, ATYP.
         let mut head = [0u8; 4];
+        refresh_socket_budget(&mut s, deadline)?;
         socks_read_exact(&mut s, &mut head)?;
         if head[0] != 0x05 {
             return Err(crate::err!("socks5: bad reply version 0x{:02x}", head[0]));
@@ -308,16 +322,20 @@ impl CoreProc {
         match head[3] {
             0x01 => {
                 let mut b = [0u8; 6];
+                refresh_socket_budget(&mut s, deadline)?;
                 socks_read_exact(&mut s, &mut b)?;
             }
             0x03 => {
                 let mut l = [0u8; 1];
+                refresh_socket_budget(&mut s, deadline)?;
                 socks_read_exact(&mut s, &mut l)?;
                 let mut b = vec![0u8; l[0] as usize + 2];
+                refresh_socket_budget(&mut s, deadline)?;
                 socks_read_exact(&mut s, &mut b)?;
             }
             0x04 => {
                 let mut b = [0u8; 18];
+                refresh_socket_budget(&mut s, deadline)?;
                 socks_read_exact(&mut s, &mut b)?;
             }
             a => return Err(crate::err!("socks5: unknown ATYP 0x{:02x}", a)),
@@ -386,6 +404,26 @@ fn pump_to_log<R: Read + Send + 'static>(mut pipe: R, log_path: PathBuf) {
     });
 }
 
+/// Re-arm the socket read/write timeouts to the remaining probe budget.
+/// Returns `Err` once the total deadline has passed (S2-REV-C P1-1).
+fn refresh_socket_budget(s: &mut TcpStream, deadline: Instant) -> Result<()> {
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return Err(crate::err!(
+            "socks5: probe timed out (total budget exhausted)"
+        ));
+    };
+    if remaining.is_zero() {
+        return Err(crate::err!(
+            "socks5: probe timed out (total budget exhausted)"
+        ));
+    }
+    s.set_read_timeout(Some(remaining))
+        .map_err(|e| crate::err!("socks5: set_read_timeout: {}", e))?;
+    s.set_write_timeout(Some(remaining))
+        .map_err(|e| crate::err!("socks5: set_write_timeout: {}", e))?;
+    Ok(())
+}
+
 /// read_exact with SOCKS5 context (timeouts surface as io errors here).
 fn socks_read_exact<S: Read>(s: &mut S, buf: &mut [u8]) -> Result<()> {
     s.read_exact(buf)
@@ -418,9 +456,25 @@ mod tests {
 
     /// Minimal SOCKS5 stub server: validates the probe's wire format and
     /// answers with `status` in the final reply (0x00 = success).
+    /// Defense-in-depth (S2-REV-B P2-3): the accept is NONBLOCKING with a
+    /// 10 s cap, so a probe that never connects can never hang the join.
     fn stub_socks(listener: TcpListener, status: u8) -> JoinHandle<()> {
+        listener
+            .set_nonblocking(true)
+            .expect("stub: listener nonblocking");
         thread::spawn(move || {
-            let (mut s, _) = listener.accept().expect("stub: accept");
+            let mut sock = None;
+            let give_up = Instant::now() + Duration::from_secs(10);
+            while sock.is_none() && Instant::now() < give_up {
+                match listener.accept() {
+                    Ok((s, _)) => sock = Some(s),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return,
+                }
+            }
+            let Some(mut s) = sock else { return }; // probe never came
             let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
             let mut g = [0u8; 3];
             s.read_exact(&mut g).expect("stub: read greeting");
@@ -465,6 +519,67 @@ mod tests {
             Err(e) => assert!(e.0.contains("0x05"), "error must name the status: {}", e.0),
         }
         stub.join().expect("stub thread");
+    }
+
+    /// (b2) start() while a child is running must Err promptly, never join
+    /// the live waiter (S2-REV-C P0-1 — used to hang, then double-start).
+    #[test]
+    #[cfg(unix)]
+    fn start_while_running_errors_promptly() {
+        let dir = std::env::temp_dir().join(unique_tag() + "-start-twice");
+        fs::create_dir_all(&dir).expect("mkdir");
+        let fake = dir.join("slow.sh");
+        fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").expect("write fake");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let cp = CoreProc::new(fake, dir.join("cfg.json"), dir.join("logs"));
+        cp.start().expect("first start");
+        let t0 = Instant::now();
+        let err = cp.start().expect_err("second start must error");
+        assert!(
+            t0.elapsed() < Duration::from_secs(1),
+            "second start blocked for {:?}",
+            t0.elapsed()
+        );
+        assert!(err.0.contains("already running"), "{}", err.0);
+        cp.stop();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// (b3) total deadline (S2-REV-C P1-1): a proxy that drips VALID SOCKS5
+    /// reply bytes slowly (80 ms apart) defeats per-read timeouts forever —
+    /// every read completes just inside its window. Only the probe's total
+    /// budget ends it: the fixed code dies at ~500 ms (mid-drain); without
+    /// the deadline the probe would return Ok at ~880 ms and this test fails
+    /// on expect_err.
+    #[test]
+    #[cfg(unix)]
+    fn socks_probe_total_deadline_bounds_byte_dripping_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr").to_string();
+        thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                // Valid replies, one byte every 80 ms: greeting [05 00],
+                // head [05 00 00 01], BND.ADDR/BND.PORT [00 ×6], then hold.
+                for byte in [0x05u8, 0x00, 0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0] {
+                    if s.write_all(&[byte]).is_err() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(80));
+                }
+                // Hold the socket open: the probe must die at its budget.
+                thread::sleep(Duration::from_secs(5));
+            }
+        });
+        let t0 = Instant::now();
+        let err = CoreProc::socks_probe(&addr, "example.com", 443, Duration::from_millis(500))
+            .expect_err("the drip server must hit the total deadline");
+        assert!(
+            t0.elapsed() >= Duration::from_millis(350) && t0.elapsed() < Duration::from_millis(900),
+            "probe ran {:?} — budget not enforced as expected",
+            t0.elapsed()
+        );
+        assert!(err.0.contains("socks5"), "{}", err.0);
     }
 
     /// (c) probe against a dead port → Err quickly (timeout math works).

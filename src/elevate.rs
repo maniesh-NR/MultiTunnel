@@ -10,21 +10,59 @@
 //! - No unit tests possible for the real UAC path; the pure helpers
 //!   [`join_args`] and [`to_wide`] are factored out and tested portably.
 
-/// Join command-line arguments into a single ShellExecuteW parameter string:
-/// arguments that are empty or contain whitespace are wrapped in double
-/// quotes (Windows command-line style). Pure helper, portable tests.
+/// Join command-line arguments into a single ShellExecuteW parameter string,
+/// quoting per the CommandLineToArgvW rules (S2-REV-C P1-2: embedded quotes
+/// and backslash-before-quote must be escaped, and trailing backslashes
+/// doubled when quoted — otherwise one crafted argument splits into several
+/// in the elevated child). Pure helper, portable tests.
 #[cfg(any(windows, test))]
 pub(crate) fn join_args(args: &[String]) -> String {
     args.iter()
-        .map(|a| {
-            if a.is_empty() || a.chars().any(char::is_whitespace) {
-                format!("\"{}\"", a)
-            } else {
-                a.clone()
-            }
-        })
+        .map(|a| quote_windows_arg(a.as_str()))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Quote one argument for a Windows command line parsed back by
+/// CommandLineToArgvW. Unchanged arguments pass through; anything empty or
+/// containing whitespace/quotes is wrapped and escaped.
+#[cfg(any(windows, test))]
+fn quote_windows_arg(arg: &str) -> String {
+    let needs_quotes = arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || c == '"');
+    if !needs_quotes {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0usize;
+    for c in arg.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                // n backslashes before a quote must become 2n+1 so the
+                // quote itself stays escaped after re-parsing.
+                for _ in 0..backslashes * 2 + 1 {
+                    out.push('\\');
+                }
+                out.push('"');
+                backslashes = 0;
+            }
+            other => {
+                // Backslashes before any other character are literal.
+                for _ in 0..backslashes {
+                    out.push('\\');
+                }
+                backslashes = 0;
+                out.push(other);
+            }
+        }
+    }
+    // n trailing backslashes before the closing quote must double.
+    for _ in 0..backslashes * 2 {
+        out.push('\\');
+    }
+    out.push('"');
+    out
 }
 
 /// Encode `s` as a null-terminated UTF-16 wide string — the representation
@@ -150,5 +188,26 @@ mod tests {
             join_args(&["a\tb".to_string(), "c".to_string()]),
             "\"a\tb\" c"
         );
+    }
+
+    #[test]
+    fn join_args_escapes_embedded_quotes_and_backslashes() {
+        // One crafted argument must stay ONE argument after re-parsing:
+        // `a" --evil` → `"a\" --evil"` → CommandLineToArgvW → `a" --evil`.
+        assert_eq!(join_args(&["a\" --evil".to_string()]), "\"a\\\" --evil\"");
+        // Trailing backslash doubles only when quotes are required:
+        // `C:\my dir\` → `"C:\my dir\\"` → re-parses to `C:\my dir\`.
+        assert_eq!(
+            join_args(&["C:\\my dir\\".to_string()]),
+            "\"C:\\my dir\\\\\""
+        );
+        // A path with no whitespace/quotes passes through untouched — a
+        // lone trailing backslash re-parses correctly WITHOUT quoting.
+        assert_eq!(join_args(&["C:\\".to_string()]), "C:\\");
+        // Interior backslash stays literal, the quote is escaped:
+        // `a\b"c` → `"a\b\"c"` → re-parses to `a\b"c`.
+        assert_eq!(join_args(&["a\\b\"c".to_string()]), "\"a\\\\b\\\"c\"");
+        // No whitespace/quotes → untouched, backslashes included.
+        assert_eq!(join_args(&["a\\b".to_string()]), "a\\b");
     }
 }

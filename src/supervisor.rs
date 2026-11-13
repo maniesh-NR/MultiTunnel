@@ -29,11 +29,12 @@
 //! - Every method takes `&self`; mutable state lives in `Arc<Shared>` so the
 //!   stage-S3 tray can wrap the `Supervisor` in an `Arc` and call from menu
 //!   handlers on any thread.
-//! - One poll-loop thread per connect cycle. Double spawn is guarded by the
-//!   `loop_running` flag AND the `loop_thread` slot; `disconnect()` sets the
-//!   per-cycle stop flag and JOINS the thread before any cleanup, so a loop
-//!   never outlives its cycle. The 5 s tick sleeps in 100 ms slices, so a
-//!   disconnect is honored within ~100 ms.
+//! - One poll-loop thread per connect cycle. Double spawn is prevented by
+//!   the connect() state gate + operation lock (`disconnect()` joins the
+//!   previous cycle's thread first); a loop never outlives its cycle. The
+//!   5 s tick sleeps in 100 ms slices, so a disconnect is honored within
+//!   ~100 ms while the loop is between blocking calls; worst case one
+//!   wait_for_port/probe window (~15 s) finishes first (S2-REV-C P2-1).
 //! - A restart "campaign" owns the backoff for one core death: it re-checks
 //!   the stop flag between attempts (a disconnect during a campaign aborts
 //!   it cleanly), flips the snapshot to Connecting while retrying, counts
@@ -170,11 +171,17 @@ impl Inner {
 #[derive(Debug)]
 struct Shared {
     inner: Mutex<Inner>,
+    /// Serializes whole connect()/disconnect() operations (S2-REV-C P0-2,
+    /// S2-REV-B P1-3): a disconnect during an in-flight connect sequence
+    /// previously joined a None loop handle, returned Ok, and the sequence
+    /// then finished into Connected with the system proxy re-set.
+    op_lock: Mutex<()>,
     /// Per-cycle stop signal: checked every tick and every 100 ms slice.
     stop: AtomicBool,
     /// JoinHandle of the live poll loop (joined by `disconnect`).
     loop_thread: Mutex<Option<JoinHandle<()>>>,
-    /// Guards against a double loop spawn (contract).
+    /// Loop-alive diagnostic flag; double-spawn prevention is the
+    /// connect() state gate + `op_lock` (S2-REV-B P2-4).
     loop_running: AtomicBool,
 }
 
@@ -199,6 +206,7 @@ impl Supervisor {
             core,
             shared: Arc::new(Shared {
                 inner: Mutex::new(Inner::default()),
+                op_lock: Mutex::new(()),
                 stop: AtomicBool::new(false),
                 loop_thread: Mutex::new(None),
                 loop_running: AtomicBool::new(false),
@@ -236,6 +244,8 @@ impl Supervisor {
     /// Brings the tunnel up (see the module contract for the exact order).
     /// No-op `Ok` while Connecting/Connected; a full retry from Failed.
     pub fn connect(&self) -> Result<()> {
+        // Whole-operation serialization: see `Shared::op_lock` docs.
+        let _op_guard = lock(&self.shared.op_lock);
         {
             let mut inner = lock(&self.shared.inner);
             if matches!(inner.state, State::Connecting | State::Connected) {
@@ -265,6 +275,10 @@ impl Supervisor {
         // 0. stale sysproxy self-heal (covers abrupt Ctrl+C exits) — best
         //    effort, never blocks connecting.
         let _ = sysproxy::restore(self.state_dir());
+
+        // 0.5 loopback guard (S2-REV-C P1-3, contract #2): the SOCKS inbound
+        //     is noauth — it must never bind beyond loopback.
+        ensure_loopback_listen(&self.cfg.local.listen)?;
 
         // 1. write the generated client config (private: 0600 on unix).
         self.write_xray_config()?;
@@ -375,13 +389,15 @@ impl Supervisor {
 
     /// Spawns the per-cycle poll loop (guarded against double spawn).
     fn spawn_loop(&self) {
+        // The connect() state gate + op_lock guarantee the previous cycle is
+        // over; join its exiting thread instead of racing the narrow
+        // loop_running window (S2-REV-B P2-4: the old early-return could
+        // leave a new cycle Connected with no poll loop at all).
         let mut slot = lock(&self.shared.loop_thread);
-        if self.shared.loop_running.load(Ordering::SeqCst) {
-            return;
-        }
-        // Join a leftover (finished) handle from a previous cycle.
         if let Some(h) = slot.take() {
+            drop(slot);
             let _ = h.join();
+            slot = lock(&self.shared.loop_thread);
         }
         self.shared.stop.store(false, Ordering::SeqCst);
         self.shared.loop_running.store(true, Ordering::SeqCst);
@@ -394,6 +410,8 @@ impl Supervisor {
     /// Tears the tunnel down: stop + join the poll loop first, then reverse
     /// sysproxy → netmerge → core. Best-effort; always ends Disconnected.
     pub fn disconnect(&self) -> Result<()> {
+        // Whole-operation serialization: see `Shared::op_lock` docs.
+        let _op_guard = lock(&self.shared.op_lock);
         if lock(&self.shared.inner).state == State::Disconnected {
             return Ok(()); // contract: no-op when already down
         }
@@ -593,6 +611,25 @@ fn stoppable_sleep(stop: &AtomicBool, dur: Duration) -> bool {
         thread::sleep(SLEEP_SLICE.min(deadline - std::time::Instant::now()));
     }
     !stop.load(Ordering::SeqCst)
+}
+
+/// Loopback enforcement for lib.rs contract #2 (S2-REV-C P1-3): the core's
+/// noauth SOCKS inbound (and the HTTP inbound) must never bind beyond
+/// loopback. "localhost" is allowed; any other non-loopback address is not.
+fn ensure_loopback_listen(listen: &str) -> Result<()> {
+    if listen.eq_ignore_ascii_case("localhost") {
+        return Ok(());
+    }
+    match listen.parse::<std::net::IpAddr>() {
+        Ok(ip) if ip.is_loopback() => Ok(()),
+        Ok(ip) => Err(crate::err!(
+            "local.listen '{listen}' ({ip}) is not loopback — refusing to expose \
+             the unauthenticated SOCKS/HTTP inbound (architecture contract #2)"
+        )),
+        Err(e) => Err(crate::err!(
+            "local.listen '{listen}' is not a valid IP address: {e}"
+        )),
+    }
 }
 
 /// `"host:port"` → `(host, port)`; `None` when it does not parse.
@@ -941,6 +978,58 @@ mod tests {
         assert_eq!(parse_probe_target(":80"), None);
         assert_eq!(parse_probe_target("host:notaport"), None);
         assert_eq!(parse_probe_target(""), None);
+    }
+
+    /// (3b) loopback guard (S2-REV-C P1-3).
+    #[test]
+    fn loopback_listen_is_enforced() {
+        assert!(ensure_loopback_listen("127.0.0.1").is_ok());
+        assert!(ensure_loopback_listen("127.9.9.9").is_ok());
+        assert!(ensure_loopback_listen("::1").is_ok());
+        assert!(ensure_loopback_listen("localhost").is_ok());
+        assert!(ensure_loopback_listen("LOCALHOST").is_ok());
+        for bad in [
+            "0.0.0.0",
+            "192.168.1.5",
+            "10.0.0.1",
+            "169.254.0.1",
+            "::",
+            "bogus",
+            "",
+        ] {
+            let err =
+                ensure_loopback_listen(bad).expect_err("non-loopback listen must be rejected");
+            assert!(err.0.contains("local.listen"), "{bad}: {}", err.0);
+        }
+    }
+
+    /// (3c) whole-operation serialization (S2-REV-C P0-2): a connect()
+    /// blocked on op_lock must not even move the state to Connecting.
+    #[test]
+    #[cfg(unix)]
+    fn connect_waits_for_op_lock_of_in_flight_operation() {
+        let rig = Rig::build(true, None, None, 3); // refused probe → fast Err
+                                                   // Hold the operation lock via one Arc clone; a second clone runs
+                                                   // connect() in a thread — it must block until the guard drops.
+        let lock_holder = Arc::clone(&rig.sup);
+        let guard = lock(&lock_holder.shared.op_lock);
+        let (tx, rx) = mpsc::channel::<()>();
+        let runner = Arc::clone(&rig.sup);
+        let t = thread::spawn(move || {
+            let _ = runner.connect();
+            let _ = tx.send(());
+        });
+        thread::sleep(Duration::from_millis(300));
+        assert!(
+            matches!(rig.sup.snapshot().state, State::Disconnected),
+            "connect() must block on the operation lock before touching state"
+        );
+        drop(guard);
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("connect finishes once released");
+        t.join().expect("connect thread");
+        assert!(matches!(rig.sup.snapshot().state, State::Failed));
+        rig.joined_disconnect();
     }
 
     /// (4) Probe-driven failure path: the in-test stub refuses every probe →

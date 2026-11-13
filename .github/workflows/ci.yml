@@ -16,6 +16,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
 
+  # S2-REV-B P2-2: the harness treats fmt/clippy cleanliness as gate
+  # criteria; enforce them in CI instead of trusting local runs.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
   cross-check:
     runs-on: ubuntu-latest
     steps:

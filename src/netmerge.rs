@@ -136,6 +136,13 @@ fn run_full(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW (S2-REV-B P2-6): the S3 GUI tray polls status
+        // every 5 s; an unflagged spawn would flash a console window each time.
+        cmd.creation_flags(0x0800_0000);
+    }
 
     let mut child = cmd
         .spawn()
