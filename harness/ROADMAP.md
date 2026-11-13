@@ -59,7 +59,7 @@ reached + backup completed).
 > zigbuild green. Residual: first REAL-Windows run is the smoke test.
 > Full verdicts: harness/memory/consensus/S3-consensus.md.
 
-## S4 — Ship: server script, docs, release `[ ]`
+## S4 — Ship: server script, docs, release `[x]`
 - `server/setup-xray-reality.sh` (VLESS+REALITY on the VM, REALITY dest
   borrows the Pangolin gateway TLS on 127.0.0.1:443, systemd unit, firewall
   checklist, prints the client config block).
@@ -69,6 +69,16 @@ reached + backup completed).
   `GH_TOKEN` is present the orchestrator also creates the Release directly.
 - Acceptance: zips verified (exe present, `file` says PE32+); docs reviewed;
   adversarial APPROVE; final backup.
+
+> S4 CLOSED 2026-11-13: implementer 56340a5 (script validated with `xray run
+> -test` against the real binary); review round 2×APPROVE (REV-C: installer
+> "injection-proof, fails loudly, never prints the private key"; REV-B:
+> 65/78 tests run on the windows-latest leg, no runner risk). Doc P1s fixed
+> in d48f32f (restartMax semantics, net-merge resolution, address fallback,
+> stale stage jargon, server script added to the release zip). The ci.yml
+> "corruption" P1 was DISMISSED with od byte-evidence as a sandbox
+> output-filter artifact — lesson recorded in HARNESS.md. Full verdicts:
+> harness/memory/consensus/S4-consensus.md.
 
 > S1 CLOSED 2026-11-12: consensus 2×APPROVE (S1-REV-C correctness/security,
 > S1-REV-B build/portability/license). P1 fixes applied post-approval:
