@@ -20,6 +20,8 @@ jobs:
         run: |
           $v = "${{ github.ref_name }}"
           New-Item -ItemType Directory -Force "dist/multitunnel-$v" | Out-Null
+          New-Item -ItemType Directory -Force "dist/multitunnel-$v/server" | Out-Null
+          Copy-Item server/setup-xray-reality.sh "dist/multitunnel-$v/server/"
           Copy-Item target/release/multitunnel.exe target/release/multitunnel-tray.exe config.example.json LICENSE THIRD_PARTY_NOTICES.md "dist/multitunnel-$v/"
           foreach ($f in @("README.md", "QUICKSTART.md")) {
             if (Test-Path $f) { Copy-Item $f "dist/multitunnel-$v/" }

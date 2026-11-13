@@ -131,7 +131,7 @@ belong in the repo.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `server.address` | `35.208.99.240` | the VM's public address |
+| `server.address` | `35.208.99.240` (template prefill) | the VM's public address — required, no fallback when cleared |
 | `server.port` | `8443` | VLESS+REALITY port on the VM |
 | `server.uuid` | — (required) | client UUID, from the server script's output |
 | `server.sni` | — (required) | the gateway domain (REALITY serverName) |
@@ -150,10 +150,12 @@ belong in the repo.
 | `behavior.proxyOverride` | `localhost;127.*;10.*;192.168.*;172.16.*` … `172.31.*;<local>` | proxy bypass list |
 | `behavior.probeTarget` | `example.com:80` | periodic full-chain probe target (host:port) |
 | `behavior.probeIntervalSec` | `60` | probe interval in seconds |
-| `behavior.restartMax` | `5` | core restart budget after failures (0 = unlimited) |
+| `behavior.restartMax` | `5` | core restart budget after failures (0 = never restart: give up at once and restore the proxy) |
 
-Conventions: strings left empty and numbers set to `0` fall back to these
-defaults on load; purely relative paths are resolved against the executable's
+Conventions: fields left empty fall back to these defaults on load — except
+`server.address` (required; an empty value is rejected by validation) and
+`behavior.restartMax` (0 means never restart, not the default); purely
+relative paths are resolved against the executable's
 directory (absolute or drive-rooted paths are used as-is). Validation requires
 `server.uuid`, `server.sni` and `server.publicKey` (the error names exactly
 the missing fields and points at the server script), and the SOCKS/HTTP ports

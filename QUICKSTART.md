@@ -44,8 +44,10 @@ Sanity check on the VM: `systemctl status xray` should show active (running).
 
 Install net-merge from https://github.com/net-merge/net-merge (it is the link
 bonding layer — a separate project that MultiTunnel drives). Make sure
-`net-merge` is on your PATH or sits next to `multitunnel.exe` (the default
-config looks for it there), plug in your extra uplink(s), and start its tray
+`net-merge.exe` sits next to `multitunnel.exe`: the default config resolves
+the name against the exe's own directory, so a PATH-only install is NOT
+found (or set `paths.netMerge` to the absolute path of your net-merge
+install). Plug in your extra uplink(s), and start its tray
 app once:
 
 ```

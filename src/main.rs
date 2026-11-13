@@ -47,7 +47,7 @@ fn main() -> ExitCode {
         "doctor" => cmd_doctor(cfg_path),
         "connect" => cmd_connect(cfg_path),
         "tray" => Err(multitunnel::Error(
-            "tray lands in stage S3 — build multitunnel-tray".into(),
+            "the tray UI ships as the separate multitunnel-tray.exe binary".into(),
         )),
         other => {
             eprintln!("unknown command {other:?}\n");

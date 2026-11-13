@@ -64,3 +64,17 @@ cargo test                                      # host tests
 Rust stable (rustup) + zig 0.17.x + cargo-zigbuild, no root required
 (DECISIONS.md D2). If the sandbox reverts the tools tree, reinstall per D2 —
 the repo itself must never depend on the sandbox.
+
+## Sandbox output-filter artifact (IMPORTANT for all agents)
+
+The sandbox post-processes tool OUTPUT and rewrites certain bracketed
+patterns: a literal `[main]` in command output is DISPLAYED as `ain]` (the
+`[m` is eaten). This is an artifact of the display pipeline — it has already
+produced one phantom reviewer P1 ("corrupted ci.yml trigger", S4 round 1)
+and one self-inflicted sed corruption while "fixing" the phantom. Rules:
+
+- NEVER "fix" bracketed literals (`[main]`, `[S2]`, …) based on plain
+  `cat`/`rg`/`echo` output — verify the BYTES first: `sed -n '4p' FILE | od -An -c`.
+- `od`/`hexdump` output passes through unmodified and shows the truth.
+- Files on disk and git objects are NOT corrupted by the filter — it only
+  rewrites what tools print.
