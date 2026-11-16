@@ -11,8 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # S3-REV-C P2-7: cache cargo artifacts between runs (default keying).
+      - uses: Swatinem/rust-cache@v2
+      # S4-REV-C P2-1: tag pushes bypass ci.yml, so a tag must not ship an
+      # unlinted build either — fmt and clippy run before anything is built.
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
       # S2-REV-B P1-1: a v* tag must never ship an untested build — tag
-      # pushes bypass ci.yml, so the suite runs here first.
+      # pushes bypass ci.yml, so the suite runs here before the build.
       - run: cargo test
       - run: cargo build --release
       - name: Package

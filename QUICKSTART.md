@@ -10,10 +10,14 @@ machine's network settings.
 Download the latest `multitunnel-<version>-windows-x64.zip` from the
 [Releases](https://github.com/maniesh-NR/MultiTunnel/releases) page (or build
 it yourself — see the README) and extract it into a folder you keep, e.g.
-`C:\Tools\MultiTunnel`. The folder now contains `multitunnel.exe`,
-`multitunnel-tray.exe`, `config.example.json`, `LICENSE` and
-`THIRD_PARTY_NOTICES.md`. Everything else in this guide happens relative to
-that folder.
+`C:\Tools\MultiTunnel`. Extracting yields a folder named `multitunnel-vX.Y.Z`
+(with the release version, e.g. `multitunnel-v0.3.0`), so "extract into
+`C:\Tools\MultiTunnel`" produces `C:\Tools\MultiTunnel\multitunnel-vX.Y.Z` —
+work inside that folder; everything else in this guide happens relative to
+it. Its full contents: `multitunnel.exe`, `multitunnel-tray.exe`,
+`config.example.json`, `README.md`, `QUICKSTART.md`, `LICENSE`,
+`THIRD_PARTY_NOTICES.md`, and `server/setup-xray-reality.sh` (the server
+installer script used in step 1).
 
 ## Step 1 — run the server script on the VM (about 3 minutes)
 

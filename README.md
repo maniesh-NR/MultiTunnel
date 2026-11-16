@@ -251,8 +251,9 @@ cargo test                   # host test suite
   `windows-latest` runner it runs `cargo test` **first** (tag pushes bypass
   the CI workflow, so a release tag must never ship an untested build), then
   builds `--release`, packages both executables together with
-  `config.example.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, `README.md` and
-  `QUICKSTART.md` into a zip, and publishes the GitHub Release
+  `config.example.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, `README.md`,
+  `QUICKSTART.md` and `server/setup-xray-reality.sh` into a zip, and
+  publishes the GitHub Release
   (`fail_on_unmatched_files` is set so a packaging typo fails loudly instead
   of shipping an empty release).
 

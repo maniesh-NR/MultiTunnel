@@ -11,9 +11,12 @@
 //!   thread when the child dies on its own.
 //! - `wait_for_port(addr, timeout)` — TcpStream::connect_timeout loop.
 //! - `socks_probe(proxy_addr, host, port, timeout)` — hand-rolled SOCKS5:
-//!   greeting 05 01 00 → expect 05 00; CONNECT 05 01 00 03 len host port →
-//!   expect 05 00 ..; drain bound address per ATYP; full chain test
-//!   (local core → tunnel → server → internet). Pure std, no deps.
+//!   greeting 05 01 00 → expect 05 00; CONNECT with the ATYP that matches
+//!   the host literal — 05 01 00 01 + 4 address bytes for IPv4,
+//!   05 01 00 04 + 16 bytes for IPv6, 05 01 00 03 len host for a domain
+//!   (S2-REV-C P2-7) → expect 05 00 ..; drain bound address per ATYP;
+//!   full chain test (local core → tunnel → server → internet).
+//!   Pure std, no deps.
 //! - Unit tests: in-test SOCKS5 stub server (TcpListener + thread) for
 //!   probe success/refusal; timeout math; log file creation.
 //!
@@ -32,6 +35,10 @@
 //! - stdout/stderr are `Stdio::piped()`; two detached pump threads append
 //!   everything to `<log_dir>/xray.log` and self-terminate on pipe EOF,
 //!   which follows child death + reap (kill/wait or try_wait). No leaks.
+//!   Since S5 both pumps (and the spawn header) share ONE append-mode
+//!   handle behind a mutex (`Arc<Mutex<File>>`, S2-REV-C P2-4): each
+//!   write is exclusive, so concurrent stdout/stderr appends can never
+//!   split/interleave lines the way two independent handles could.
 //! - `start()` while already running is an error; `exited_unexpectedly` is
 //!   intentionally NOT reset by `start()` (consumed-once belongs to the
 //!   reader), while `stop_flag` IS reset so a fresh cycle starts clean.
@@ -40,8 +47,8 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
-use std::path::PathBuf;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -134,23 +141,26 @@ impl CoreProc {
         fs::create_dir_all(&self.log_dir)
             .map_err(|e| crate::err!("cannot create log dir {}: {}", self.log_dir.display(), e))?;
         let log_path = self.log_dir.join(LOG_FILE);
-        let mut log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .map_err(|e| crate::err!("cannot open log {}: {}", log_path.display(), e))?;
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        writeln!(
-            log,
-            "[ts {ts}] spawn: {} run -c {}",
-            self.bin.display(),
-            self.cfg_path.display()
-        )
-        .map_err(|e| crate::err!("cannot write log header: {}", e))?;
-        let _ = log.flush();
+        // The ONE append handle for the whole cycle: the spawn header and
+        // both output pumps go through it, so every append is exclusive
+        // (S2-REV-C P2-4). With separate handles, a concurrent stdout and
+        // stderr write_all could split/interleave lines.
+        let shared_log = open_shared_log(&log_path)?;
+        {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let mut log = lock(&shared_log);
+            writeln!(
+                &mut *log,
+                "[ts {ts}] spawn: {} run -c {}",
+                self.bin.display(),
+                self.cfg_path.display()
+            )
+            .map_err(|e| crate::err!("cannot write log header: {}", e))?;
+            let _ = log.flush();
+        }
 
         // 2. spawn (fresh cycle: clear the manual-stop flag first).
         self.stop_flag.store(false, Ordering::SeqCst);
@@ -188,8 +198,8 @@ impl CoreProc {
                 return Err(crate::err!("core spawned without stderr pipe"));
             }
         };
-        pump_to_log(stdout, log_path.clone());
-        pump_to_log(stderr, log_path);
+        pump_to_log(stdout, Arc::clone(&shared_log));
+        pump_to_log(stderr, shared_log);
 
         // 4. publish the child, then start the waiter thread.
         *slot = Some(child);
@@ -299,15 +309,9 @@ impl CoreProc {
             ));
         }
 
-        // CONNECT through a domain name (ATYP 03).
-        let hb = host.as_bytes();
-        if hb.len() > 255 {
-            return Err(crate::err!("socks5: host too long ({} bytes)", hb.len()));
-        }
-        let mut req = Vec::with_capacity(7 + hb.len());
-        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, hb.len() as u8]);
-        req.extend_from_slice(hb);
-        req.extend_from_slice(&port.to_be_bytes());
+        // CONNECT with the ATYP matching the host literal
+        // (S2-REV-C P2-7; see build_connect_request).
+        let req = build_connect_request(host, port)?;
         refresh_socket_budget(&mut s, deadline)?; // write budget for CONNECT
         s.write_all(&req)
             .map_err(|e| crate::err!("socks5: send CONNECT: {}", e))?;
@@ -344,6 +348,33 @@ impl CoreProc {
         }
         Ok(())
     }
+}
+
+/// Build the SOCKS5 CONNECT request for `host`:`port` (pure, byte-exact —
+/// unit-tested per ATYP): `05 01 00` + ATYP section + port (big-endian).
+/// ATYP 0x01 + 4 address bytes for an IPv4 literal, ATYP 0x04 + 16 bytes
+/// for an IPv6 literal (a bare literal — `parse_probe_target` unwraps the
+/// `[...]` form), ATYP 0x03 + one-byte length + domain otherwise
+/// (S2-REV-C P2-7 — the request previously ALWAYS used ATYP 03, which is
+/// wrong for IP literals and cannot carry an IPv6 address at all).
+fn build_connect_request(host: &str, port: u16) -> Result<Vec<u8>> {
+    let mut req = Vec::with_capacity(22);
+    if let Ok(v4) = host.parse::<Ipv4Addr>() {
+        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x01]);
+        req.extend_from_slice(&v4.octets());
+    } else if let Ok(v6) = host.parse::<Ipv6Addr>() {
+        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x04]);
+        req.extend_from_slice(&v6.octets());
+    } else {
+        let hb = host.as_bytes();
+        if hb.len() > 255 {
+            return Err(crate::err!("socks5: host too long ({} bytes)", hb.len()));
+        }
+        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, hb.len() as u8]);
+        req.extend_from_slice(hb);
+    }
+    req.extend_from_slice(&port.to_be_bytes());
+    Ok(req)
 }
 
 /// Waiter thread body: watches the child and flips the consumed-once flag
@@ -386,24 +417,53 @@ fn waiter_loop(slot: Arc<Mutex<Option<Child>>>, stop: Arc<AtomicBool>, exited: A
     }
 }
 
-/// Detached pump: appends one pipe (stdout or stderr) to the log until EOF.
-/// EOF follows child death + reap, so the thread always terminates.
-fn pump_to_log<R: Read + Send + 'static>(mut pipe: R, log_path: PathBuf) {
-    thread::spawn(move || {
-        let mut log = match OpenOptions::new().create(true).append(true).open(&log_path) {
-            Ok(f) => f,
-            Err(_) => return, // unusable log; child output is dropped
-        };
-        let mut buf = [0u8; 4096];
-        loop {
-            match pipe.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let _ = log.write_all(&buf[..n]);
-                }
+/// One append-mode log handle shared by the spawn header and BOTH output
+/// pumps (S2-REV-C P2-4): every append locks the mutex, so a stdout write
+/// and a stderr write can never split/interleave each other's lines the
+/// way two independent handles could.
+type SharedLog = Arc<Mutex<fs::File>>;
+
+/// Open the log in append mode and wrap it as the cycle-wide shared
+/// handle (see [`SharedLog`]).
+fn open_shared_log(log_path: &Path) -> Result<SharedLog> {
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map_err(|e| crate::err!("cannot open log {}: {}", log_path.display(), e))?;
+    Ok(Arc::new(Mutex::new(file)))
+}
+
+/// Pump body (synchronous, testable): append everything readable from
+/// `pipe` to the SHARED log handle until EOF (which follows child death +
+/// reap). Each chunk is written while holding the mutex, i.e. each write
+/// is exclusive. Unusable-log behavior is unchanged since S2: a failed
+/// write silently drops that chunk and the pump keeps draining — the pump
+/// never panics, never errors the process, and never blocks the other
+/// pump.
+fn pump_pipe_to_log<R: Read>(mut pipe: R, log: &SharedLog) {
+    let mut buf = [0u8; 4096];
+    loop {
+        match pipe.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let mut log = lock(log);
+                let _ = log.write_all(&buf[..n]);
             }
         }
-    });
+    }
+}
+
+/// Detached pump thread for one child pipe (stdout or stderr): runs
+/// [`pump_pipe_to_log`] until pipe EOF. The shared handle is opened ONCE
+/// per cycle by `start()` — if that open fails, `start()` errors before
+/// any pump exists, preserving the documented
+/// silent-drop-on-open-failure semantics (the child's output is dropped
+/// rather than the process failing; the pre-S5 header write already
+/// required the same open). With the single shared handle there is no
+/// second per-pump open left to fail.
+fn pump_to_log<R: Read + Send + 'static>(pipe: R, log: SharedLog) {
+    thread::spawn(move || pump_pipe_to_log(pipe, &log));
 }
 
 /// Re-arm the socket read/write timeouts to the remaining probe budget.
@@ -677,5 +737,257 @@ mod tests {
             "header must record the command: {log}"
         );
         let _ = fs::remove_dir_all(&log_dir); // best-effort cleanup
+    }
+
+    /// (a2) CONNECT request bytes per ATYP (pure; S2-REV-C P2-7): IPv4 →
+    /// 0x01 + 4 octets, IPv6 → 0x04 + 16 octets, domain → 0x03 + length
+    /// prefix (unchanged shape), port big-endian; oversize domains error.
+    #[test]
+    fn connect_request_bytes_per_atyp() {
+        // IPv4 literal → ATYP 01 + 4 address bytes.
+        assert_eq!(
+            build_connect_request("127.0.0.1", 1080).unwrap(),
+            vec![0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x04, 0x38]
+        );
+        // IPv6 literals (bare, i.e. already unwrapped from "[...]") →
+        // ATYP 04 + 16 address bytes.
+        let r = build_connect_request("::1", 443).unwrap();
+        assert_eq!(
+            r,
+            vec![
+                0x05, 0x01, 0x00, 0x04, // VER CMD RSV ATYP
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // ::1
+                0x01, 0xBB, // port 443
+            ]
+        );
+        assert_eq!(
+            build_connect_request("2001:db8::1", 80).unwrap(),
+            vec![
+                0x05, 0x01, 0x00, 0x04, 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+                0x00, 0x50,
+            ]
+        );
+        // Domain → ATYP 03 + one-byte length + bytes (unchanged shape).
+        let mut want = vec![0x05, 0x01, 0x00, 0x03, 11];
+        want.extend_from_slice(b"example.com");
+        want.extend_from_slice(&80u16.to_be_bytes());
+        assert_eq!(build_connect_request("example.com", 80).unwrap(), want);
+        // The length prefix is one byte: oversize domains are rejected.
+        let long = "a".repeat(256);
+        assert!(build_connect_request(&long, 80).is_err());
+        // 255 bytes is still fine.
+        let edge = "a".repeat(255);
+        assert!(build_connect_request(&edge, 80).is_ok());
+    }
+
+    /// Captured CONNECT request seen by a stub: ATYP + address bytes + port.
+    #[derive(Debug, PartialEq)]
+    struct CapturedConnect {
+        atyp: u8,
+        addr: Vec<u8>,
+        port: u16,
+    }
+
+    /// SOCKS5 stub that records the probe's CONNECT request (any ATYP) and
+    /// answers success. Same nonblocking-accept + deadline pattern as
+    /// `stub_socks`, so a probe that never connects can never hang the
+    /// join; a capture that never happened surfaces as `None` in the test.
+    fn stub_socks_capture(
+        listener: TcpListener,
+    ) -> (JoinHandle<()>, Arc<Mutex<Option<CapturedConnect>>>) {
+        listener
+            .set_nonblocking(true)
+            .expect("stub: listener nonblocking");
+        let captured = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&captured);
+        let handle = thread::spawn(move || {
+            let mut sock = None;
+            let give_up = Instant::now() + Duration::from_secs(10);
+            while sock.is_none() && Instant::now() < give_up {
+                match listener.accept() {
+                    Ok((s, _)) => sock = Some(s),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return,
+                }
+            }
+            let Some(mut s) = sock else { return };
+            // Force blocking explicitly (see stub_socks note on Winsock).
+            let _ = s.set_nonblocking(false);
+            let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut g = [0u8; 3];
+            if s.read_exact(&mut g).is_err() {
+                return;
+            }
+            if s.write_all(&[0x05, 0x00]).is_err() {
+                return;
+            }
+            let mut head = [0u8; 4];
+            if s.read_exact(&mut head).is_err() {
+                return;
+            }
+            let addr = match head[3] {
+                0x01 => {
+                    let mut b = [0u8; 4];
+                    if s.read_exact(&mut b).is_err() {
+                        return;
+                    }
+                    b.to_vec()
+                }
+                0x03 => {
+                    let mut l = [0u8; 1];
+                    if s.read_exact(&mut l).is_err() {
+                        return;
+                    }
+                    let mut b = vec![0u8; l[0] as usize];
+                    if s.read_exact(&mut b).is_err() {
+                        return;
+                    }
+                    b
+                }
+                0x04 => {
+                    let mut b = [0u8; 16];
+                    if s.read_exact(&mut b).is_err() {
+                        return;
+                    }
+                    b.to_vec()
+                }
+                _ => return,
+            };
+            let mut p = [0u8; 2];
+            if s.read_exact(&mut p).is_err() {
+                return;
+            }
+            *lock(&sink) = Some(CapturedConnect {
+                atyp: head[3],
+                addr,
+                port: u16::from_be_bytes(p),
+            });
+            // VER REP RSV ATYP(01) + BND.ADDR(4) + BND.PORT(2)
+            let _ = s.write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+            let _ = s.flush();
+        });
+        (handle, captured)
+    }
+
+    /// (a3) Wire-level ATYP selection (S2-REV-C P2-7): the probe must send
+    /// ATYP 01 for an IPv4 literal, 04 for an IPv6 literal, and 03 for a
+    /// domain — verified end-to-end against a capturing stub (the request
+    /// bytes match `build_connect_request`).
+    #[test]
+    fn socks_probe_sends_atyp_matching_host_kind() {
+        let cases: [(&str, u8, Vec<u8>); 4] = [
+            ("127.0.0.1", 0x01, vec![127, 0, 0, 1]),
+            (
+                "::1",
+                0x04,
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            ),
+            (
+                "2001:db8::1",
+                0x04,
+                vec![0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            ),
+            ("example.com", 0x03, b"example.com".to_vec()),
+        ];
+        for (host, want_atyp, want_addr) in cases {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+            let addr = listener.local_addr().expect("addr").to_string();
+            let (stub, captured) = stub_socks_capture(listener);
+            CoreProc::socks_probe(&addr, host, 443, Duration::from_secs(3))
+                .unwrap_or_else(|e| panic!("probe against stub ({host}): {e}"));
+            stub.join().expect("stub thread");
+            let got = lock(&captured)
+                .take()
+                .unwrap_or_else(|| panic!("stub never captured a CONNECT request for {host}"));
+            assert_eq!(got.atyp, want_atyp, "ATYP for {host}: {got:?}");
+            assert_eq!(got.addr, want_addr, "address bytes for {host}: {got:?}");
+            assert_eq!(got.port, 443, "port for {host}: {got:?}");
+        }
+    }
+
+    /// Test reader that yields exactly one line per `read()` call, so every
+    /// line travels through the shared log handle as its own write — the
+    /// exact interleave hazard the single `Arc<Mutex<File>>` removes.
+    struct LineReader {
+        chunks: Vec<Vec<u8>>,
+        next: usize,
+    }
+
+    impl Read for LineReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.next >= self.chunks.len() {
+                return Ok(0); // EOF
+            }
+            let chunk = &self.chunks[self.next];
+            let n = chunk.len().min(buf.len());
+            buf[..n].copy_from_slice(&chunk[..n]);
+            self.next += 1;
+            Ok(n)
+        }
+    }
+
+    /// (f) Pump interleave (S2-REV-C P2-4): two pumps sharing ONE append
+    /// handle write distinct known lines (each line its own write through
+    /// the mutex); every line in the resulting log must be one of the
+    /// written lines, unsplit, and both pumps must be represented. Threads
+    /// are joined directly, so the test is deterministic and fast.
+    #[test]
+    fn shared_log_handle_keeps_lines_unsplit() {
+        let dir = std::env::temp_dir().join(unique_tag() + "-shared-log");
+        fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join(LOG_FILE);
+        let handle = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .expect("open shared log");
+        let shared: SharedLog = Arc::new(Mutex::new(handle));
+
+        const LINES: usize = 50;
+        let mk = |prefix: char| -> Vec<Vec<u8>> {
+            (0..LINES)
+                .map(|i| format!("{prefix}-line-{i:03}\n").into_bytes())
+                .collect()
+        };
+        let expected: std::collections::HashSet<String> = ['A', 'B']
+            .iter()
+            .flat_map(|p| mk(*p))
+            .map(|b| String::from_utf8(b).unwrap().trim_end().to_string())
+            .collect();
+
+        let a = LineReader {
+            chunks: mk('A'),
+            next: 0,
+        };
+        let b = LineReader {
+            chunks: mk('B'),
+            next: 0,
+        };
+        let shared_b = Arc::clone(&shared);
+        let t1 = thread::spawn(move || pump_pipe_to_log(a, &shared));
+        let t2 = thread::spawn(move || pump_pipe_to_log(b, &shared_b));
+        t1.join().expect("pump A");
+        t2.join().expect("pump B");
+
+        let body = fs::read_to_string(&path).expect("read log back");
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 2 * LINES, "every line must be intact");
+        for line in &lines {
+            assert!(
+                expected.contains(*line),
+                "line was split or interleaved: {line:?}"
+            );
+        }
+        assert!(
+            lines.iter().any(|l| l.starts_with("A-")),
+            "pump A output missing"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("B-")),
+            "pump B output missing"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

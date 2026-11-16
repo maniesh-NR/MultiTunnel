@@ -25,7 +25,9 @@
 //! - Exit (S3-REV-C P1): NIM_DELETE first, ≤2 s wait for the normal
 //!   disconnect worker, then the op-lock-free `Supervisor::emergency_stop`
 //!   plus ≤1 s grace before `WM_QUIT` — the core can never be orphaned
-//!   with the system proxy still set.
+//!   with the system proxy still set. One best-effort NIM_MODIFY
+//!   "Shutting down…" tooltip accompanies the wait (S3-REV-B P2-2; the
+//!   FALSE return after the delete is ignored like every NIM_MODIFY).
 //! - Supervisor ops (`connect`/`disconnect` hold an op_lock and can block
 //!   up to ~15 s) ALWAYS run on worker threads — never inside the window
 //!   procedure, which must keep pumping messages.
@@ -117,6 +119,14 @@ fn tooltip_text(snap: &Snapshot) -> String {
     }
     lines.join("\n")
 }
+
+/// Best-effort tooltip for the Exit wait (S3-REV-B P2-2): the exit ladder
+/// can hold the UI thread for up to ~3 s (normal-wait + emergency-grace
+/// bounds), and a still-visible tray icon should say the wait is
+/// intentional. Pushed once by `win::exit_app`; must fit the [`tip_array`]
+/// NIF_TIP cap.
+#[cfg(any(windows, test))]
+const EXIT_TIP: &str = "MultiTunnel — Shutting down…";
 
 /// Copy `s` into a NIF_TIP-shaped, NUL-terminated `[u16; 128]` buffer: at
 /// most 127 UTF-16 code units + terminator, and never a surrogate pair
@@ -395,7 +405,7 @@ mod win {
 
     use super::{
         cmd_from_id, ico_image_bytes, id_for_cmd, menu_plan, status_dump_path, tip_array,
-        tooltip_text, write_status_dump, Cmd, MenuEntry, ICON_BYTES,
+        tooltip_text, write_status_dump, Cmd, MenuEntry, EXIT_TIP, ICON_BYTES,
     };
     use crate::elevate::to_wide;
     use crate::supervisor::Supervisor;
@@ -869,10 +879,15 @@ mod win {
         spawn_detached("notepad.exe", &ctx.config_path);
     }
 
-    /// Fire-and-forget helper process (spawn never blocks the message loop;
-    /// explorer.exe exits nonzero by design, so no status check at all).
+    /// Fire-and-forget helper process: `spawn` never blocks the message
+    /// loop, and the child's exit STATUS is deliberately never checked
+    /// (explorer.exe exits nonzero by design). A failed SPAWN, however, is
+    /// logged (S3-REV-B P2-4) so a menu action that silently does nothing
+    /// (e.g. notepad.exe missing) leaves a stderr diagnostic.
     fn spawn_detached(program: &str, arg: &Path) {
-        let _ = std::process::Command::new(program).arg(arg).spawn();
+        if let Err(e) = std::process::Command::new(program).arg(arg).spawn() {
+            log_err(&format!("spawn {program}"), &crate::err!("{}", e));
+        }
     }
 
     /// Exit: remove the tray icon first (no ghost), then tear the tunnel
@@ -892,6 +907,22 @@ mod win {
             // SAFETY: d carries the cbSize/hWnd/uID NIM_DELETE identifies
             // the icon by; deleting an already-deleted icon returns FALSE.
             let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &d) };
+            // One best-effort "Shutting down…" tooltip for the wait below
+            // (S3-REV-B P2-2): the ladder can hold this thread for up to
+            // EXIT_WAIT + EMERGENCY_WAIT (~3 s). The icon was just deleted,
+            // so this NIM_MODIFY usually returns FALSE — ignored exactly
+            // like every other NIM_MODIFY here. It shows only in the rare
+            // case the delete above failed (busy shell) and the icon is
+            // still visible, telling the user the wait is intentional.
+            // Purely additive: the audited ladder's ordering and timing are
+            // untouched.
+            let mut m = nid_base(hwnd);
+            m.uFlags = NIF_TIP;
+            m.szTip = tip_array(EXIT_TIP);
+            // SAFETY: m is a NOTIFYICONDATAW with cbSize/hWnd/uID and the
+            // NIF_TIP payload set; NIM_MODIFY only reads it. FALSE (icon
+            // already deleted above) is ignored.
+            let _ = unsafe { Shell_NotifyIconW(NIM_MODIFY, &m) };
         }
         // Best-effort normal disconnect off-thread; bounded wait so a stuck
         // op_lock (up to ~15 s) cannot hold the exit hostage.
@@ -1245,6 +1276,17 @@ mod tests {
         assert_eq!(b[127], 0);
     }
 
+    #[test]
+    fn exit_tip_fits_nif_tip_cap() {
+        // S3-REV-B P2-2: the one-shot "Shutting down…" tooltip must fit
+        // the NIF_TIP slot intact and stay NUL-terminated (tip_array).
+        let units: Vec<u16> = EXIT_TIP.encode_utf16().collect();
+        assert!(units.len() < 127, "exit tooltip must fit the NIF_TIP cap");
+        let a = tip_array(EXIT_TIP);
+        assert_eq!(&a[..units.len()], &units[..]);
+        assert_eq!(a[units.len()], 0, "NUL terminator right after the text");
+    }
+
     // -- ICO parsing ---------------------------------------------------------------
 
     /// Minimal synthetic ICO: entries of the given square dims, each with a
@@ -1277,8 +1319,19 @@ mod tests {
         assert_eq!(i32::from_le_bytes(bytes[4..8].try_into().unwrap()), 32);
         assert_eq!(i32::from_le_bytes(bytes[8..12].try_into().unwrap()), 64);
         assert!(bytes.len() > 40);
-        // and the small variant is reachable too
-        assert!(ico_image_bytes(ICON_BYTES, 16).is_some());
+        // The 16x16 entry must be a well-formed DIB too: biSize=40,
+        // biWidth=16, biHeight=32 (XOR + AND masks, doubled).
+        let small = ico_image_bytes(ICON_BYTES, 16).expect("embedded ICO has a 16px entry");
+        assert_eq!(u32::from_le_bytes(small[0..4].try_into().unwrap()), 40);
+        assert_eq!(i32::from_le_bytes(small[4..8].try_into().unwrap()), 16);
+        assert_eq!(i32::from_le_bytes(small[8..12].try_into().unwrap()), 32);
+        assert!(small.len() > 40);
+        // Pin the whole asset: scripts/make_icon.py's output is
+        // deterministic (pure geometry, stdlib only), so the total length
+        // is stable — 6 (ICONDIR) + 2*16 (ICONDIRENTRY) + 4264 (32px
+        // entry: 40-byte header + 4096 XOR + 128 AND) + 1128 (16px entry:
+        // 40-byte header + 1024 XOR + 64 AND) = 5430 bytes.
+        assert_eq!(ICON_BYTES.len(), 5430);
     }
 
     #[test]
@@ -1360,6 +1413,9 @@ mod tests {
         let second = std::fs::read_to_string(&path).unwrap();
         assert!(second.contains("\"state\": \"Connected\""));
         assert_eq!(second.matches("\"state\"").count(), 1);
+        // Clean up the scratch dir (S3-REV-C P2-1) — best-effort, the same
+        // remove_dir_all pattern unique_dir uses for stale dirs.
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // -- menu plan ---------------------------------------------------------------------

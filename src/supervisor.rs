@@ -13,6 +13,8 @@
 //!   3 socks_probe (fail fast → stop core, restore proxy, State::Failed)
 //!   4 netmerge::ensure_running + netmerge::on (NON-FATAL: bond_error set)
 //!   5 sysproxy::set(http_addr) if behavior.system_proxy (NON-FATAL)
+//!   Steps 4 and 5 are each preceded by an exit-race stop re-check (see
+//!   the S4-backlog note below) and are skipped when the stop flag is set.
 //! - DISCONNECT: reverse 5→2 (sysproxy::restore, netmerge::off if merging,
 //!   core stop).
 //! - Fail-open: core death → restart w/ backoff 1s,2s,... cap 30s up to
@@ -53,6 +55,15 @@
 //!   system proxy, flip to `Failed`; see the method docs for the semantics.
 //! - `Snapshot::restarts` counts spawn attempts made by restart campaigns
 //!   since the last successful connect (reset at the connect reset point).
+//! - Exit-race guards (S4 backlog): `emergency_stop()` is op-lock-free, so
+//!   a `connect_sequence` that already passed its last stop check could
+//!   still apply “net-merge on” and `sysproxy::set` AFTER the emergency
+//!   restore during a tray Exit — the ~1 s re-set window left the system
+//!   proxy pointing at a dead port after the process quit. The sequence
+//!   now re-checks the stop flag immediately before EACH of those two
+//!   side-effect steps and aborts with neither applied. `connect()` reaps
+//!   the previous cycle's loop and clears the flag first, so a stale stop
+//!   from an earlier disconnect/emergency stop never poisons a new cycle.
 
 use std::fs;
 use std::path::Path;
@@ -179,7 +190,13 @@ struct Shared {
     /// previously joined a None loop handle, returned Ok, and the sequence
     /// then finished into Connected with the system proxy re-set.
     op_lock: Mutex<()>,
-    /// Per-cycle stop signal: checked every tick and every 100 ms slice.
+    /// Per-cycle stop signal: checked every tick and every 100 ms slice by
+    /// the poll loop, and — since the S4 exit-race fix — re-checked by
+    /// `connect_sequence` immediately before each of its two side-effect
+    /// steps (net-merge on, sysproxy::set). Cleared by
+    /// `reap_loop_and_clear_stop` once the previous cycle's loop is
+    /// provably joined (connect entry + spawn_loop), so a stale flag from
+    /// an earlier cycle never aborts a fresh connect.
     stop: AtomicBool,
     /// JoinHandle of the live poll loop (joined by `disconnect`).
     loop_thread: Mutex<Option<JoinHandle<()>>>,
@@ -257,6 +274,13 @@ impl Supervisor {
             inner.state = State::Connecting;
             inner.error = None;
         }
+        // Reap the previous cycle's poll loop and clear its stop flag: a
+        // stop left set by an earlier disconnect/emergency_stop must not
+        // read as "stop requested" by THIS cycle's connect_sequence guards
+        // (the flag is otherwise only cleared in spawn_loop, which runs
+        // AFTER the sequence). Joining first is what proves the old loop
+        // exited before its flag is cleared.
+        self.reap_loop_and_clear_stop();
         match self.connect_sequence() {
             Ok(()) => {
                 lock(&self.shared.inner).state = State::Connected;
@@ -336,6 +360,15 @@ impl Supervisor {
 
         // 4. bonding — NON-FATAL (bond_error captures the failure).
         if self.cfg.net_merge.enable {
+            // Exit-race guard (S4 backlog): emergency_stop() (tray Exit)
+            // runs WITHOUT the op_lock and may already have killed the core
+            // and restored the proxy while this sequence was between its
+            // last check and here. Re-check the stop flag IMMEDIATELY before
+            // the enable step — aborting means net-merge is NOT turned on
+            // and sysproxy::set below is never reached (the ~1 s re-set
+            // window otherwise leaves the system proxy pointing at a dead
+            // port after the process quits).
+            self.abort_if_stopped("enabling net-merge")?;
             let bin = self.cfg.paths.net_merge.to_string_lossy().into_owned();
             match netmerge::ensure_running(&bin, BOND_WAIT).and_then(|()| netmerge::on(&bin)) {
                 Ok(()) => self.refresh_netmerge_status(),
@@ -345,6 +378,8 @@ impl Supervisor {
 
         // 5. system proxy — NON-FATAL (sys_error captures the failure).
         if self.cfg.behavior.system_proxy {
+            // Same exit-race guard, immediately before the proxy write.
+            self.abort_if_stopped("setting the system proxy")?;
             match sysproxy::set(
                 &http_addr(&self.cfg),
                 &self.cfg.behavior.proxy_override,
@@ -355,6 +390,28 @@ impl Supervisor {
             }
         }
         Ok(())
+    }
+
+    /// Exit-race guard for the two side-effect steps of
+    /// `connect_sequence` (S4 backlog): `Err` when the per-cycle stop flag
+    /// is set. An in-flight sequence that already passed its probe must
+    /// not apply "net-merge on" or `sysproxy::set` AFTER an
+    /// `emergency_stop()` (tray Exit) killed the core and restored the
+    /// proxy — the ~1 s re-set window would leave the system proxy
+    /// pointing at a dead port after the process quits. On abort the core
+    /// is stopped (idempotent — emergency_stop already did), the proxy is
+    /// restored best-effort (also idempotent), and the caller applies
+    /// NEITHER side effect.
+    fn abort_if_stopped(&self, before: &'static str) -> Result<()> {
+        if !self.shared.stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.core.stop();
+        let _ = sysproxy::restore(self.state_dir());
+        lock(&self.shared.inner).system_proxy = false;
+        Err(crate::err!(
+            "connect aborted before {before}: stop requested (exit/disconnect)"
+        ))
     }
 
     /// Render + write the client config with a main-style private write.
@@ -392,22 +449,30 @@ impl Supervisor {
 
     /// Spawns the per-cycle poll loop (guarded against double spawn).
     fn spawn_loop(&self) {
-        // The connect() state gate + op_lock guarantee the previous cycle is
-        // over; join its exiting thread instead of racing the narrow
-        // loop_running window (S2-REV-B P2-4: the old early-return could
-        // leave a new cycle Connected with no poll loop at all).
-        let mut slot = lock(&self.shared.loop_thread);
-        if let Some(h) = slot.take() {
-            drop(slot);
-            let _ = h.join();
-            slot = lock(&self.shared.loop_thread);
-        }
-        self.shared.stop.store(false, Ordering::SeqCst);
+        // The connect() state gate + op_lock guarantee the previous cycle
+        // is over; reap its exiting thread and clear the stop flag for the
+        // new cycle (S2-REV-B P2-4: the old early-return could leave a new
+        // cycle Connected with no poll loop at all).
+        self.reap_loop_and_clear_stop();
         self.shared.loop_running.store(true, Ordering::SeqCst);
         let core = Arc::clone(&self.core);
         let shared = Arc::clone(&self.shared);
         let cfg = self.cfg.clone();
-        *slot = Some(thread::spawn(move || poll_loop(core, shared, cfg)));
+        *lock(&self.shared.loop_thread) = Some(thread::spawn(move || poll_loop(core, shared, cfg)));
+    }
+
+    /// Join the previous cycle's poll-loop thread (if its handle is still
+    /// in the slot) and clear the per-cycle stop flag. Only valid while no
+    /// NEW loop is running — connect() entry (the state gate has rejected
+    /// Connecting/Connected, so the previous cycle is over) and
+    /// spawn_loop. A still-live loop must be joined BEFORE its stop flag
+    /// is cleared, or it would un-exit and run on into the next cycle.
+    fn reap_loop_and_clear_stop(&self) {
+        let handle = lock(&self.shared.loop_thread).take();
+        if let Some(h) = handle {
+            let _ = h.join();
+        }
+        self.shared.stop.store(false, Ordering::SeqCst);
     }
 
     /// Tears the tunnel down: stop + join the poll loop first, then reverse
@@ -676,8 +741,34 @@ pub(crate) fn ensure_loopback_listen(listen: &str) -> Result<()> {
 }
 
 /// `"host:port"` → `(host, port)`; `None` when it does not parse.
+/// Bracketed IPv6 literals are unwrapped: `[::1]:443` → `("::1", 443)`,
+/// `[2001:db8::1]:80` → `("2001:db8::1", 80)` (S2-REV-C P2-7 — a port
+/// can only be told from the address when the address is bracketed). A
+/// spec that is ITSELF a valid IPv6 literal (bare `::1`, `2001:db8::1`,
+/// even `fe80::1:443` — with or without a port-looking tail) is ambiguous
+/// and yields `None`: its colons may belong to the address, so brackets
+/// are required. Existing forms are unchanged: `example.com:80`,
+/// `127.0.0.1:1080`.
 pub fn parse_probe_target(spec: &str) -> Option<(String, u16)> {
-    let (host, port) = spec.trim().rsplit_once(':')?;
+    let spec = spec.trim();
+    // Unbracketed IPv6: ambiguous (colons may belong to the address).
+    if spec.parse::<std::net::Ipv6Addr>().is_ok() {
+        return None;
+    }
+    // Bracketed form `[addr]:port` — unwrap the address.
+    if let Some(rest) = spec.strip_prefix('[') {
+        let (addr, tail) = rest.split_once(']')?;
+        let addr = addr.trim();
+        if addr.is_empty() {
+            return None;
+        }
+        let port = tail.strip_prefix(':')?.trim();
+        if port.is_empty() {
+            return None;
+        }
+        return Some((addr.to_string(), port.parse().ok()?));
+    }
+    let (host, port) = spec.rsplit_once(':')?;
     if host.is_empty() || port.is_empty() {
         return None;
     }
@@ -695,27 +786,16 @@ fn http_addr(cfg: &Config) -> String {
     format!("{}:{}", cfg.local.listen, cfg.local.http_port)
 }
 
-/// Main-style private write: POSIX 0600; Windows default ACL (reviewer
-/// finding S1-REV-C #1 — the config embeds the VLESS credential).
+/// Private write for the xray client config (which embeds the VLESS
+/// credential — reviewer finding S1-REV-C #1): POSIX 0600 / Windows
+/// default ACL. Since S5 (S2-REV-C P2-6) this delegates to
+/// [`crate::fsutil::write_private_atomic`]: contents go to a sibling temp
+/// file, are fsynced, then renamed over the destination — the credential
+/// file is never observable in a partial state, and a failed write leaves
+/// the previous file untouched.
 fn write_private(path: &Path, contents: &str) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        f.write_all(contents.as_bytes())?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, contents)?;
-        Ok(())
-    }
+    crate::fsutil::write_private_atomic(path, contents)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1276,5 +1356,266 @@ mod tests {
         assert!(matches!(sup.snapshot().state, State::Disconnected));
         assert!(!sup.loop_running());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// (3d) probeTarget parsing — bracketed IPv6 (S2-REV-C P2-7) and the
+    /// ambiguity rule for bare IPv6 literals.
+    #[test]
+    fn probe_target_parsing_ipv6() {
+        assert_eq!(parse_probe_target("[::1]:443"), Some(("::1".into(), 443)));
+        assert_eq!(
+            parse_probe_target("[2001:db8::1]:80"),
+            Some(("2001:db8::1".into(), 80))
+        );
+        assert_eq!(
+            parse_probe_target("  [::1]:443  "),
+            Some(("::1".into(), 443))
+        );
+        assert_eq!(
+            parse_probe_target("[::ffff:127.0.0.1]:1080"),
+            Some(("::ffff:127.0.0.1".into(), 1080))
+        );
+        // Bare (unbracketed) IPv6 is ambiguous — with or without a
+        // port-looking tail, its colons may belong to the address.
+        assert_eq!(parse_probe_target("::1"), None);
+        assert_eq!(parse_probe_target("2001:db8::1"), None);
+        assert_eq!(parse_probe_target("fe80::1:443"), None);
+        // Malformed bracketed forms.
+        assert_eq!(parse_probe_target("[::1]443"), None); // no ':' after ']'
+        assert_eq!(parse_probe_target("[::1]:"), None); // empty port
+        assert_eq!(parse_probe_target("[::1]:notaport"), None);
+        assert_eq!(parse_probe_target("[::1]:99999"), None);
+        assert_eq!(parse_probe_target("[]:443"), None); // empty address
+        assert_eq!(parse_probe_target("[::1"), None); // unterminated bracket
+    }
+
+    /// (3e) write_private delegates to fsutil::write_private_atomic
+    /// (S2-REV-C P2-6): exact contents, 0600 on unix, and no temp sibling
+    /// left behind — the VLESS-credential config is never partial on disk.
+    #[test]
+    fn write_private_is_atomic_and_private() {
+        let dir = unique_dir("write-private");
+        let p = dir.join("xray-client.json");
+        write_private(&p, "{\"vless\":\"secret-uuid\"}\n").expect("write");
+        assert_eq!(
+            fs::read_to_string(&p).unwrap(),
+            "{\"vless\":\"secret-uuid\"}\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&p).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "credential config must be 0600");
+        }
+        let names: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["xray-client.json".to_string()],
+            "no temp file may be left behind"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Rig for the exit-race guard tests (S4 backlog): a SOCKS stub that
+    /// flips the supervisor's stop flag the moment the probe CONNECT
+    /// completes — exactly the emergency_stop() vs in-flight
+    /// connect_sequence window (the sequence has passed step 3 and is
+    /// heading for the two side-effect steps). Returns
+    /// (supervisor, quit flag, stub thread, state dir); the caller MUST
+    /// flip quit, join the stub, disconnect and remove the dir.
+    #[cfg(unix)]
+    fn exit_race_rig(
+        net_merge_bin: Option<&str>,
+    ) -> (Arc<Supervisor>, Arc<AtomicBool>, JoinHandle<()>, PathBuf) {
+        let dir = unique_dir("exit-race");
+        let socks_listener = TcpListener::bind("127.0.0.1:0").expect("bind socks listener");
+        let socks_port = socks_listener.local_addr().expect("addr").port();
+        let http_port = free_loopback_port();
+        let xray = write_fake_xray(&dir, None);
+        let cfg = Config {
+            server: server(),
+            local: crate::config::Local {
+                listen: "127.0.0.1".into(),
+                socks_port,
+                http_port,
+            },
+            paths: crate::config::Paths {
+                xray,
+                net_merge: PathBuf::from(net_merge_bin.unwrap_or("net-merge")),
+                xray_config: dir.join("xray-client.json"),
+                log_dir: dir.join("logs"),
+                state_dir: dir.join("state"),
+            },
+            net_merge: crate::config::NetMerge {
+                enable: net_merge_bin.is_some(),
+            },
+            behavior: crate::config::Behavior {
+                system_proxy: true,
+                proxy_override: "localhost".into(),
+                probe_target: "example.com:443".into(),
+                probe_interval_sec: 60,
+                restart_max: 3,
+            },
+        };
+        let sup = Arc::new(Supervisor::new(cfg));
+        let quit = Arc::new(AtomicBool::new(false));
+
+        // Nonblocking-accept + quit-flag stub (same pattern as spawn_stub):
+        // answers the probe normally, but sets the stop flag BEFORE the
+        // reply — so the sequence's apply-boundary guards are guaranteed
+        // to observe it.
+        let racer = Arc::clone(&sup);
+        let stub_quit = Arc::clone(&quit);
+        socks_listener
+            .set_nonblocking(true)
+            .expect("stub listener nonblocking");
+        let stub = thread::spawn(move || {
+            loop {
+                if stub_quit.load(Ordering::SeqCst) {
+                    break;
+                }
+                let mut s = match socks_listener.accept() {
+                    Ok((s, _)) => s,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(_) => break, // listener closed for real
+                };
+                let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut g = [0u8; 3];
+                if s.read_exact(&mut g).is_err() {
+                    continue;
+                }
+                if s.write_all(&[0x05, 0x00]).is_err() {
+                    continue;
+                }
+                let mut head = [0u8; 4];
+                if s.read_exact(&mut head).is_err() {
+                    continue;
+                }
+                let mut l = [0u8; 1];
+                if s.read_exact(&mut l).is_err() {
+                    continue;
+                }
+                let mut hb = vec![0u8; l[0] as usize];
+                if s.read_exact(&mut hb).is_err() {
+                    continue;
+                }
+                let mut p = [0u8; 2];
+                if s.read_exact(&mut p).is_err() {
+                    continue;
+                }
+                // Probe complete → simulate the emergency stop's flag set
+                // (the real emergency_stop also kills the core + restores
+                // the proxy; the guards only consult the flag).
+                racer.shared.stop.store(true, Ordering::SeqCst);
+                // VER REP RSV ATYP(01) + BND.ADDR(4) + BND.PORT(2)
+                let _ = s.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
+            }
+        });
+        (sup, quit, stub, dir)
+    }
+
+    /// (9a) Exit-race guard, net-merge boundary (S4 backlog): with the stop
+    /// flag set as the sequence reaches the bonding step, the sequence
+    /// aborts — net-merge is never engaged (bond_error stays clean because
+    /// ensure_running never ran) and the system proxy is NOT applied.
+    #[test]
+    #[cfg(unix)]
+    fn connect_aborts_before_net_merge_when_stop_set_at_boundary() {
+        let (sup, quit, stub, dir) = exit_race_rig(Some("definitely-missing-net-merge-xyz"));
+
+        let err = sup
+            .connect()
+            .expect_err("sequence must abort at the net-merge boundary");
+        let msg = err.to_string();
+        assert!(msg.contains("stop requested"), "{msg}");
+        assert!(msg.contains("net-merge"), "{msg}");
+
+        let s = sup.snapshot();
+        assert!(matches!(s.state, State::Failed), "state: {:?}", s.state);
+        assert!(
+            s.error.as_deref().unwrap_or("").contains("stop requested"),
+            "error: {:?}",
+            s.error
+        );
+        assert!(!s.system_proxy, "the system proxy must NOT be applied");
+        assert!(
+            s.bond_error.is_none(),
+            "ensure_running never ran: {bond:?}",
+            bond = s.bond_error
+        );
+        assert!(!s.merging);
+        assert!(s.sys_error.is_none());
+
+        // Deterministic cleanup (quit-flag stub pattern; never blocks).
+        quit.store(true, Ordering::SeqCst);
+        stub.join().expect("stub thread");
+        let _ = sup.disconnect();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// (9b) Exit-race guard, sysproxy boundary (S4 backlog): with bonding
+    /// disabled and the stop flag set at the boundary, the sequence aborts
+    /// before sysproxy::set — the returned error names it, the proxy flag
+    /// stays down and (non-Windows: sysproxy::set is a no-op Ok, so this
+    /// asserts the state transition, not the registry) no snapshot was
+    /// ever taken for this cycle.
+    #[test]
+    #[cfg(unix)]
+    fn connect_aborts_before_sysproxy_when_stop_set_at_boundary() {
+        let (sup, quit, stub, dir) = exit_race_rig(None);
+
+        let err = sup
+            .connect()
+            .expect_err("sequence must abort at the sysproxy boundary");
+        let msg = err.to_string();
+        assert!(msg.contains("stop requested"), "{msg}");
+        assert!(msg.contains("system proxy"), "{msg}");
+
+        let s = sup.snapshot();
+        assert!(matches!(s.state, State::Failed), "state: {:?}", s.state);
+        assert!(!s.system_proxy, "the system proxy must NOT be applied");
+        assert!(!s.merging);
+        assert!(s.bond_error.is_none() && s.sys_error.is_none());
+
+        // Deterministic cleanup (quit-flag stub pattern; never blocks).
+        quit.store(true, Ordering::SeqCst);
+        stub.join().expect("stub thread");
+        let _ = sup.disconnect();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// (10) A stop flag left over from a previous cycle's disconnect must
+    /// NOT poison the next connect: connect() reaps the finished loop and
+    /// clears the flag before the sequence, so the second cycle applies
+    /// net-merge/sysproxy normally instead of aborting on the stale flag.
+    #[test]
+    #[cfg(unix)]
+    fn connect_after_disconnect_is_not_poisoned_by_stale_stop() {
+        let rig = Rig::build(false, None, None, 3);
+        rig.sup.connect().expect("first connect");
+        rig.joined_disconnect();
+        assert!(matches!(rig.sup.snapshot().state, State::Disconnected));
+
+        // Second cycle on the same supervisor (stale stop=true from the
+        // disconnect is still in the flag): must come up fully.
+        rig.sup
+            .connect()
+            .expect("second connect must not see the stale stop flag");
+        let s = rig.sup.snapshot();
+        assert!(matches!(s.state, State::Connected), "{:?}", s.state);
+        assert!(
+            s.system_proxy,
+            "sysproxy::set must have been applied (no-op Ok on this host)"
+        );
+        assert!(s.error.is_none(), "{:?}", s.error);
+        assert!(rig.sup.loop_running(), "poll loop must run");
+        rig.joined_disconnect();
     }
 }

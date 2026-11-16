@@ -292,10 +292,13 @@ cat > "$CONFIG_PATH" <<EOF
   ]
 }
 EOF
-# 0644 root:root — the file holds the REALITY private key, but the service
-# runs as User=nobody and must be able to read it; it stays local to the VM.
-chmod 0644 "$CONFIG_PATH"
-chown root:root "$CONFIG_PATH"
+# 0640 root:nogroup — the file holds the REALITY private key: root-owned
+# and NOT world-readable, but still readable by the service (User=nobody),
+# whose primary group on Debian/Ubuntu is 'nogroup'. VERIFY the group on the
+# target VM before relying on this: `id -gn nobody` must print 'nogroup'
+# (on some distros the group is 'nobody' instead — adjust the chown below).
+chmod 0640 "$CONFIG_PATH"
+chown root:nogroup "$CONFIG_PATH"
 
 log "validating the config with 'xray run -test'..."
 if ! XRAY_LOCATION_ASSET="$ASSET_DIR" "$XRAY_BIN" run -test -c "$CONFIG_PATH" >/dev/null 2>&1; then
@@ -383,7 +386,7 @@ cat <<EOF
 [setup] server config and never leaves this machine):
 [setup]   $XRAY_BIN
 [setup]   $ASSET_DIR/geoip.dat, $ASSET_DIR/geosite.dat
-[setup]   $CONFIG_PATH   (0644 root:root)
+[setup]   $CONFIG_PATH   (0640 root:nogroup)
 [setup]   $UNIT_PATH
 
 [setup] Service commands:

@@ -17,9 +17,12 @@
 //!
 //! Conventions (reviewer S1-REV-C #6): numeric fields set to 0 and strings
 //! left empty fall back to the documented defaults on load — so
-//! `server.port: 0` silently becomes 8443. Paths that are absolute or rooted
-//! (`C:\tools\x`, `\tools\x`) are used as-is; purely relative paths are
-//! joined onto the executable's directory.
+//! `server.port: 0` silently becomes 8443. EXCEPTION (S2-REV-C P2-10):
+//! `behavior.proxyOverride` is used VERBATIM — an explicit `""` is a legal,
+//! meaningful choice meaning "no local exceptions"; only when the field is
+//! ABSENT from the JSON does the default LAN bypass list apply. Paths that
+//! are absolute or rooted (`C:\tools\x`, `\tools\x`) are used as-is;
+//! purely relative paths are joined onto the executable's directory.
 
 use std::path::{Path, PathBuf};
 
@@ -27,6 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::err;
 use crate::error::Result;
+use crate::supervisor::ensure_loopback_listen;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -95,6 +99,10 @@ impl Default for NetMerge {
 #[serde(rename_all = "camelCase", default)]
 pub struct Behavior {
     pub system_proxy: bool,
+    /// WinINET ProxyOverride, used VERBATIM: an explicit empty string is a
+    /// legal, meaningful choice meaning "no local exceptions" — only when
+    /// the field is ABSENT from the JSON does the default LAN bypass list
+    /// apply (S2-REV-C P2-10).
     pub proxy_override: String,
     pub probe_target: String,
     pub probe_interval_sec: u32,
@@ -173,6 +181,11 @@ impl Config {
 
     fn apply_fallback_defaults(&mut self) {
         let d = Self::defaults();
+        // NOTE: behavior.proxyOverride is deliberately NOT defaulted here
+        // (S2-REV-C P2-10): the configured value is used verbatim, so an
+        // explicit "" means "no local exceptions". The absent-field default
+        // still applies via serde's container `default` (Behavior::default
+        // → default_proxy_override).
         if self.local.listen.is_empty() {
             self.local.listen = d.local.listen.clone();
         }
@@ -196,9 +209,6 @@ impl Config {
         }
         if self.paths.state_dir.as_os_str().is_empty() {
             self.paths.state_dir = d.paths.state_dir.clone();
-        }
-        if self.behavior.proxy_override.is_empty() {
-            self.behavior.proxy_override = default_proxy_override();
         }
         if self.behavior.probe_target.is_empty() {
             self.behavior.probe_target = d.behavior.probe_target.clone();
@@ -230,7 +240,9 @@ impl Config {
     }
 
     /// Validate that the connection can work at all; report exactly which
-    /// server fields still need to be filled in.
+    /// server fields still need to be filled in. Also enforces the
+    /// loopback-only inbound contract (lib.rs #2): generate/doctor reach it
+    /// through [`Config::load`], so they get the same check as connect.
     pub fn validate(&self) -> Result<()> {
         let mut missing = Vec::new();
         if self.server.address.is_empty() {
@@ -253,6 +265,12 @@ impl Config {
                 missing.join(", ")
             ));
         }
+        // Loopback guard (S2-REV-B P2-B, fixed in S5): the local SOCKS/HTTP
+        // inbounds are unauthenticated — they must never bind beyond
+        // loopback. Enforced here (not only in the supervisor) so generate
+        // and doctor, which go through Config::load → validate, cannot
+        // silently accept an exposed inbound.
+        ensure_loopback_listen(&self.local.listen)?;
         if self.local.socks_port == self.local.http_port {
             return Err(err!(
                 "local.socksPort and local.httpPort must differ (both are {})",
@@ -367,7 +385,6 @@ mod tests {
             },
             "behavior": {
                 "systemProxy": false,
-                "proxyOverride": "",
                 "probeTarget": "9.9.9.9:53",
                 "probeIntervalSec": 0
             }
@@ -487,6 +504,48 @@ mod tests {
         assert!(msg.contains("10808"), "msg: {msg}");
     }
 
+    /// Defaults with the server credentials filled in (validatable).
+    fn credentialed_defaults() -> Config {
+        let mut c = Config::defaults();
+        c.server.uuid = "u".into();
+        c.server.sni = "s".into();
+        c.server.public_key = "k".into();
+        c
+    }
+
+    #[test]
+    fn validate_accepts_loopback_listen_values() {
+        // Loopback guard (S2-REV-B P2-B): generate/doctor enforce the same
+        // contract as connect via Config::load → validate.
+        for listen in ["127.0.0.1", "localhost"] {
+            let mut c = credentialed_defaults();
+            c.local.listen = listen.into();
+            c.validate()
+                .unwrap_or_else(|e| panic!("loopback listen {listen} must pass: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_rejects_non_loopback_listen() {
+        let mut c = credentialed_defaults();
+        c.local.listen = "192.168.1.5".into();
+        let e = c
+            .validate()
+            .expect_err("non-loopback listen must be rejected");
+        let msg = e.to_string();
+        assert!(msg.contains("192.168.1.5"), "msg: {msg}");
+        assert!(msg.contains("loopback"), "msg: {msg}");
+    }
+
+    #[test]
+    fn validate_rejects_listen_that_is_not_an_ip() {
+        let mut c = credentialed_defaults();
+        c.local.listen = "not-an-ip".into();
+        let e = c.validate().expect_err("garbage listen must be rejected");
+        let msg = e.to_string();
+        assert!(msg.contains("not-an-ip"), "msg: {msg}");
+    }
+
     #[test]
     fn serialized_schema_is_camel_case() {
         let v = serde_json::to_value(Config::defaults()).unwrap();
@@ -546,6 +605,76 @@ mod tests {
         }
         want.push_str(";<local>");
         assert_eq!(Config::defaults().behavior.proxy_override, want);
+    }
+
+    #[test]
+    fn proxy_override_absent_field_applies_default_bypass_list() {
+        // Field ABSENT from the JSON → the default LAN bypass list applies
+        // (S2-REV-C P2-10).
+        let path = temp_config_path("po-absent");
+        let doc = serde_json::json!({
+            "server": {
+                "address": "203.0.113.10",
+                "port": 8443,
+                "uuid": "u",
+                "sni": "s",
+                "publicKey": "k"
+            },
+            "behavior": { "systemProxy": true }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+        let loaded = Config::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let c = loaded.expect("load without proxyOverride key");
+        assert_eq!(
+            c.behavior.proxy_override,
+            Config::defaults().behavior.proxy_override,
+            "absent field must fall back to the default bypass list"
+        );
+    }
+
+    #[test]
+    fn proxy_override_set_value_is_used_verbatim() {
+        // An explicit value is used EXACTLY as configured — never merged
+        // with or replaced by the default list (S2-REV-C P2-10).
+        let path = temp_config_path("po-verbatim");
+        let doc = serde_json::json!({
+            "server": {
+                "address": "203.0.113.10",
+                "port": 8443,
+                "uuid": "u",
+                "sni": "s",
+                "publicKey": "k"
+            },
+            "behavior": { "proxyOverride": "example.org;*.example.org" }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+        let loaded = Config::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let c = loaded.expect("load with explicit proxyOverride");
+        assert_eq!(c.behavior.proxy_override, "example.org;*.example.org");
+    }
+
+    #[test]
+    fn proxy_override_empty_string_means_no_local_exceptions() {
+        // "" is a legal, meaningful choice (no local exceptions) and must
+        // NOT be silently replaced by the default list (S2-REV-C P2-10).
+        let path = temp_config_path("po-empty");
+        let doc = serde_json::json!({
+            "server": {
+                "address": "203.0.113.10",
+                "port": 8443,
+                "uuid": "u",
+                "sni": "s",
+                "publicKey": "k"
+            },
+            "behavior": { "proxyOverride": "" }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+        let loaded = Config::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let c = loaded.expect("load with empty proxyOverride");
+        assert_eq!(c.behavior.proxy_override, "");
     }
 
     #[test]
