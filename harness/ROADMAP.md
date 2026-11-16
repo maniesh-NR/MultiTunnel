@@ -80,6 +80,21 @@ reached + backup completed).
 > output-filter artifact — lesson recorded in HARNESS.md. Full verdicts:
 > harness/memory/consensus/S4-consensus.md.
 
+## S5 — v0.2.0: P2 backlog hardening `[~]`
+- Clear the carried P2 backlog from S2–S4 reviews; full per-agent contracts
+  in `harness/CONTRACTS-S5.md`. Groups: A config+CLI (loopback validation,
+  `--config=`, doctor version timeout, empty proxyOverride semantics),
+  B runtime (snapshot tri-state typing, atomic writes, IPv6 probe literals
+  incl. ATYP fix, pump interleave lock, Exit re-set micro-race), C tray
+  polish (spawn_detached logging, icon pinning, test cleanup, exit
+  tooltip), D ship hygiene (release.yml lints, rust-cache, server config
+  0640 root:nogroup, QUICKSTART zip list).
+- Pre-staged by orchestrator: `src/fsutil.rs` `write_private_atomic`
+  (+5 tests, suite 83), `supervisor::ensure_loopback_listen` → pub(crate).
+- Acceptance: all 5 gates green (fmt, host+target clippy, tests, zigbuild);
+  2 adversarial APPROVE; Cargo 0.2.0; `v0.2.0` tagged + GitHub Release
+  verified; artifacts restored to sandbox `download/`.
+
 > S1 CLOSED 2026-11-12: consensus 2×APPROVE (S1-REV-C correctness/security,
 > S1-REV-B build/portability/license). P1 fixes applied post-approval:
 > strict on/off semantics, 0600 credential file, #[cfg(unix)] gating of

@@ -19,6 +19,7 @@ pub mod config;
 pub mod core_proc;
 pub mod elevate;
 pub mod error;
+pub mod fsutil;
 pub mod netmerge;
 pub mod supervisor;
 pub mod sysproxy;

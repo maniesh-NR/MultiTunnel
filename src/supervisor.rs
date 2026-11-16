@@ -657,7 +657,9 @@ fn stoppable_sleep(stop: &AtomicBool, dur: Duration) -> bool {
 /// Loopback enforcement for lib.rs contract #2 (S2-REV-C P1-3): the core's
 /// noauth SOCKS inbound (and the HTTP inbound) must never bind beyond
 /// loopback. "localhost" is allowed; any other non-loopback address is not.
-fn ensure_loopback_listen(listen: &str) -> Result<()> {
+// pub(crate) so Config::validate can enforce the same contract (S5):
+// generate/doctor previously bypassed the connect-only check (S2-REV-B P2-B).
+pub(crate) fn ensure_loopback_listen(listen: &str) -> Result<()> {
     if listen.eq_ignore_ascii_case("localhost") {
         return Ok(());
     }

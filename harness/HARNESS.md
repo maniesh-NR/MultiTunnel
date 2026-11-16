@@ -11,6 +11,7 @@ needed to resume — protocol, roadmap, decisions, event ledger, agent reports
 harness/
 ├── HARNESS.md            this file — the protocol
 ├── ROADMAP.md            staged roadmap with acceptance criteria + status
+├── CONTRACTS-S5.md       per-agent implementation contracts for the live stage
 ├── backup.sh             backup workflow (run at the END OF EVERY STAGE)
 └── memory/
     ├── STATE.md          current stage, next actions, blockers  (overwrite-style)
