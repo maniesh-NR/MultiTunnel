@@ -11,7 +11,7 @@ Download the latest `multitunnel-<version>-windows-x64.zip` from the
 [Releases](https://github.com/maniesh-NR/MultiTunnel/releases) page (or build
 it yourself — see the README) and extract it into a folder you keep, e.g.
 `C:\Tools\MultiTunnel`. Extracting yields a folder named `multitunnel-vX.Y.Z`
-(with the release version, e.g. `multitunnel-v0.3.0`), so "extract into
+(with the release version, e.g. `multitunnel-v0.2.0`), so "extract into
 `C:\Tools\MultiTunnel`" produces `C:\Tools\MultiTunnel\multitunnel-vX.Y.Z` —
 work inside that folder; everything else in this guide happens relative to
 it. Its full contents: `multitunnel.exe`, `multitunnel-tray.exe`,

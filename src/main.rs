@@ -617,7 +617,9 @@ mod tests {
     #[test]
     fn run_bounded_kills_a_slow_child_at_the_deadline() {
         let mut cmd = std::process::Command::new("sh");
-        cmd.arg("-c").arg("sleep 30");
+        // exec: sh replaces itself with sleep, so the deadline KILL reaps the
+        // sleeper itself and orphans nothing (S5-REV-B P2-6).
+        cmd.arg("-c").arg("exec sleep 30");
         let start = std::time::Instant::now();
         let out = run_bounded(&mut cmd, Duration::from_millis(250)).expect("spawn sh");
         assert!(

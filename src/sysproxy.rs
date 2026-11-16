@@ -24,8 +24,6 @@
 //!   temporary state_dir. The registry itself is only ever exercised by the
 //!   real `set`/`restore` code paths, never from tests.
 
-#[cfg(any(windows, test))]
-use std::io::Write as _;
 use std::path::Path;
 
 /// File the pre-change proxy state is snapshotted into, inside `state_dir`.
@@ -138,10 +136,12 @@ fn str_action(v: &SnapValue<String>) -> StrAction {
 #[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum EnableAction {
-    /// Write this DWORD (`Value(n)` → n; `Absent` → 0).
+    /// Write this DWORD (`Value(n)` → n; `Absent` → 0). `Opaque` ALSO
+    /// writes 0 (S5-REV-C P1a): a type-mismatched ProxyEnable was already
+    /// overwritten by `set`'s unconditional DWORD write — the user's
+    /// original bytes are unrecoverable at restore time, so "disabled"
+    /// is the only fail-safe choice (v0.1.0 behavior, kept).
     Write(u32),
-    /// `Opaque` → leave the user's value untouched (S2-REV-C P2-5).
-    Leave,
 }
 
 /// Tri-state → restore action for `ProxyEnable` (pure, host-testable).
@@ -150,7 +150,10 @@ fn enable_action(v: &SnapValue<u32>) -> EnableAction {
     match v {
         SnapValue::Absent => EnableAction::Write(0),
         SnapValue::Value(n) => EnableAction::Write(*n),
-        SnapValue::Opaque { .. } => EnableAction::Leave,
+        // S5-REV-C P1a: never Leave — leaving OUR DWORD 1 in place after
+        // disconnect would silently blackhole every WinINET consumer
+        // through the now-dead local inbound.
+        SnapValue::Opaque { .. } => EnableAction::Write(0),
     }
 }
 
@@ -179,40 +182,49 @@ fn set_string_plan(proxy_addr: &str, proxy_override: &str) -> [(&'static str, St
     ]
 }
 
+/// Names of the REG_SZ values `set` unconditionally overwrites that are
+/// `Opaque` in `snap` (present with an unexpected registry type). `set`
+/// REFUSES to run when this is non-empty (S5-REV-C P1b): writing our
+/// REG_SZ would destroy the user's data and a later restore could not
+/// recover it (restore only LEAVES Opaque values — it cannot re-create
+/// them). `AutoConfigURL` is deliberately not listed: `set` never writes
+/// it, so an Opaque AutoConfigURL is safe to snapshot and leave.
+#[cfg(any(windows, test))]
+fn opaque_overwritten_string_names(s: &Snapshot) -> Vec<&'static str> {
+    [
+        ("ProxyServer", &s.proxy_server),
+        ("ProxyOverride", &s.proxy_override),
+    ]
+    .into_iter()
+    .filter(|(_, v)| matches!(v, SnapValue::Opaque { .. }))
+    .map(|(name, _)| name)
+    .collect()
+}
+
 #[cfg(any(windows, test))]
 fn snapshot_path(state_dir: &Path) -> std::path::PathBuf {
     state_dir.join(SNAPSHOT_FILE)
 }
 
 /// Serialize + write the snapshot to `state_dir/sysproxy.json` with
-/// create-new semantics: an existing snapshot is NEVER overwritten (the
+/// keep-first semantics: an existing snapshot is NEVER overwritten (the
 /// first saved state is the one `restore` must return to, e.g. after a
-/// crashed run). Mode is 0600 on unix; on Windows the file lands in the
-/// user profile with default ACLs.
+/// crashed run). The write itself is atomic — temp + fsync + rename
+/// (S5-REV-C P2-2): a crash can no longer leave a truncated snapshot,
+/// which would make every future restore a silent no-op. Mode is 0600
+/// on unix; on Windows the file lands in the user profile with default
+/// ACLs. The exists-check + rename pair is safe under the supervisor's
+/// op_lock single-writer invariant.
 #[cfg(any(windows, test))]
 fn save_snapshot(state_dir: &Path, snap: &Snapshot) -> crate::error::Result<()> {
+    let path = snapshot_path(state_dir);
+    if path.exists() {
+        return Ok(());
+    }
     std::fs::create_dir_all(state_dir)?;
     let body = serde_json::to_string_pretty(snap)?;
-    let path = snapshot_path(state_dir);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    match opts.open(&path) {
-        Ok(mut f) => f
-            .write_all(body.as_bytes())
-            .map_err(|e| crate::err!("failed to write proxy snapshot {}: {}", path.display(), e)),
-        // Snapshot already present (previous run not restored): keep it.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(e) => Err(crate::err!(
-            "failed to create proxy snapshot {}: {}",
-            path.display(),
-            e
-        )),
-    }
+    crate::fsutil::write_private_atomic(&path, &body)
+        .map_err(|e| crate::err!("failed to write proxy snapshot {}: {}", path.display(), e))
 }
 
 /// Load the snapshot; `Ok(None)` when no snapshot file exists. A corrupt
@@ -406,6 +418,17 @@ pub fn set(proxy_addr: &str, proxy_override: &str, state_dir: &Path) -> crate::e
             snap_string(&key, "ProxyOverride"),
             snap_string(&key, "AutoConfigURL"),
         );
+        // S5-REV-C P1b: refuse rather than destroy exotic-typed user data
+        // (nothing has been written yet — no snapshot is saved either).
+        let opaque = opaque_overwritten_string_names(&current);
+        if !opaque.is_empty() {
+            return Err(crate::err!(
+                "registry value(s) {} present with an unexpected type — refusing \
+                 to overwrite user data; fix them via Internet Options > \
+                 Connections > LAN settings and retry",
+                opaque.join(", ")
+            ));
+        }
         // Save the pre-change state once; never clobber an existing snapshot.
         save_snapshot(state_dir, &current)?;
 
@@ -437,12 +460,11 @@ pub fn restore(state_dir: &Path) -> crate::error::Result<()> {
         match load_snapshot(state_dir)? {
             Some(saved) => {
                 let key = open_inet_settings(KEY_QUERY_VALUE | KEY_SET_VALUE)?;
-                match enable_action(&saved.proxy_enable) {
-                    EnableAction::Write(v) => reg_set_dword(&key, "ProxyEnable", v)?,
-                    // Opaque ProxyEnable (unexpected type): leave the user's
-                    // value untouched — it was never ours to interpret.
-                    EnableAction::Leave => {}
-                }
+                // Opaque or not, restore ALWAYS writes a DWORD here
+                // (S5-REV-C P1a): the pre-S5 fail-safe "disabled" unless a
+                // real value was captured.
+                let EnableAction::Write(enable) = enable_action(&saved.proxy_enable);
+                reg_set_dword(&key, "ProxyEnable", enable)?;
                 for (name, action) in string_write_plan(&saved) {
                     match action {
                         StrAction::Write(v) => reg_set_string(&key, name, &v)?,
@@ -472,9 +494,9 @@ pub fn restore(state_dir: &Path) -> crate::error::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        enable_action, load_snapshot, remove_snapshot, save_snapshot, set_string_plan,
-        snapshot_from, snapshot_path, str_action, string_write_plan, EnableAction, SnapValue,
-        Snapshot, StrAction,
+        enable_action, load_snapshot, opaque_overwritten_string_names, remove_snapshot,
+        save_snapshot, set_string_plan, snapshot_from, snapshot_path, str_action,
+        string_write_plan, EnableAction, SnapValue, Snapshot, StrAction,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -688,14 +710,17 @@ mod tests {
             );
         }
 
-        // ProxyEnable DWORD: Absent keeps the pre-S5 "write 0" behavior.
+        // ProxyEnable DWORD: Absent keeps the pre-S5 "write 0" behavior,
+        // and Opaque ALSO writes 0 — the P1a fail-safe (set already
+        // overwrote the exotic-typed value with our DWORD; "disabled" is
+        // the only safe restoration, v0.1.0 behavior kept).
         assert_eq!(enable_action(&SnapValue::Absent), EnableAction::Write(0));
         assert_eq!(enable_action(&SnapValue::Value(1)), EnableAction::Write(1));
         assert_eq!(
             enable_action(&SnapValue::Opaque {
                 kind: "REG_SZ".to_string()
             }),
-            EnableAction::Leave
+            EnableAction::Write(0)
         );
     }
 
@@ -749,7 +774,7 @@ mod tests {
         for (_, action) in string_write_plan(&s) {
             assert_eq!(action, StrAction::Leave, "opaque must stay untouched");
         }
-        assert_eq!(enable_action(&s.proxy_enable), EnableAction::Leave);
+        assert_eq!(enable_action(&s.proxy_enable), EnableAction::Write(0));
 
         // File round-trip keeps the Opaque markers (kind detail included).
         let dir = temp_state_dir("opaque-roundtrip");
@@ -762,6 +787,70 @@ mod tests {
                 kind: "REG_EXPAND_SZ".to_string()
             }
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// S5-REV-C P1b: `set` must refuse when a REG_SZ value it overwrites
+    /// (ProxyServer / ProxyOverride) is Opaque — the refusal decision is
+    /// the pure helper `opaque_overwritten_string_names`.
+    #[test]
+    fn set_refusal_only_triggers_for_overwritten_opaque_values() {
+        let opaque = |kind: &str| SnapValue::Opaque {
+            kind: kind.to_string(),
+        };
+        // Clean machine: nothing refused.
+        let clean = snapshot_from(
+            SnapValue::Value(0),
+            SnapValue::Value("proxy:8080".into()),
+            SnapValue::Absent,
+            SnapValue::Absent,
+        );
+        assert!(opaque_overwritten_string_names(&clean).is_empty());
+
+        // ProxyServer exotic-typed: refused, named.
+        let mut s = clean.clone();
+        s.proxy_server = opaque("REG_BINARY");
+        assert_eq!(opaque_overwritten_string_names(&s), vec!["ProxyServer"]);
+
+        // ProxyOverride exotic-typed too: both named, ProxyServer first.
+        s.proxy_override = opaque("REG_EXPAND_SZ");
+        assert_eq!(
+            opaque_overwritten_string_names(&s),
+            vec!["ProxyServer", "ProxyOverride"]
+        );
+
+        // AutoConfigURL Opaque alone does NOT refuse (set never writes it)
+        // and ProxyEnable Opaque alone does NOT refuse (set writes a DWORD
+        // over it; restore fail-safes to 0 — P1a).
+        let mut only_ac = clean.clone();
+        only_ac.autoconfig_url = opaque("REG_QWORD");
+        assert!(opaque_overwritten_string_names(&only_ac).is_empty());
+        let mut only_enable = clean;
+        only_enable.proxy_enable = SnapValue::Opaque {
+            kind: "REG_SZ".to_string(),
+        };
+        assert!(opaque_overwritten_string_names(&only_enable).is_empty());
+    }
+
+    /// S5-REV-C P2-2: save_snapshot is atomic — no `.tmp-*` residue next to
+    /// a saved snapshot, and the content is complete.
+    #[test]
+    fn save_snapshot_leaves_no_temp_residue() {
+        let dir = temp_state_dir("atomic-save");
+        let s = snapshot_from(
+            SnapValue::Value(1),
+            SnapValue::Value("p".into()),
+            SnapValue::Absent,
+            SnapValue::Absent,
+        );
+        save_snapshot(&dir, &s).unwrap();
+        let names: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["sysproxy.json".to_string()], "no temp residue");
+        assert!(load_snapshot(&dir).unwrap().is_some());
         let _ = fs::remove_dir_all(&dir);
     }
 

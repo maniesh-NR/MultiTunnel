@@ -374,6 +374,9 @@ impl Supervisor {
                 Ok(()) => self.refresh_netmerge_status(),
                 Err(e) => lock(&self.shared.inner).bond_error = Some(e.to_string()),
             }
+            // S5-REV-C P2-1: a stop landing inside the gate→effect span
+            // still applied the effect — undo best-effort when observed.
+            self.undo_if_stopped("enabling net-merge")?;
         }
 
         // 5. system proxy — NON-FATAL (sys_error captures the failure).
@@ -388,6 +391,8 @@ impl Supervisor {
                 Ok(()) => lock(&self.shared.inner).system_proxy = true,
                 Err(e) => lock(&self.shared.inner).sys_error = Some(e.to_string()),
             }
+            // S5-REV-C P2-1 (same late-stop undo as the net-merge step).
+            self.undo_if_stopped("setting the system proxy")?;
         }
         Ok(())
     }
@@ -411,6 +416,29 @@ impl Supervisor {
         lock(&self.shared.inner).system_proxy = false;
         Err(crate::err!(
             "connect aborted before {before}: stop requested (exit/disconnect)"
+        ))
+    }
+
+    /// Post-side-effect companion to [`abort_if_stopped`] (S5-REV-C P2-1):
+    /// the pre-checks narrow the exit-race window to the gate→effect span,
+    /// but a stop landing inside that span still applies the effect. When
+    /// stopping is observed AFTER a side effect, undo BOTH effects
+    /// best-effort — net-merge off, proxy restore (each idempotent), core
+    /// stop — clear the snapshot flags, and abort with the same error
+    /// shape. Like `abort_if_stopped` this runs inside `connect_sequence`.
+    fn undo_if_stopped(&self, after: &'static str) -> Result<()> {
+        if !self.shared.stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let bin = self.cfg.paths.net_merge.to_string_lossy().into_owned();
+        let _ = netmerge::off(&bin);
+        let _ = sysproxy::restore(self.state_dir());
+        self.core.stop();
+        let mut inner = lock(&self.shared.inner);
+        inner.merging = false;
+        inner.system_proxy = false;
+        Err(crate::err!(
+            "connect aborted after {after}: stop requested (exit/disconnect)"
         ))
     }
 
@@ -1617,5 +1645,45 @@ mod tests {
         assert!(s.error.is_none(), "{:?}", s.error);
         assert!(rig.sup.loop_running(), "poll loop must run");
         rig.joined_disconnect();
+    }
+
+    /// S5-REV-C P2-1: the post-side-effect late-stop undo — when the stop
+    /// flag is observed AFTER an effect was applied, both effects are
+    /// reverted best-effort (net-merge off + proxy restore are no-ops/Ok
+    /// on this host; the flags prove the revert), and the sequence aborts.
+    #[test]
+    #[cfg(unix)]
+    fn undo_if_stopped_reverts_effects_and_errors() {
+        let (sup, quit, stub, dir) = exit_race_rig(None);
+        // Simulate a sequence whose side effects already applied ...
+        {
+            let mut inner = lock(&sup.shared.inner);
+            inner.merging = true;
+            inner.system_proxy = true;
+        }
+        // ... and the stop arrives only now (late, inside the gate→effect
+        // span the pre-checks cannot close).
+        sup.shared.stop.store(true, Ordering::SeqCst);
+
+        let err = sup
+            .undo_if_stopped("setting the system proxy")
+            .expect_err("late stop must abort");
+        let msg = err.to_string();
+        assert!(msg.contains("after setting the system proxy"), "{msg}");
+        assert!(msg.contains("stop requested"), "{msg}");
+
+        let s = sup.snapshot();
+        assert!(!s.merging, "net-merge flag reverted");
+        assert!(!s.system_proxy, "system proxy flag reverted");
+
+        // Not stopping: the check is a pure no-op pass-through.
+        sup.shared.stop.store(false, Ordering::SeqCst);
+        sup.undo_if_stopped("anything").expect("no stop, no abort");
+
+        // Deterministic cleanup (quit-flag stub pattern; never blocks).
+        quit.store(true, Ordering::SeqCst);
+        stub.join().expect("stub thread");
+        let _ = sup.disconnect();
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -80,7 +80,7 @@ reached + backup completed).
 > output-filter artifact — lesson recorded in HARNESS.md. Full verdicts:
 > harness/memory/consensus/S4-consensus.md.
 
-## S5 — v0.2.0: P2 backlog hardening `[~]`
+## S5 — v0.2.0: P2 backlog hardening `[x]`
 - Clear the carried P2 backlog from S2–S4 reviews; full per-agent contracts
   in `harness/CONTRACTS-S5.md`. Groups: A config+CLI (loopback validation,
   `--config=`, doctor version timeout, empty proxyOverride semantics),
@@ -94,6 +94,14 @@ reached + backup completed).
 - Acceptance: all 5 gates green (fmt, host+target clippy, tests, zigbuild);
   2 adversarial APPROVE; Cargo 0.2.0; `v0.2.0` tagged + GitHub Release
   verified; artifacts restored to sandbox `download/`.
+
+> S5 CLOSED 2026-11-16: round-1 consensus 2×APPROVE (REV-C 0P0/1P1/7P2,
+> REV-B 0P0/0P1/8P2 — both ran all gates independently; REV-C re-derived
+> the crashed S5-B implementer's never-reported work against the contract
+> in full). P1 (Opaque ProxyEnable fail-safe Write(0) + set() refuses to
+> clobber exotic-typed values) and six P2s applied at close; four P2s
+> dismissed with reason. 114 tests, all gates clean, both exes PE32+.
+> Full verdicts: harness/memory/consensus/S5-consensus.md.
 
 > S1 CLOSED 2026-11-12: consensus 2×APPROVE (S1-REV-C correctness/security,
 > S1-REV-B build/portability/license). P1 fixes applied post-approval:

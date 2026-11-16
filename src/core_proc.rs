@@ -37,8 +37,11 @@
 //!   which follows child death + reap (kill/wait or try_wait). No leaks.
 //!   Since S5 both pumps (and the spawn header) share ONE append-mode
 //!   handle behind a mutex (`Arc<Mutex<File>>`, S2-REV-C P2-4): each
-//!   write is exclusive, so concurrent stdout/stderr appends can never
-//!   split/interleave lines the way two independent handles could.
+//!   write_all is exclusive, so one pump's write can never split MID-
+//!   WRITE into another's (the pre-S5 two-handle bug). A logical line
+//!   spanning two pipe reads can still interleave with the other
+//!   stream's write between them — log cosmetics only; per-stream byte
+//!   order and content are always preserved.
 //! - `start()` while already running is an error; `exited_unexpectedly` is
 //!   intentionally NOT reset by `start()` (consumed-once belongs to the
 //!   reader), while `stop_flag` IS reset so a fresh cycle starts clean.
@@ -418,9 +421,14 @@ fn waiter_loop(slot: Arc<Mutex<Option<Child>>>, stop: Arc<AtomicBool>, exited: A
 }
 
 /// One append-mode log handle shared by the spawn header and BOTH output
-/// pumps (S2-REV-C P2-4): every append locks the mutex, so a stdout write
-/// and a stderr write can never split/interleave each other's lines the
-/// way two independent handles could.
+/// pumps (S2-REV-C P2-4): every append locks the mutex, giving per-write
+/// exclusivity — one pump's write_all can never split mid-write into
+/// another's (the pre-S5 two-handle bug). Logical lines spanning two pipe
+/// reads can still interleave between writes — log cosmetics only; all
+/// bytes and per-stream order are preserved.
+///
+/// (Doc softened per S5-REV-C P2-5; the mutex exists so one handle's write
+/// is never torn by a concurrent write the way two independent handles could.
 type SharedLog = Arc<Mutex<fs::File>>;
 
 /// Open the log in append mode and wrap it as the cycle-wide shared

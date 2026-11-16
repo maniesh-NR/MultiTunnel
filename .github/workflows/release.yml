@@ -37,16 +37,17 @@ jobs:
             "config.example.json",
             "LICENSE",
             "THIRD_PARTY_NOTICES.md",
-            "server/setup-xray-reality.sh"
+            "server/setup-xray-reality.sh",
+            "README.md",
+            "QUICKSTART.md"
           )
           foreach ($f in $required) {
             if (-not (Test-Path $f)) { throw "missing required file: $f" }
           }
           Copy-Item "target/release/multitunnel.exe","target/release/multitunnel-tray.exe","config.example.json","LICENSE","THIRD_PARTY_NOTICES.md" $root
           Copy-Item "server/setup-xray-reality.sh" "$root/server/"
-          foreach ($f in @("README.md", "QUICKSTART.md")) {
-            if (Test-Path $f) { Copy-Item $f $root }
-          }
+          # Hard-required above; plain copy (still listed in the zip manifest).
+          Copy-Item "README.md","QUICKSTART.md" $root
           # Self-diagnosing listing: the run log shows exactly what is in
           # the package if anything downstream complains.
           Get-ChildItem -Recurse $root | Format-Table Name, Length
