@@ -23,3 +23,8 @@
 2026-11-12T15:25Z | s1-close | pushed consensus + reports; ROADMAP S1 marked [x]
 2026-11-12T15:30Z | s2 | deps added (winreg 0.56, windows-sys 0.61.2 w/ 7 features, cfg(windows)); S2 module stubs + contracts written by orchestrator; lib.rs mods added
 2026-11-12T15:31Z | s2 | skeleton green; launching parallel implementers S2-A (core_proc+supervisor+main doctor/connect) and S2-B (sysproxy+elevate)
+2026-11-12T15:45Z | s2 | S2-B done: sysproxy (winreg HKCU + snapshot 0600, never touches real registry in tests) + elevate (TokenElevation, ShellExecuteW runas); 10+6 tests; no feature changes needed; zigbuild OK
+2026-11-12T15:46Z | s2 | S2-A gateway deadline-crash again — mitigating by splitting: core_proc first, then supervisor+main
+2026-11-17T03:30Z | incident | sandbox recycled AGAIN: tools tree wiped (rustup/zig reinstalled per D2, zig 0.17.1, Rust 1.100.0); .git was re-cloned from GitHub (Nov 13 session) on top of the surviving working tree — S2 implementation files (core_proc/supervisor/sysproxy/elevate/main) were present but NEVER committed (newer than last push d5a33ab)
+2026-11-17T03:42Z | s2 | resumed S2 verification: cargo test hung in ALL 4 supervisor Rig tests — /proc syscall inspection showed worker stuck in Rig::drop join while stub blocked in accept4 on its own listener clone (dropping the Rig's clone cannot unblock it) → test-rig deadlock, fixed with stop-flag + nonblocking accept; also core_death test built restartMax=3 while expecting the max=0 path → Rig::build parametrized with restart_max
+2026-11-17T03:55Z | s2 | post-fix suite: 52 passed 0 failed (5.6s); zigbuild green: multitunnel.exe (PE32+ console) + multitunnel-tray.exe (PE32+ GUI); pushing immediately per D7 before the S2 review round
