@@ -1,18 +1,20 @@
-# STATE — rewritten at the end of every stage. Last update: 5th rollback remediated, frontier re-verified (2026-11-17T05:55Z)
+# STATE — rewritten at the end of every stage. Last update: 6th rollback remediated, frontier re-verified (2026-11-17T07:15Z)
 
 ## Current position
 - **ROADMAP S0–S5 ALL CLOSED under D6 adversarial consensus.** v0.1.0
   shipped 2026-11-13; v0.2.0 closed + released 2026-11-16; v0.2.0 audit
   backport verified + CI green on all legs 2026-11-17 (229fda4).
-- 2026-11-17T05:30Z: FIFTH sandbox rollback (same class as the 4th) — the
-  session resumed from the stale Nov-12 mid-S2 tree and re-derived the
-  supervisor rig hang fix before the push rejection exposed the divergence.
-  Remediated: main reset to origin/main 6d0e58a; the stale-tree fix dropped
-  (reflog-only) and recorded as an independent CONFIRMATION of the backport
-  rig fix; junk remote tags (backup/s2-runtime, backup/s2-impl-fixed)
-  deleted; all 5 gates re-verified green at 6d0e58a (112 lib + 8 bin tests,
-  fmt, clippy host+gnu, zigbuild PE32+ console+GUI); v0.2.0 zip restored to
-  download/ (sha256 byte-verified vs ledger).
+- 2026-11-17T07:05Z: SIXTH sandbox rollback (same class as the 4th/5th) —
+  the session resumed from the stale Nov-12 mid-S2 tree, independently
+  re-diagnosed the supervisor-rig hang + hardcoded-restartMax rig bug, went
+  green, and committed 3cd1423 on the stale base before the main-push
+  rejection exposed the divergence. Remediated (07:10–07:20Z): junk tag
+  backup/s2-implementers-fixed deleted from the remote; main hard-reset to
+  origin/main ad550fa; stale commit dropped (reflog-only; third independent
+  confirmation of the rig-hang root cause); all 5 gates re-verified green
+  at ad550fa (112 lib + 8 bin tests, fmt, clippy host + windows-gnu
+  -D warnings, release zigbuild PE32+ console+GUI); v0.2.0 zip re-restored
+  to download/ (sha256 byte-verified vs ledger).
 
 ## Next actions (any future session)
 1. v0.3 backlog (carried P2s): localhost listen inconsistency,
@@ -39,9 +41,9 @@
   Direct pushes must keep CI green; never force-push.
 
 ## Environment map (sandbox)
-- Repo: /home/z/my-project/MultiTunnel — branch main @ 6d0e58a ==
+- Repo: /home/z/my-project/MultiTunnel — branch main @ ad550fa ==
   origin/main (frontier). No rescue branches in this snapshot; stale
-  commits are reflog-only (7a3b0f8 and its backup).
+  commits are reflog-only (3cd1423 and its backup).
 - Toolchains: `. /home/z/my-project/tools/env.sh` FIRST. Tree rebuilt
   2026-11-17T05:35Z per D2 (rust 1.100.0 + zig 0.17.1 tarball +
   cargo-zigbuild 0.24.1 + rustfmt/clippy under tools/).
