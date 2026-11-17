@@ -14,10 +14,11 @@
   (+ remote side tag backup/s2-runtime — both deletable once cold).
 
 ## Next actions (any future session)
-1. Confirm the post-backport ci.yml run on main went green — especially the
-   **windows-latest leg**, which now RUNS 9 previously-unix-only rig tests
-   (portable .cmd fake cores; first real runtime execution on Windows).
-   If the .cmd timing assumptions fail on the runner, fix write_fake_xray.
+1. ~~Confirm the post-backport CI~~ DONE: 229fda4 green on ALL legs
+   (2026-11-17T06:20Z) — the windows-latest leg ran the 9 portable rig
+   tests successfully (first real Windows runtime execution of the
+   supervisor lifecycle code; the Winsock nonblocking-inheritance fix in
+   the rig stubs was required, see LEDGER 06:15Z).
 2. v0.3 backlog (carried P2s): localhost listen inconsistency,
    join_reader 1 s grace output loss, restore-error surfacing for the
    NON-corrupt `let _ =` callers (the corrupt-snapshot case is now
@@ -26,9 +27,11 @@
    (v02-audit REV-C P2-7), disconnect latency mid-campaign (~15 s tray UX
    note). Fold in a review of the backport diff (per v02-audit process
    note).
-3. Consider v0.2.1 patch release once CI confirms (tag v0.2.1 →
-   release.yml; the audit fixes are user-visible: orphaned xray after
-   Ctrl+C, false-Connected on port conflicts).
+3. Consider v0.2.1 patch release (tag v0.2.1 → release.yml): the audit
+   fixes are user-visible (orphaned xray.exe after Ctrl+C; false-Connected
+   + restart churn when a foreign process owns the SOCKS port; corrupt
+   snapshot could stick the system proxy). Recommended AFTER the v0.3
+   review round covers the backport diff, per D6 discipline.
 4. User manual steps (unchanged): server rollout on the VM
    (`DOMAIN=… bash server/setup-xray-reality.sh`), then the first REAL
    Windows tray smoke test (QUICKSTART step 6).
