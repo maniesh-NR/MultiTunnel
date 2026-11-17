@@ -1,12 +1,16 @@
 [package]
 name = "multitunnel"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 description = "Windows supervisor that combines an Xray VLESS+REALITY tunnel with net-merge multi-link bonding"
 repository = "https://github.com/maniesh-NR/MultiTunnel"
 rust-version = "1.78"
 publish = false
+
+[workspace]
+members = ["crates/*"]
+resolver = "2"
 
 [lib]
 name = "multitunnel"

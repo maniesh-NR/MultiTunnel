@@ -56,6 +56,39 @@ config.json is gitignored; only config.example.json (empty credentials) is
 committed. The GitHub token lives in upload/ (outside the repo), is read
 one-shot by backup.sh, never printed, and push logs are scrubbed of it.
 
+## D11 — All-in-One pivot (user directive, 2026-11-17)
+v0.3 north star: one app, zero user-installed dependencies, v2rayN +
+net-merge functions out of the box, Material You GUI, Rust core. The user
+never manually installs an Xray core or net-merge: the engine is located,
+verified, downloaded (or embedded at build time) by mt-platform; link
+spreading moves in-process into mt-net. The managed Xray engine remains
+the REALITY specialist until S7's native port (stock rustls cannot do the
+REALITY ClientHello auth; a faithful port needs a custom TLS 1.3 stack —
+tracked, not rushed).
+
+## D12 — S6 execution: Mixture of Experts + strangler workspace (2026-11-17)
+Stage S6 runs as parallel expert agents, one crate each (mt-links, mt-net,
+mt-engine, mt-m3, mt-platform; then mt-app), contracts frozen in
+harness/CONTRACTS-S6.md; the orchestrator owns the workspace root, wiring
+and integration. The root package keeps v0.2 behavior green at EVERY
+commit (branch protection requires green CI on main pushes) — new code
+lands beside it in crates/, migration of root modules happens gradually.
+
+## D13 — GUI: iced + mt-m3 Material You system (2026-11-17)
+iced 0.13 (MIT, pure Rust, no system webview — keeps the zero-dependency
+promise) with a hand-built Material Design 3 token system (mt-m3: dynamic
+color from a seed, light/dark, type scale, shape, state layers). The
+existing raw-win32 tray stays (D4) as the always-running companion; the
+iced window app (mt-app) is the full v2rayN-class GUI. Prefer the
+tiny-skia renderer for cross-compile robustness.
+
+## D14 — Engine self-provisioning, never silent (2026-11-17)
+Engine resolution order: $MULTITUNNEL_ENGINE → exe-dir/engine →
+config-dir/engine (sha256-verified against SHA256SUMS; strict mode refuses
+mismatch) → build-time embedded zip (MT_EMBED_ENGINE) → explicit
+user-triggered download (GitHub latest, URL overridable). `locate()` never
+downloads; only `ensure()` may, and the GUI/CLI surfaces it.
+
 ## D10 — vless:// importer is REALITY-only and strict (2026-11-17)
 MultiTunnel generates exactly one protocol shape (xrayconf: VLESS/TCP/
 REALITY/xtls-rprx-vision, chrome fp, spiderX /). `multitunnel import`

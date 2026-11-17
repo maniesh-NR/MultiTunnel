@@ -1,0 +1,25 @@
+[package]
+name = "mt-links"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "MultiTunnel share links, profile store and subscriptions"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.22"
+tracing = "0.1"
+
+[features]
+default = ["fetch"]
+fetch = ["dep:reqwest"]
+
+[dependencies.reqwest]
+version = "0.12"
+default-features = false
+features = ["rustls-tls"]
+optional = true

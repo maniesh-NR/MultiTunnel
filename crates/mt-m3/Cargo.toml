@@ -1,0 +1,21 @@
+[package]
+name = "mt-m3"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Material You (Material Design 3) design tokens with dynamic color"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[features]
+default = []
+iced = ["dep:iced"]
+
+[dependencies.iced]
+version = "0.13"
+default-features = false
+features = ["tokio", "tiny-skia"]
+optional = true

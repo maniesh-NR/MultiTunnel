@@ -1,0 +1,12 @@
+[package]
+name = "mt-service"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "MultiTunnel UI service contract (types + trait shared by GUI and CLI)"
+
+[dependencies]
+tokio = { version = "1", features = ["sync"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }

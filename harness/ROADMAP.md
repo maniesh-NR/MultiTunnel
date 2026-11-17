@@ -103,6 +103,38 @@ reached + backup completed).
 > dismissed with reason. 114 tests, all gates clean, both exes PE32+.
 > Full verdicts: harness/memory/consensus/S5-consensus.md.
 
+## S6 — v0.3: All-in-One + Material You GUI + native core `[~]`
+
+User directive 2026-11-17: MultiTunnel becomes an all-in-one app with ZERO
+user-installed dependencies, combining the functions of v2rayN and net-merge
+out of the box, robust Material You GUI, Rust core — built Mixture-of-Experts
+style (parallel expert agents, one crate each). Full per-expert contracts in
+`harness/CONTRACTS-S6.md`.
+
+- Workspace: root package keeps v0.2 behavior green at every commit; new
+  capability lands in `crates/mt-{links,net,engine,m3,platform,service,app}`.
+- mt-links: vless/vmess/ss/trojan share links, multi-server profile store,
+  subscriptions, legacy-config migration (v2rayN import parity).
+- mt-net: native Rust data plane — SOCKS5+HTTP inbound, routing rules,
+  net-merge-style link aggregation (failover/round-robin/lowest-latency,
+  health probes, quarantine) in-process.
+- mt-engine: managed Xray engine, one child per link, config-generated,
+  kill-on-drop, self-healing — the REALITY specialist.
+- mt-platform: app dirs + engine self-provisioning (locate/verify/download/
+  embed) so the app never asks the user to install a core; autostart.
+- mt-m3 + mt-app: Material You design system + iced GUI (Status/Servers/
+  Routing/Settings/Logs, dynamic color from a seed).
+- Root wiring: `multitunnel gui`, `profiles` CLI, RealService over the crates.
+- Acceptance: all 5 gates green per crate AND `--workspace`; zigbuild PE32+
+  x3 (console, tray, gui); xvfb GUI smoke; 2× adversarial APPROVE (D6).
+
+## S7 — Native REALITY core (parked)
+
+Pure-Rust VLESS+REALITY+vision client (hand-rolled TLS 1.3 with Chrome
+ClientHello fingerprint + x25519 session_id auth, ported from the
+MIT-licensed xray-core reference) to retire the managed engine for good.
+Design notes at stage open.
+
 > S1 CLOSED 2026-11-12: consensus 2×APPROVE (S1-REV-C correctness/security,
 > S1-REV-B build/portability/license). P1 fixes applied post-approval:
 > strict on/off semantics, 0600 credential file, #[cfg(unix)] gating of
