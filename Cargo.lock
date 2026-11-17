@@ -1631,9 +1631,19 @@ dependencies = [
 name = "multitunnel"
 version = "0.3.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "mt-app",
+ "mt-engine",
+ "mt-links",
+ "mt-net",
+ "mt-platform",
+ "mt-service",
  "regex",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
  "windows-sys 0.61.2",
  "winreg",
 ]

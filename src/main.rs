@@ -6,6 +6,8 @@
 //!   import        fill config.json's server block from a vless:// link
 //!   generate      write the generated Xray client config and exit
 //!   doctor        environment check (stage S2)
+//!   profiles      multi-server profile store CLI (S6, mt-links store)
+//!   gui           launch the Material You GUI on the real backend (S6)
 //!   version       print version
 
 use std::path::PathBuf;
@@ -46,6 +48,8 @@ fn main() -> ExitCode {
         }
         "doctor" => cmd_doctor(cfg_path),
         "connect" => cmd_connect(cfg_path),
+        "profiles" => cmd_profiles(&cmd_args[1..]),
+        "gui" => cmd_gui(&cmd_args[1..]),
         "tray" => Err(multitunnel::Error(
             "the tray UI ships as the separate multitunnel-tray.exe binary".into(),
         )),
@@ -560,9 +564,72 @@ fn usage() {
     println!("  (none)     start the tray app (Windows)");
     println!("  connect    connect headless, run until Ctrl+C");
     println!("  import     fill config.json's server block from a vless:// link");
+    println!("  profiles   manage the multi-server profile store (list/add/use/remove/export)");
+    println!("  gui        launch the all-in-one Material You GUI");
     println!("  generate   write the generated Xray client config and exit");
     println!("  doctor     check environment (binaries, config, ports)");
     println!("  version    print version");
+}
+
+// ---- profiles (S6: multi-server store CLI) ---------------------------------
+
+/// Thin CLI over the mt-links ProfileStore at the platform config dir
+/// (`profiles.json` — the same store the GUI's RealService reads). Output
+/// lines come back from `multitunnel::profiles::run` so the command layer
+/// only prints.
+fn cmd_profiles(args: &[String]) -> Result<(), multitunnel::Error> {
+    let dir = multitunnel::real_service::ServicePaths::from_platform().config_dir;
+    let lines = multitunnel::profiles::run(&dir, args)?;
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+// ---- gui (S6: all-in-one GUI on the real service) --------------------------
+
+/// Launch the mt-app Material You GUI against [`multitunnel::RealService`].
+///
+/// Runtime pick (documented): iced 0.13's `tokio` executor creates and owns
+/// its own tokio runtime internally (see iced_futures' tokio backend), so the
+/// blocking `run_app` call needs no outer runtime to drive service futures.
+/// The outer runtime built here exists so the `--smoke` path (which runs
+/// OUTSIDE the iced runtime) can await the service, and so RealService's
+/// spawned maintenance tasks always have a live runtime for the process
+/// lifetime. Two independent runtimes coexist by design — no task ever
+/// crosses between them.
+///
+/// Headless hosts: `run_app` fails at iced window creation on machines
+/// without a display; that surfaces as a clean `gui: ...` error exit —
+/// accepted for v0.3 (use `--smoke` for CI/headless runs).
+fn cmd_gui(args: &[String]) -> Result<(), multitunnel::Error> {
+    let flags = mt_app::Flags::from_args(args.iter());
+    let service: std::sync::Arc<dyn mt_service::MtService> =
+        std::sync::Arc::new(multitunnel::RealService::new());
+
+    if flags.smoke {
+        // Headless CI path: drive the update loop on a dedicated
+        // current-thread runtime (service init awaits are async), then exit 0.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| multitunnel::Error(format!("gui smoke: runtime: {e}")))?;
+        let mut app = rt.block_on(mt_app::App::init_async(service, flags));
+        let report = mt_app::run_smoke(&mut app, 6, std::time::Duration::from_millis(300))
+            .map_err(|e| multitunnel::Error(format!("gui smoke: {e}")))?;
+        println!(
+            "gui smoke ok: {} ticks, {} events, {} views",
+            report.ticks, report.events_seen, report.views_built
+        );
+        return Ok(());
+    }
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| multitunnel::Error(format!("gui: runtime: {e}")))?;
+    let _runtime_guard = rt.enter();
+    mt_app::run_app(service, flags).map_err(|e| multitunnel::Error(format!("gui: {e}")))
 }
 
 #[cfg(test)]

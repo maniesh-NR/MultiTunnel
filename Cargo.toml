@@ -29,6 +29,28 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
 
+# --- S6 wave 3: all-in-one wiring (GUI + data plane + engine + platform) ---
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
+async-trait = "0.1"
+anyhow = "1"
+tracing = "0.1"
+
+mt-service = { path = "crates/mt-service" }
+mt-links = { path = "crates/mt-links" }
+mt-net = { path = "crates/mt-net" }
+mt-engine = { path = "crates/mt-engine" }
+mt-platform = { path = "crates/mt-platform" }
+# The GUI ships a MockService behind its default `mock` feature; the real
+# binary must link the production service, so defaults are OFF here and the
+# root `mock-gui` feature re-enables the mock for development/testing.
+mt-app = { path = "crates/mt-app", default-features = false }
+
+[features]
+default = []
+# Dev/CI: build the `gui` command against mt-app's MockService instead of the
+# real backend (`cargo build --features mock-gui`).
+mock-gui = ["mt-app/mock"]
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Networking_WinInet"] }
 winreg = "0.56.0"
