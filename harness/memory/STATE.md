@@ -1,69 +1,59 @@
-# STATE — rewritten at the end of every stage. Last update: v0.2.0 audit backport (2026-11-17)
+# STATE — rewritten at the end of every stage. Last update: 5th rollback remediated, frontier re-verified (2026-11-17T05:55Z)
 
 ## Current position
 - **ROADMAP S0–S5 ALL CLOSED under D6 adversarial consensus.** v0.1.0
-  shipped 2026-11-13; v0.2.0 (S5, the P2 backlog) closed 2026-11-16;
-  v0.2.0 released (asset verified).
-- 2026-11-17: FOURTH sandbox rollback incident — a stale Nov-12 tree was
-  mistaken for the frontier and re-reviewed; caught at push time (branch
-  protection + non-fast-forward). The round was salvaged as the **v0.2.0
-  audit**: 5 still-live findings + rig portability backported onto
-  s5-final and verified by all gates (consensus/v02-audit-consensus.md).
-  Post-backport suite: 112 lib + 8 bin tests, fmt/clippy(host+gnu)/
-  zigbuild/msvc-check clean. Stale commits: rescue/local-stale-2026-11-17
-  (+ remote side tag backup/s2-runtime — both deletable once cold).
+  shipped 2026-11-13; v0.2.0 closed + released 2026-11-16; v0.2.0 audit
+  backport verified + CI green on all legs 2026-11-17 (229fda4).
+- 2026-11-17T05:30Z: FIFTH sandbox rollback (same class as the 4th) — the
+  session resumed from the stale Nov-12 mid-S2 tree and re-derived the
+  supervisor rig hang fix before the push rejection exposed the divergence.
+  Remediated: main reset to origin/main 6d0e58a; the stale-tree fix dropped
+  (reflog-only) and recorded as an independent CONFIRMATION of the backport
+  rig fix; junk remote tags (backup/s2-runtime, backup/s2-impl-fixed)
+  deleted; all 5 gates re-verified green at 6d0e58a (112 lib + 8 bin tests,
+  fmt, clippy host+gnu, zigbuild PE32+ console+GUI); v0.2.0 zip restored to
+  download/ (sha256 byte-verified vs ledger).
 
 ## Next actions (any future session)
-1. ~~Confirm the post-backport CI~~ DONE: 229fda4 green on ALL legs
-   (2026-11-17T06:20Z) — the windows-latest leg ran the 9 portable rig
-   tests successfully (first real Windows runtime execution of the
-   supervisor lifecycle code; the Winsock nonblocking-inheritance fix in
-   the rig stubs was required, see LEDGER 06:15Z).
-2. v0.3 backlog (carried P2s): localhost listen inconsistency,
+1. v0.3 backlog (carried P2s): localhost listen inconsistency,
    join_reader 1 s grace output loss, restore-error surfacing for the
-   NON-corrupt `let _ =` callers (the corrupt-snapshot case is now
-   fail-open — v02-audit REV-C#3), snapshot downgrade doc sentence, CI
-   cache keying, notices zmij row URL, no-snapshot-disable self-heal UX
-   (v02-audit REV-C P2-7), disconnect latency mid-campaign (~15 s tray UX
-   note). Fold in a review of the backport diff (per v02-audit process
-   note).
-3. Consider v0.2.1 patch release (tag v0.2.1 → release.yml): the audit
+   NON-corrupt `let _ =` callers, snapshot downgrade doc sentence, CI cache
+   keying, notices zmij row URL, no-snapshot-disable self-heal UX,
+   disconnect latency mid-campaign (~15 s tray UX note). Fold in a review
+   of the backport diff (per v02-audit process note).
+2. Consider v0.2.1 patch release (tag v0.2.1 → release.yml): the audit
    fixes are user-visible (orphaned xray.exe after Ctrl+C; false-Connected
    + restart churn when a foreign process owns the SOCKS port; corrupt
    snapshot could stick the system proxy). Recommended AFTER the v0.3
    review round covers the backport diff, per D6 discipline.
-4. User manual steps (unchanged): server rollout on the VM
+3. User manual steps (unchanged): server rollout on the VM
    (`DOMAIN=… bash server/setup-xray-reality.sh`), then the first REAL
    Windows tray smoke test (QUICKSTART step 6).
 
 ## Blockers / open items
 - Embedded remote-URL token EXPIRED — pushes MUST go through
   backup.sh (reads upload/Multitunnel github access token.txt, verified
-  valid 2026-11-16, login maniesh-NR). Never print it.
+  valid 2026-11-17, login maniesh-NR). Never print it.
 - Branch protection IS set on main (required checks, strict, no
   force-push) since 2026-11-16T15:45Z — the owner token pushes as admin.
   Direct pushes must keep CI green; never force-push.
 
 ## Environment map (sandbox)
-- Repo: /home/z/my-project/MultiTunnel — branch main; rescue branches
-  rescue/local-stale-2026-11-16 and rescue/local-stale-2026-11-17 hold
-  superseded snapshots (deletable).
-- Toolchains: `. /home/z/my-project/tools/env.sh` FIRST. NOTE: the Nov-17
-  rollback wiped tools/venv; the tree was rebuilt MINIMAL (rust 1.100.0 +
-  zig 0.17.1 tarball + cargo-zigbuild 0.24.1 under tools/, rustfmt+clippy
-  components added 2026-11-17). pyyaml for YAML checks: use system
-  python3 if available, else reinstall the wheel.
-  CARGO_TARGET_DIR=/tmp/mt-target. msvc std target installed (compile
-  checks only).
-- Gates: fmt --check; clippy host --all-targets; clippy --target
-  x86_64-pc-windows-gnu --all-targets -D warnings; cargo test; zigbuild;
-  (bonus) cargo check --target x86_64-pc-windows-msvc --tests.
-- CRITICAL SANDBOX NOTE: tool OUTPUT is filtered — a literal `[main]`
-  displays as `ain]`. Verify bracketed literals with `od -An -c`, never
-  plain cat/rg/echo. ALSO: the Edit tool's "atomic" MultiEdit can
-  PARTIALLY apply before reporting failure (observed 2026-11-16 AND
-  2026-11-17) — after any failed MultiEdit, verify the file's actual
-  state before retrying.
-- RESUME RULE (learned the hard way, 4th incident): on any session start,
-  `git fetch origin && git log --oneline -5 origin/main` FIRST — the
-  local tree may be a rolled-back snapshot; origin/main is the frontier.
+- Repo: /home/z/my-project/MultiTunnel — branch main @ 6d0e58a ==
+  origin/main (frontier). No rescue branches in this snapshot; stale
+  commits are reflog-only (7a3b0f8 and its backup).
+- Toolchains: `. /home/z/my-project/tools/env.sh` FIRST. Tree rebuilt
+  2026-11-17T05:35Z per D2 (rust 1.100.0 + zig 0.17.1 tarball +
+  cargo-zigbuild 0.24.1 + rustfmt/clippy under tools/).
+  CARGO_TARGET_DIR=/tmp/mt-target.
+- Gates (all verified green 2026-11-17T05:52Z): fmt --check; clippy host
+  --all-targets; clippy --target x86_64-pc-windows-gnu --all-targets
+  -D warnings; cargo test (112+8); zigbuild (PE32+ x2).
+- CRITICAL SANDBOX NOTES: (1) tool OUTPUT is filtered — a literal `ain]`
+  displays as `ain]`; verify bracketed literals with `od -An -c`.
+  (2) MultiEdit can PARTIALLY apply before reporting failure — verify the
+  file's actual state after any failed MultiEdit. (3) RESUME RULE (5
+  incidents now): on ANY session start, `git fetch origin && git log
+  --oneline -5 origin/main` FIRST — the local tree may be a rolled-back
+  snapshot; origin/main is ALWAYS the frontier. The stale tree's own
+  harness/memory files are stale too — do not trust them until synced.
