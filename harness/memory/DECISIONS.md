@@ -55,3 +55,19 @@ script output.
 config.json is gitignored; only config.example.json (empty credentials) is
 committed. The GitHub token lives in upload/ (outside the repo), is read
 one-shot by backup.sh, never printed, and push logs are scrubbed of it.
+
+## D10 — vless:// importer is REALITY-only and strict (2026-11-17)
+MultiTunnel generates exactly one protocol shape (xrayconf: VLESS/TCP/
+REALITY/xtls-rprx-vision, chrome fp, spiderX /). `multitunnel import`
+therefore accepts only links it can faithfully represent: security=reality,
+type=tcp, flow absent or xtls-rprx-vision; uuid 8-4-4-4-12 hex; pbk exactly
+43 unpadded base64url chars; sid empty or 1-16 hex. Unknown query params are
+ignored (other clients append extras such as headerType, path, alpn,
+allowInsecure). No percent-decoding of stored fields (uuid/host/port/sni/
+pbk/sid never carry escapes; the remark fragment is display-only, not
+stored). Error messages never echo uuid/pbk values (D9). config.json is
+patched as RAW JSON — only the server block is replaced — so user-customized
+ports/paths/behavior survive and relative paths are not re-rooted by a
+resolve() round-trip. Writes go through write_private (fsutil atomic,
+S5). Missing config → template first, then patch. (Feature built on a
+stale-tree session and salvaged onto the frontier after the 7th rollback.)

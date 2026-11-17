@@ -6,6 +6,7 @@
 //! - [`config`]: JSON config load/save/validate (defaults, path resolution)
 //! - [`xrayconf`]: Xray client config generation (mux OFF — see crate docs)
 //! - [`netmerge`]: net-merge CLI integration + tolerant status parser
+//! - [`vless`]: `vless://` share-link parsing into the server config block
 //! - [`tray`]: Windows notification-area UI (stage S3; raw win32 per D4)
 //!
 //! Architecture contract (do not break):
@@ -24,6 +25,7 @@ pub mod netmerge;
 pub mod supervisor;
 pub mod sysproxy;
 pub mod tray;
+pub mod vless;
 pub mod xrayconf;
 
 pub use error::Error;

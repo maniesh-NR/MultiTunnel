@@ -1,4 +1,4 @@
-# STATE — rewritten at the end of every stage. Last update: 6th rollback remediated, frontier re-verified (2026-11-17T07:15Z)
+# STATE — rewritten at the end of every stage. Last update: 7th rollback remediated + vless:// importer salvaged onto the frontier (2026-11-17T10:04Z)
 
 ## Current position
 - **ROADMAP S0–S5 ALL CLOSED under D6 adversarial consensus.** v0.1.0
@@ -15,6 +15,19 @@
   at ad550fa (112 lib + 8 bin tests, fmt, clippy host + windows-gnu
   -D warnings, release zigbuild PE32+ console+GUI); v0.2.0 zip re-restored
   to download/ (sha256 byte-verified vs ledger).
+- 2026-11-17T10:02Z: SEVENTH sandbox rollback (same class) — session resumed
+  from the stale Nov-12 mid-S2 tree, violated the RESUME RULE (fetch first),
+  re-diagnosed the rig hang + restartMax bug a 4th time, committed 185285c on
+  the stale base; tag backup/s2-implementers-import slipped to the remote
+  before the push rejection exposed the divergence. Remediated: main reset to
+  origin/main c308442; redundant stale fixes dropped; the stale session's
+  genuinely-new FEATURE — a vless:// share-link importer — was SALVAGED onto
+  the frontier (src/vless.rs, 18 tests + `multitunnel import` command + D10;
+  raw-JSON server-block patch via atomic write_private; config.rs Server
+  gains PartialEq). All 5 gates re-verified green on the salvage commit
+  (fmt, clippy host + windows-gnu -D warnings, 130 lib + 8 bin tests, release
+  zigbuild PE32+ x2); smoke-tested fresh import / field preservation / error
+  paths. Junk tag deleted local+remote after salvage.
 
 ## Next actions (any future session)
 1. v0.3 backlog (carried P2s): localhost listen inconsistency,

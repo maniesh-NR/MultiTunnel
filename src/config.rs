@@ -32,7 +32,7 @@ use crate::err;
 use crate::error::Result;
 use crate::supervisor::ensure_loopback_listen;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Server {
     pub address: String,

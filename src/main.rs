@@ -3,6 +3,7 @@
 //! Commands:
 //!   (none)/tray   start the tray app (Windows; implemented stage S3)
 //!   connect       connect headless, run until Ctrl+C (stage S2)
+//!   import        fill config.json's server block from a vless:// link
 //!   generate      write the generated Xray client config and exit
 //!   doctor        environment check (stage S2)
 //!   version       print version
@@ -36,6 +37,13 @@ fn main() -> ExitCode {
             Ok(())
         }
         "generate" => load_config(cfg_path).and_then(|ref cfg| generate(cfg)),
+        "import" => {
+            let Some(url) = cmd_args.get(1) else {
+                eprintln!("usage: multitunnel import <vless://...> [-config <path>]");
+                return ExitCode::from(2);
+            };
+            cmd_import(cfg_path, url)
+        }
         "doctor" => cmd_doctor(cfg_path),
         "connect" => cmd_connect(cfg_path),
         "tray" => Err(multitunnel::Error(
@@ -133,6 +141,78 @@ fn generate(cfg: &Config) -> Result<(), multitunnel::Error> {
 /// (reviewer finding S1-REV-C #1)
 fn write_private(path: &std::path::Path, contents: String) -> std::io::Result<()> {
     multitunnel::fsutil::write_private_atomic(path, &contents)
+}
+
+// ---- import (vless:// link -> config.json) ---------------------------------
+
+/// Parse a `vless://` share link and write it into the `server` block of
+/// config.json. Every other block (ports, paths, behavior) the user may have
+/// customized is preserved as-is: the file is patched as raw JSON, NOT
+/// round-tripped through the resolved Config (which would bake absolute
+/// exe-dir paths into relative path fields). Writes go through the
+/// atomic [`write_private`] helper (temp + rename, 0600-ish).
+///
+/// If no config exists yet, the standard template is written first, so a
+/// single `import` turns a fresh install into a ready config.
+fn cmd_import(cfg_path: Option<PathBuf>, link: &str) -> Result<(), multitunnel::Error> {
+    let parsed = multitunnel::vless::parse(link)?;
+    let path = cfg_path.unwrap_or_else(default_config_path);
+
+    let mut doc: serde_json::Value = if path.exists() {
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| multitunnel::Error(format!("read {}: {e}", path.display())))?;
+        serde_json::from_str(&raw).map_err(|e| {
+            multitunnel::Error(format!(
+                "parse {}: {e} — fix or delete the file and re-run import",
+                path.display()
+            ))
+        })?
+    } else {
+        Config::save_template(&path)?;
+        println!("no config yet — template written to {}", path.display());
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| multitunnel::Error(format!("read {}: {e}", path.display())))?;
+        serde_json::from_str(&raw)
+            .map_err(|e| multitunnel::Error(format!("parse fresh template: {e}")))?
+    };
+    if !doc.is_object() {
+        return Err(multitunnel::Error(format!(
+            "{} is not a JSON object",
+            path.display()
+        )));
+    }
+
+    doc["server"] = serde_json::to_value(&parsed.server)?;
+
+    // Validate the merged document as a full Config BEFORE saving, so the
+    // user learns about problems here rather than at the next connect.
+    let merged: Config = serde_json::from_value(doc.clone())
+        .map_err(|e| multitunnel::Error(format!("merged config is not valid: {e}")))?;
+    merged.validate()?;
+
+    write_private(&path, serde_json::to_string_pretty(&doc)? + "\n")?;
+
+    println!("imported into {}", path.display());
+    if let Some(r) = &parsed.remark {
+        if !r.is_empty() {
+            println!("  remark    : {r}");
+        }
+    }
+    println!("  address   : {}", merged.server.address);
+    println!("  port      : {}", merged.server.port);
+    println!("  uuid      : {}", merged.server.uuid);
+    println!("  sni       : {}", merged.server.sni);
+    println!("  publicKey : {}", merged.server.public_key);
+    println!(
+        "  shortId   : {}",
+        if merged.server.short_id.is_empty() {
+            "(empty — allowed)".to_string()
+        } else {
+            merged.server.short_id.clone()
+        }
+    );
+    println!("\nnext: `multitunnel doctor` to check the environment, then `multitunnel connect`.");
+    Ok(())
 }
 
 // ---- doctor (stage S2) -----------------------------------------------------
@@ -479,6 +559,7 @@ fn usage() {
     println!("Commands:");
     println!("  (none)     start the tray app (Windows)");
     println!("  connect    connect headless, run until Ctrl+C");
+    println!("  import     fill config.json's server block from a vless:// link");
     println!("  generate   write the generated Xray client config and exit");
     println!("  doctor     check environment (binaries, config, ports)");
     println!("  version    print version");
