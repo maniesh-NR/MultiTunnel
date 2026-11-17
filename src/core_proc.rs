@@ -809,8 +809,16 @@ mod tests {
         let err = CoreProc::socks_probe(&addr, "example.com", 443, Duration::from_millis(500))
             .expect_err("the drip server must hit the total deadline");
         assert!(
-            t0.elapsed() >= Duration::from_millis(350) && t0.elapsed() < Duration::from_millis(900),
-            "probe ran {:?} — budget not enforced as expected",
+            t0.elapsed() >= Duration::from_millis(350),
+            "probe ran {:?} — failed before the budget",
+            t0.elapsed()
+        );
+        assert!(
+            t0.elapsed() < Duration::from_millis(1500),
+            "probe ran {:?} — budget not enforced as expected (loaded-runner \
+             tolerance: 2026-11-17, the 900 ms bound flaked on a shared \
+             ubuntu runner at ~1 s of pure scheduling noise; the real \
+             discrimination is err-vs-success plus the >= 350 ms bound)",
             t0.elapsed()
         );
         assert!(err.0.contains("socks5"), "{}", err.0);

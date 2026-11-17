@@ -1038,6 +1038,12 @@ mod tests {
                     drop(s);
                     continue;
                 }
+                // Winsock: a socket accepted from a NONBLOCKING listener
+                // can inherit non-blocking mode (undocumented either way) —
+                // force it back to blocking or read_exact fails WouldBlock
+                // and drops the connection (os error 10053 in the probe;
+                // same fix as the core_proc stubs, S2-REV-B round-2).
+                let _ = s.set_nonblocking(false);
                 let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
                 let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
                 let mut g = [0u8; 3];
@@ -1654,6 +1660,8 @@ mod tests {
                     }
                     Err(_) => break, // listener closed for real
                 };
+                // Same Winsock nonblocking-inheritance guard as spawn_stub.
+                let _ = s.set_nonblocking(false);
                 let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
                 let mut g = [0u8; 3];
                 if s.read_exact(&mut g).is_err() {
