@@ -128,6 +128,17 @@ style (parallel expert agents, one crate each). Full per-expert contracts in
 - Acceptance: all 5 gates green per crate AND `--workspace`; zigbuild PE32+
   x3 (console, tray, gui); xvfb GUI smoke; 2× adversarial APPROVE (D6).
 
+> S6 IMPLEMENTATION PROGRESS 2026-11-17 (waves 1–3 pushed; review pending):
+> wave 1 1b2fe0b — mt-links 64, mt-net 44, mt-m3 12, mt-engine 9,
+> mt-platform 25 tests, all gates green per crate (fmt, clippy host +
+> windows-gnu via mingw-zig-shims, -D warnings); wave 2 5ea0b27 — mt-app
+> iced 0.13 + tiny-skia Material You GUI, 18 tests, zigbuild PE32+ link
+> proof; wave 3 a9f7aae — root wiring: RealService, `multitunnel gui`,
+> `profiles` CLI, 140 lib + 8 bin root tests, workspace total 320, release
+> zigbuild PE32+ x3 (console/tray/gui); smoke: profiles add/list/use +
+> gui --smoke exit 0. STAGE CLOSE PENDING: D6 review round (2x APPROVE),
+> README/QUICKSTART/NOTICES refresh, v0.3.0 release.
+
 ## S7 — Native REALITY core (parked)
 
 Pure-Rust VLESS+REALITY+vision client (hand-rolled TLS 1.3 with Chrome
