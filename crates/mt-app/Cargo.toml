@@ -1,0 +1,30 @@
+[package]
+name = "mt-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "MultiTunnel Material You GUI (iced 0.13, tiny-skia renderer)"
+
+# Renderer pick (documented decision): tiny-skia (software) over wgpu.
+# Rationale: wgpu pulls naga + ash/native windowing stack that does not
+# cross-compile to x86_64-pc-windows-gnu with zig cc; tiny-skia is pure
+# Rust and links cleanly. iced 0.13.1 + "tokio" executor.
+[dependencies.iced]
+version = "0.13"
+default-features = false
+features = ["tokio", "tiny-skia"]
+
+[dependencies]
+mt-m3 = { path = "../mt-m3", features = ["iced"] }
+mt-service = { path = "../mt-service" }
+mt-links = { path = "../mt-links" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait = "0.1"
+tracing = "0.1"
+thiserror = "2"
+
+[features]
+default = ["mock"]
+# MockService: simulated backend so the GUI runs standalone (dev/CI).
+mock = []

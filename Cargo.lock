@@ -1531,6 +1531,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt-app"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "iced",
+ "mt-links",
+ "mt-m3",
+ "mt-service",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mt-engine"
 version = "0.1.0"
 dependencies = [
