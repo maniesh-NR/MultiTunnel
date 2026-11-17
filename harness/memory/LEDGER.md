@@ -23,3 +23,11 @@
 2026-11-12T15:25Z | s1-close | pushed consensus + reports; ROADMAP S1 marked [x]
 2026-11-12T15:30Z | s2 | deps added (winreg 0.56, windows-sys 0.61.2 w/ 7 features, cfg(windows)); S2 module stubs + contracts written by orchestrator; lib.rs mods added
 2026-11-12T15:31Z | s2 | skeleton green; launching parallel implementers S2-A (core_proc+supervisor+main doctor/connect) and S2-B (sysproxy+elevate)
+2026-11-12T15:45Z | s2 | S2-B done: sysproxy (winreg HKCU + snapshot 0600, never touches real registry in tests) + elevate (TokenElevation, ShellExecuteW runas); 10+6 tests; no feature changes needed; zigbuild OK
+2026-11-12T15:46Z | s2 | S2-A gateway deadline-crash again — mitigating by splitting: core_proc first, then supervisor+main
+2026-11-17T06:10Z | incident | sandbox recycled AGAIN (3rd time): ~/.cargo/~/.rustup wiped (S2-A had moved toolchain out of tools/); repo tree + uncommitted S2 work survived
+2026-11-17T06:15Z | env | toolchain reinstalled UNDER tools/ (rustup+cargo+zig+zigbuild, recycle-proof); rustc 1.100.0; env.sh rewritten to tools/rustup+tools/cargo
+2026-11-17T06:30Z | s2 | full-suite run hung: supervisor tests (4)(5)(6)(7) deadlocked — instrumentation + /proc wchan analysis: test bodies completed, hang was in Rig::drop h.join()
+2026-11-17T06:40Z | s2 | ROOT CAUSE: spawn_stub held a try_clone()'d listener fd; dropping the Rig's original listener cannot wake accept() on the clone → join waits forever. FIX: stop-flag (AtomicBool) + Drop pokes listener with one throwaway connect; stub checks flag before/after accept
+2026-11-17T06:45Z | s2 | second bug: Rig::build hardcoded restart_max=3 breaking test (7) intent (max=0 fail-fast); added restart_max param to Rig::build
+2026-11-17T06:50Z | s2 | supervisor 8/8 green; FULL SUITE 52 passed 0 failed (5.5s); zigbuild green: multitunnel.exe (console) + multitunnel-tray.exe (GUI) both PE32+
