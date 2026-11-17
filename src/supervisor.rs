@@ -312,9 +312,28 @@ impl Supervisor {
 
         // 2. core start + wait for the SOCKS port.
         self.core.start()?;
-        if let Err(e) = CoreProc::wait_for_port(&socks_addr(&self.cfg), PORT_WAIT) {
-            self.core.stop(); // never leave a half-started core behind
-            return Err(e);
+        match CoreProc::wait_for_port(&socks_addr(&self.cfg), PORT_WAIT) {
+            Ok(()) => {
+                // Liveness guard (2026-11-17 audit REV-C#1): the port
+                // answering proves nothing about OUR child — a foreign
+                // process (typically an orphaned core from a previous run)
+                // can own the port while the fresh child dies on bind.
+                // Without this check connect() reported Connected with a
+                // dead core and the poll loop churned "successful" restart
+                // campaigns forever.
+                if !self.core.child_alive() {
+                    self.core.stop();
+                    return Err(crate::err!(
+                        "socks {} answers but our core is not running — another process owns the port (stop it or change local.socksPort)",
+                        socks_addr(&self.cfg)
+                    ));
+                }
+            }
+            // never leave a half-started core behind
+            Err(e) => {
+                self.core.stop();
+                return Err(e);
+            }
         }
 
         // 3. full-chain probe — fail fast: stop core, restore proxy, Failed.
@@ -340,6 +359,17 @@ impl Supervisor {
                 probe_port,
                 socks_addr(&self.cfg),
                 e
+            ));
+        }
+        // Same liveness guard after the full-chain probe (2026-11-17 audit
+        // REV-C#1): the exchange must also have been served by OUR child.
+        if !self.core.child_alive() {
+            self.core.stop();
+            let _ = sysproxy::restore(self.state_dir());
+            lock(&self.shared.inner).system_proxy = false;
+            return Err(crate::err!(
+                "tunnel probe succeeded but our core is not running — another process owns {}",
+                socks_addr(&self.cfg)
             ));
         }
 
@@ -708,12 +738,24 @@ fn restart_campaign(
         };
         if started {
             match CoreProc::wait_for_port(socks, PORT_WAIT) {
-                Ok(()) => {
+                Ok(()) if core.child_alive() => {
                     let mut inner = lock(&shared.inner);
                     inner.restarts = inner.restarts.saturating_add(1);
                     inner.state = State::Connected;
                     inner.error = None;
                     return CampaignOutcome::Restarted;
+                }
+                // Port answered but OUR child is gone: a foreign process
+                // owns it — count the attempt and keep backing off instead
+                // of reporting a bogus Connected that dies on the next
+                // tick (2026-11-17 audit REV-C#1).
+                Ok(()) => {
+                    core.stop();
+                    let mut inner = lock(&shared.inner);
+                    inner.restarts = inner.restarts.saturating_add(1);
+                    inner.error = Some(format!(
+                        "restart attempt {attempt}/{max}: {socks} answers but the core is not running (another process owns the port)"
+                    ));
                 }
                 Err(e) => {
                     core.stop();
@@ -736,13 +778,29 @@ fn backoff_delay(attempt: u32) -> Duration {
 }
 
 /// Sleep `dur` in 100 ms slices; `false` as soon as the stop flag is set.
+/// Never panics on clock edge cases (2026-11-17 audit REV-C#4): the
+/// deadline is built with `checked_add` (an absurd duration simply does
+/// not sleep) and each sleep is bounded by the remaining time computed
+/// from ONE sampled `now` — a clock crossing between the loop check and
+/// the subtraction cannot happen for a frozen sample (the old
+/// re-sampled form panicked on `Instant` sub overflow in that window).
 fn stoppable_sleep(stop: &AtomicBool, dur: Duration) -> bool {
-    let deadline = std::time::Instant::now() + dur;
-    while std::time::Instant::now() < deadline {
+    let deadline = match std::time::Instant::now().checked_add(dur) {
+        Some(d) => d,
+        // Absurd duration: treat as elapsed rather than panicking.
+        None => return !stop.load(Ordering::SeqCst),
+    };
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
         if stop.load(Ordering::SeqCst) {
             return false;
         }
-        thread::sleep(SLEEP_SLICE.min(deadline - std::time::Instant::now()));
+        // `now` was sampled strictly before `deadline`, so the subtraction
+        // is valid for that frozen sample.
+        thread::sleep(SLEEP_SLICE.min(deadline - now));
     }
     !stop.load(Ordering::SeqCst)
 }
@@ -830,13 +888,11 @@ fn write_private(path: &Path, contents: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
-    // Unix-only test imports (rig/stub/process tests) — gating keeps the
-    // windows-target test build clean (S2 close: cross-target clippy).
-    #[cfg(unix)]
+    // Rig imports — the rig itself is portable since the 2026-11-17 audit
+    // backport (unix shell-script core / Windows `.cmd` core), so the
+    // windows-latest CI leg now exercises the real process/lifecycle code.
     use std::io::{Read as _, Write as _};
-    #[cfg(unix)]
     use std::net::TcpListener;
-    #[cfg(unix)]
     use std::sync::mpsc;
 
     /// Unique temp dir (pid + counter): keeps parallel tests apart.
@@ -853,7 +909,6 @@ mod tests {
     }
 
     /// Grab an ephemeral loopback port and release it (the port is then dead).
-    #[cfg(unix)]
     fn free_loopback_port() -> u16 {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind 127.0.0.1:0");
         l.local_addr().expect("local_addr").port()
@@ -870,14 +925,44 @@ mod tests {
         }
     }
 
-    /// Fake "xray": a shell script that ignores `run -c …` and either stays
-    /// alive (`sleep 120`) or dies after `die_after` seconds.
+    /// Fake "xray" core behaviors for the rig (2026-11-17 audit REV-B#2:
+    /// portable across unix and Windows so the windows-latest CI leg
+    /// exercises the real process/lifecycle code, not just a compile check).
+    #[derive(Debug, Clone, Copy)]
+    enum FakeCore {
+        /// Alive ~120 s (until killed).
+        StayAlive,
+        /// Exits after ~`secs` seconds, every time it is started.
+        DieAfter(f32),
+        /// The FIRST start exits after ~0.3 s; every later start lives
+        /// ~120 s (exercises the restart-then-recover campaign).
+        DieOnce,
+        /// Unix-only: the first start moves the binary away (so every later
+        /// `start()` fails with a spawn error) and dies after ~1 s —
+        /// exercises the restart-budget exhaustion path deterministically.
+        /// Never constructed on Windows (its test is unix-gated).
+        #[cfg_attr(not(unix), allow(dead_code))]
+        MoveAwayThenDie,
+    }
+
+    /// Fake "xray" for unix: a shell script that ignores `run -c …` and
+    /// exhibits the requested [`FakeCore`] behavior.
     #[cfg(unix)]
-    fn write_fake_xray(dir: &Path, die_after: Option<&str>) -> PathBuf {
+    fn write_fake_xray(dir: &Path, core: FakeCore) -> PathBuf {
         let p = dir.join("fake-xray.sh");
-        let body = match die_after {
-            Some(t) => format!("#!/bin/sh\nsleep {t}\n"),
-            None => "#!/bin/sh\nexec sleep 120\n".to_string(),
+        let body = match core {
+            FakeCore::StayAlive => "#!/bin/sh\nexec sleep 120\n".to_string(),
+            FakeCore::DieAfter(t) => format!("#!/bin/sh\nsleep {t}\n"),
+            FakeCore::DieOnce => {
+                let marker = p.display().to_string() + ".died";
+                format!(
+                    "#!/bin/sh\nif [ -e '{marker}' ]; then exec sleep 120; fi\ntouch '{marker}'\nsleep 0.3\n"
+                )
+            }
+            FakeCore::MoveAwayThenDie => {
+                let gone = p.display().to_string() + ".gone";
+                format!("#!/bin/sh\nmv \"$0\" '{gone}'\nsleep 1\n")
+            }
         };
         fs::write(&p, body).expect("write fake xray");
         use std::os::unix::fs::PermissionsExt;
@@ -885,18 +970,54 @@ mod tests {
         p
     }
 
+    /// Fake "xray" for Windows: a `.cmd` batch file (spawnable directly by
+    /// std::process::Command). Sub-second deaths use one ICMP probe against
+    /// the reserved TEST-NET address with a timeout — `ping -n 1 -w <ms>`
+    /// sleeps at least the timeout because the address never answers.
+    #[cfg(windows)]
+    fn write_fake_xray(dir: &Path, core: FakeCore) -> PathBuf {
+        let p = dir.join("fake-xray.cmd");
+        let body = match core {
+            FakeCore::StayAlive => "@ping -n 121 127.0.0.1 > nul\r\n".to_string(),
+            FakeCore::DieAfter(t) => {
+                let ms = (t * 1000.0).ceil() as u32;
+                if ms < 1000 {
+                    format!("@ping -n 1 -w {ms} 192.0.2.1 > nul\r\n")
+                } else {
+                    format!("@ping -n {} 127.0.0.1 > nul\r\n", (ms / 1000) + 1)
+                }
+            }
+            FakeCore::DieOnce => format!(
+                "@if exist \"{p}.died\" goto live\r\ntype nul > \"{p}.died\"\r\n@ping -n 1 -w 300 192.0.2.1 > nul\r\n@exit /b 0\r\n:live\r\n@ping -n 121 127.0.0.1 > nul\r\n",
+                p = p.display()
+            ),
+            // Its test is #[cfg(unix)] — never constructed on Windows.
+            FakeCore::MoveAwayThenDie => {
+                unreachable!("MoveAwayThenDie is unix-only")
+            }
+        };
+        fs::write(&p, body).expect("write fake xray");
+        p
+    }
+
     /// SOCKS5 stub in the spirit of core_proc's tests: answers each CONNECT
     /// with a success reply, or — when `refuse` — accepts and immediately
-    /// drops the socket so the probe can never complete. Serves any number
-    /// of connects.
+    /// drops the socket so the probe can never complete. `greet_delay`
+    /// optionally stalls before the greeting reply (foreign-listener test:
+    /// gives the dying core time to exit before the post-probe liveness
+    /// check). Serves any number of connects.
     ///
     /// Deterministic shutdown (root cause of the S2 suite hang): the listener
     /// is set NONBLOCKING and the loop re-checks `quit` every ~10 ms. Merely
     /// dropping the rig's listener fd is NOT enough — the stub owns a
     /// try_clone'd fd, so the socket stays open and accept() blocks forever;
     /// Drop's join then hung the whole suite on every rig test.
-    #[cfg(unix)]
-    fn spawn_stub(listener: TcpListener, refuse: bool, quit: Arc<AtomicBool>) -> JoinHandle<()> {
+    fn spawn_stub(
+        listener: TcpListener,
+        refuse: bool,
+        greet_delay: Option<Duration>,
+        quit: Arc<AtomicBool>,
+    ) -> JoinHandle<()> {
         listener
             .set_nonblocking(true)
             .expect("set stub listener nonblocking");
@@ -918,9 +1039,13 @@ mod tests {
                     continue;
                 }
                 let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+                let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
                 let mut g = [0u8; 3];
                 if s.read_exact(&mut g).is_err() {
                     continue;
+                }
+                if let Some(d) = greet_delay {
+                    thread::sleep(d);
                 }
                 if s.write_all(&[0x05, 0x00]).is_err() {
                     continue;
@@ -950,8 +1075,9 @@ mod tests {
     use std::path::PathBuf;
 
     /// Test rig: bound SOCKS listener (the "port the core opens"), SOCKS stub
-    /// thread, fake xray binary, isolated config/dirs.
-    #[cfg(unix)]
+    /// thread, fake xray binary, isolated config/dirs. Portable since the
+    /// 2026-11-17 audit backport: the unix fake core is a shell script, the
+    /// Windows one a `.cmd` file.
     struct Rig {
         sup: Arc<Supervisor>,
         socks_listener: Option<TcpListener>,
@@ -960,23 +1086,25 @@ mod tests {
         dir: PathBuf,
     }
 
-    #[cfg(unix)]
     impl Rig {
-        /// `refuse` makes the SOCKS stub kill every probe; `die_after` makes
-        /// the fake core exit after N seconds; `net_merge_bin` enables the
+        /// `refuse` makes the SOCKS stub kill every probe; `core` picks the
+        /// fake-core behavior (see [`FakeCore`]); `net_merge_bin` enables the
         /// (non-fatal) bonding step against a given CLI path; `restart_max`
-        /// feeds behavior.restartMax (0 = never restart, give up at once).
+        /// feeds behavior.restartMax (0 = never restart, give up at once);
+        /// `greet_delay` stalls the stub's greeting reply (foreign-listener
+        /// test).
         fn build(
             refuse: bool,
-            die_after: Option<&str>,
+            core: FakeCore,
             net_merge_bin: Option<&str>,
             restart_max: u32,
+            greet_delay: Option<Duration>,
         ) -> Rig {
             let dir = unique_dir("rig");
             let socks_listener = TcpListener::bind("127.0.0.1:0").expect("bind socks listener");
             let socks_port = socks_listener.local_addr().expect("addr").port();
             let http_port = free_loopback_port();
-            let xray = write_fake_xray(&dir, die_after);
+            let xray = write_fake_xray(&dir, core);
             let cfg = Config {
                 server: server(),
                 local: crate::config::Local {
@@ -995,7 +1123,12 @@ mod tests {
                     enable: net_merge_bin.is_some(),
                 },
                 behavior: crate::config::Behavior {
-                    system_proxy: true,
+                    // NEVER true in a rig (2026-11-17 audit REV-B#2): on
+                    // Windows `sysproxy::set` writes the REAL HKCU registry
+                    // of the runner. It is a no-op on unix, but the guard
+                    // belongs in the rig itself so a future change cannot
+                    // mutate a real machine from a test.
+                    system_proxy: false,
                     proxy_override: "localhost".into(),
                     probe_target: "example.com:443".into(),
                     probe_interval_sec: 60,
@@ -1007,6 +1140,7 @@ mod tests {
             let stub = spawn_stub(
                 socks_listener.try_clone().expect("clone listener"),
                 refuse,
+                greet_delay,
                 Arc::clone(&quit),
             );
             Rig {
@@ -1035,7 +1169,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     impl Drop for Rig {
         fn drop(&mut self) {
             // Flip quit FIRST: the stub's nonblocking loop exits within
@@ -1163,11 +1296,10 @@ mod tests {
     /// (3c) whole-operation serialization (S2-REV-C P0-2): a connect()
     /// blocked on op_lock must not even move the state to Connecting.
     #[test]
-    #[cfg(unix)]
     fn connect_waits_for_op_lock_of_in_flight_operation() {
-        let rig = Rig::build(true, None, None, 3); // refused probe → fast Err
-                                                   // Hold the operation lock via one Arc clone; a second clone runs
-                                                   // connect() in a thread — it must block until the guard drops.
+        let rig = Rig::build(true, FakeCore::StayAlive, None, 3, None); // refused probe → fast Err
+                                                                        // Hold the operation lock via one Arc clone; a second clone runs
+                                                                        // connect() in a thread — it must block until the guard drops.
         let lock_holder = Arc::clone(&rig.sup);
         let guard = lock(&lock_holder.shared.op_lock);
         let (tx, rx) = mpsc::channel::<()>();
@@ -1195,9 +1327,8 @@ mod tests {
     /// clear the proxy/merging flags and flip the state to Failed with the
     /// emergency error, promptly.
     #[test]
-    #[cfg(unix)]
     fn emergency_stop_works_while_op_lock_is_held() {
-        let rig = Rig::build(false, None, None, 3);
+        let rig = Rig::build(false, FakeCore::StayAlive, None, 3, None);
         rig.sup.connect().expect("connect against the working stub");
         assert!(matches!(rig.sup.snapshot().state, State::Connected));
         assert!(
@@ -1242,9 +1373,8 @@ mod tests {
     /// and — because the fake xray stays alive until killed — the retry
     /// reaching the probe again proves the core was actually STOPPED.
     #[test]
-    #[cfg(unix)]
     fn connect_fails_cleanly_when_probe_is_refused() {
-        let rig = Rig::build(true, None, None, 3);
+        let rig = Rig::build(true, FakeCore::StayAlive, None, 3, None);
 
         let err1 = rig
             .sup
@@ -1281,15 +1411,16 @@ mod tests {
     /// snapshot, second connect is a no-op, disconnect joins the loop
     /// deterministically and lands Disconnected.
     #[test]
-    #[cfg(unix)]
     fn connect_succeeds_reconnect_is_noop_disconnect_joins_loop() {
-        let rig = Rig::build(false, None, None, 3);
+        let rig = Rig::build(false, FakeCore::StayAlive, None, 3, None);
         rig.sup.connect().expect("connect against the working stub");
         let s = rig.sup.snapshot();
         assert!(matches!(s.state, State::Connected), "{:?}", s.state);
         assert!(s.error.is_none() && s.probe_error.is_none(), "{:?}", s);
         assert!(s.bond_error.is_none() && s.sys_error.is_none(), "{:?}", s);
-        assert!(s.system_proxy, "sysproxy::set is a no-op Ok on non-Windows");
+        // Rigs never enable the system proxy (2026-11-17 audit REV-B#2:
+        // a rig must never touch a real HKCU registry, unix no-op or not).
+        assert!(!s.system_proxy, "rig configs never set the system proxy");
         assert_eq!(s.restarts, 0);
         assert!(rig.sup.loop_running(), "poll loop must run after connect");
 
@@ -1310,9 +1441,14 @@ mod tests {
     /// (6) Bonding is NON-FATAL: a missing net-merge CLI sets bond_error but
     /// the tunnel still comes up.
     #[test]
-    #[cfg(unix)]
     fn bonding_failure_is_non_fatal() {
-        let rig = Rig::build(false, None, Some("definitely-missing-net-merge-xyz"), 3);
+        let rig = Rig::build(
+            false,
+            FakeCore::StayAlive,
+            Some("definitely-missing-net-merge-xyz"),
+            3,
+            None,
+        );
         rig.sup
             .connect()
             .expect("connect must succeed despite bond failure");
@@ -1329,13 +1465,12 @@ mod tests {
     /// (7) Core dies right after connect with restartMax=0 → the loop's next
     /// tick gives up immediately: proxy flag down, State::Failed, loop ends.
     #[test]
-    #[cfg(unix)]
     fn core_death_with_restart_max_zero_fails_fast() {
-        let rig = Rig::build(false, Some("0.3"), None, 0);
+        let rig = Rig::build(false, FakeCore::DieAfter(1.0), None, 0, None);
         rig.sup.connect().expect("initial connect");
         assert!(matches!(rig.sup.snapshot().state, State::Connected));
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let deadline = std::time::Instant::now() + Duration::from_secs(25);
         loop {
             let s = rig.sup.snapshot();
             if matches!(s.state, State::Failed) {
@@ -1463,7 +1598,7 @@ mod tests {
         let socks_listener = TcpListener::bind("127.0.0.1:0").expect("bind socks listener");
         let socks_port = socks_listener.local_addr().expect("addr").port();
         let http_port = free_loopback_port();
-        let xray = write_fake_xray(&dir, None);
+        let xray = write_fake_xray(&dir, FakeCore::StayAlive);
         let cfg = Config {
             server: server(),
             local: crate::config::Local {
@@ -1482,6 +1617,11 @@ mod tests {
                 enable: net_merge_bin.is_some(),
             },
             behavior: crate::config::Behavior {
+                // TRUE here on purpose (unlike Rig::build): the exit-race
+                // tests must reach the sysproxy step's abort gate. This rig
+                // and its tests are #[cfg(unix)]-gated, and sysproxy is a
+                // no-op on unix — but NEVER un-gate them without flipping
+                // this flag (on Windows it would write the REAL registry).
                 system_proxy: true,
                 proxy_override: "localhost".into(),
                 probe_target: "example.com:443".into(),
@@ -1626,7 +1766,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn connect_after_disconnect_is_not_poisoned_by_stale_stop() {
-        let rig = Rig::build(false, None, None, 3);
+        let rig = Rig::build(false, FakeCore::StayAlive, None, 3, None);
         rig.sup.connect().expect("first connect");
         rig.joined_disconnect();
         assert!(matches!(rig.sup.snapshot().state, State::Disconnected));
@@ -1639,8 +1779,8 @@ mod tests {
         let s = rig.sup.snapshot();
         assert!(matches!(s.state, State::Connected), "{:?}", s.state);
         assert!(
-            s.system_proxy,
-            "sysproxy::set must have been applied (no-op Ok on this host)"
+            !s.system_proxy,
+            "rigs never enable the system proxy (audit REV-B#2)"
         );
         assert!(s.error.is_none(), "{:?}", s.error);
         assert!(rig.sup.loop_running(), "poll loop must run");
@@ -1685,5 +1825,119 @@ mod tests {
         stub.join().expect("stub thread");
         let _ = sup.disconnect();
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// (11) Core death WITH a restart budget (2026-11-17 audit REV-B#1):
+    /// one death → one backoff → relaunch → Connected again with
+    /// restarts == 1, and it STAYS up — the `CampaignOutcome::Restarted`
+    /// path, previously never exercised (only the max=0 degenerate form
+    /// was tested).
+    #[test]
+    fn core_death_with_restart_budget_recovers_exactly_once() {
+        let rig = Rig::build(false, FakeCore::DieOnce, None, 3, None);
+        rig.sup.connect().expect("initial connect");
+        assert_eq!(rig.sup.snapshot().restarts, 0);
+
+        // The fake core dies ~0.3 s in (unix) / ~1 s (windows); the poll
+        // loop notices within one 5 s tick, backs off 1 s, relaunches and
+        // must land Connected with restarts == 1.
+        let deadline = std::time::Instant::now() + Duration::from_secs(25);
+        loop {
+            let s = rig.sup.snapshot();
+            if matches!(s.state, State::Connected) && s.restarts == 1 {
+                break; // recovered exactly once
+            }
+            if matches!(s.state, State::Failed) {
+                panic!("must recover, not give up: {s:?}");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no recovery: {:?}",
+                rig.sup.snapshot()
+            );
+            thread::sleep(Duration::from_millis(200));
+        }
+        // And it must STAY connected: the relaunched core lives (the second
+        // fake-core start sees the marker and stays alive ~120 s).
+        thread::sleep(Duration::from_secs(6));
+        let s = rig.sup.snapshot();
+        assert!(
+            matches!(s.state, State::Connected),
+            "relaunched core must live: {s:?}"
+        );
+        assert_eq!(s.restarts, 1, "no further restarts may happen");
+        rig.joined_disconnect();
+    }
+
+    /// (12) Restart-budget exhaustion with max>0 (2026-11-17 audit REV-B#1):
+    /// the core moves its own binary away and dies, so every restart
+    /// attempt fails to spawn; the loop gives up after exactly
+    /// `restart_max` attempts with the proxy flag down and the loop ended.
+    /// Unix-only: the MoveAwayThenDie core needs `mv`.
+    #[test]
+    #[cfg(unix)]
+    fn restart_attempts_fail_spawn_and_exhaust_the_budget() {
+        let rig = Rig::build(false, FakeCore::MoveAwayThenDie, None, 2, None);
+        rig.sup
+            .connect()
+            .expect("initial connect (core lives ~1 s)");
+        assert!(matches!(rig.sup.snapshot().state, State::Connected));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let s = rig.sup.snapshot();
+            if matches!(s.state, State::Failed) {
+                let msg = s.error.unwrap_or_default();
+                assert!(
+                    msg.contains("giving up after 2 restart attempt(s)"),
+                    "give-up message must name the budget: {msg}"
+                );
+                assert!(!s.system_proxy, "give-up must restore the proxy flag");
+                assert_eq!(s.restarts, 2, "both failed attempts must be counted");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never gave up: {:?}",
+                rig.sup.snapshot()
+            );
+            thread::sleep(Duration::from_millis(200));
+        }
+        assert!(!rig.sup.loop_running(), "loop must end after give-up");
+        rig.joined_disconnect();
+    }
+
+    /// (13) Foreign-listener guard (2026-11-17 audit REV-C#1 regression):
+    /// the SOCKS stub owns the port while our own core dies shortly after
+    /// spawn — with the stub stalling its greeting reply, the probe
+    /// completes only AFTER the core is dead, so the post-probe liveness
+    /// guard must fail the connect instead of reporting a bogus Connected
+    /// (the pre-fix bug: endless restart churn against a port owned by a
+    /// foreign process).
+    #[test]
+    fn connect_fails_when_a_foreign_process_owns_the_socks_port() {
+        let rig = Rig::build(
+            false,
+            FakeCore::DieAfter(0.3),
+            None,
+            3,
+            Some(Duration::from_millis(1500)),
+        );
+        let err = rig
+            .sup
+            .connect()
+            .expect_err("dead own core + answering stub must fail connect");
+        assert!(
+            err.to_string().contains("another process owns"),
+            "error must name the port conflict: {err}"
+        );
+        let s = rig.sup.snapshot();
+        assert!(matches!(s.state, State::Failed), "{:?}", s.state);
+        assert!(!s.system_proxy);
+        assert!(
+            !rig.sup.loop_running(),
+            "no loop may start for a failed connect"
+        );
+        rig.joined_disconnect(); // cleanup
     }
 }

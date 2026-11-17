@@ -228,7 +228,8 @@ fn save_snapshot(state_dir: &Path, snap: &Snapshot) -> crate::error::Result<()> 
 }
 
 /// Load the snapshot; `Ok(None)` when no snapshot file exists. A corrupt
-/// file is an error, never a silent skip (restore must not guess).
+/// file is an error, never a silent guess — the caller's policy
+/// ([`restore_plan`]) turns it into the fail-open path.
 #[cfg(any(windows, test))]
 fn load_snapshot(state_dir: &Path) -> crate::error::Result<Option<Snapshot>> {
     let path = snapshot_path(state_dir);
@@ -238,6 +239,36 @@ fn load_snapshot(state_dir: &Path) -> crate::error::Result<Option<Snapshot>> {
             .map_err(|e| crate::err!("corrupt proxy snapshot {}: {}", path.display(), e)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(crate::err!("failed to read {}: {}", path.display(), e)),
+    }
+}
+
+/// What `restore` should do with a snapshot-load result. Pure policy, so
+/// the corrupt-snapshot decision is testable without a registry
+/// (2026-11-17 audit REV-C#3).
+#[cfg(any(windows, test))]
+#[derive(Debug)]
+enum RestorePlan {
+    /// Put the saved values back and remove the snapshot file.
+    Apply(Snapshot),
+    /// No snapshot: just disable the proxy (ProxyEnable=0).
+    Disable,
+    /// Corrupt snapshot: fail OPEN — disable the proxy, remove the unusable
+    /// file (and any leftover temp) so later restores are not stuck. A
+    /// fail-closed error here would be swallowed by every caller
+    /// (`let _ =` restore sites) and the system proxy would stay on
+    /// MultiTunnel's value forever — D5 fail-open applied to the snapshot
+    /// itself. (The atomic write from S5-REV-C P2-2 makes corruption
+    /// unlikely; this covers pre-v0.2.0 files and non-atomic external
+    /// edits.)
+    FailOpenRemove,
+}
+
+#[cfg(any(windows, test))]
+fn restore_plan(loaded: crate::error::Result<Option<Snapshot>>) -> RestorePlan {
+    match loaded {
+        Ok(Some(s)) => RestorePlan::Apply(s),
+        Ok(None) => RestorePlan::Disable,
+        Err(_) => RestorePlan::FailOpenRemove,
     }
 }
 
@@ -457,8 +488,8 @@ pub fn set(proxy_addr: &str, proxy_override: &str, state_dir: &Path) -> crate::e
 pub fn restore(state_dir: &Path) -> crate::error::Result<()> {
     #[cfg(windows)]
     {
-        match load_snapshot(state_dir)? {
-            Some(saved) => {
+        match restore_plan(load_snapshot(state_dir)) {
+            RestorePlan::Apply(saved) => {
                 let key = open_inet_settings(KEY_QUERY_VALUE | KEY_SET_VALUE)?;
                 // Opaque or not, restore ALWAYS writes a DWORD here
                 // (S5-REV-C P1a): the pre-S5 fail-safe "disabled" unless a
@@ -477,7 +508,25 @@ pub fn restore(state_dir: &Path) -> crate::error::Result<()> {
                 remove_snapshot(state_dir)?;
                 refresh_internet_settings()?;
             }
-            None => {
+            RestorePlan::Disable => {
+                let key = open_inet_settings(KEY_SET_VALUE)?;
+                reg_set_dword(&key, "ProxyEnable", 0)?;
+                refresh_internet_settings()?;
+            }
+            RestorePlan::FailOpenRemove => {
+                // 2026-11-17 audit REV-C#3: best-effort cleanup of the
+                // unusable snapshot (+ any `.tmp-<pid>` residue from a
+                // crashed atomic write), then disable the proxy — normal
+                // browsing keeps working.
+                let _ = remove_snapshot(state_dir);
+                if let Ok(entries) = std::fs::read_dir(state_dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name();
+                        if name.to_string_lossy().starts_with("sysproxy.json.tmp-") {
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
                 let key = open_inet_settings(KEY_SET_VALUE)?;
                 reg_set_dword(&key, "ProxyEnable", 0)?;
                 refresh_internet_settings()?;
@@ -495,8 +544,8 @@ pub fn restore(state_dir: &Path) -> crate::error::Result<()> {
 mod tests {
     use super::{
         enable_action, load_snapshot, opaque_overwritten_string_names, remove_snapshot,
-        save_snapshot, set_string_plan, snapshot_from, snapshot_path, str_action,
-        string_write_plan, EnableAction, SnapValue, Snapshot, StrAction,
+        restore_plan, save_snapshot, set_string_plan, snapshot_from, snapshot_path, str_action,
+        string_write_plan, EnableAction, RestorePlan, SnapValue, Snapshot, StrAction,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -623,6 +672,38 @@ mod tests {
         fs::write(&path, "{definitely not json").unwrap();
         assert!(load_snapshot(&dir).is_err(), "corrupt snapshot must Err");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-11-17 audit REV-C#3: a corrupt snapshot maps to the FAIL-OPEN
+    /// restore plan — disable + remove, never fail-closed — because every
+    /// caller of restore() treats it as best-effort and a stuck error
+    /// would leave the system proxy on MultiTunnel's value forever.
+    #[test]
+    fn corrupt_snapshot_maps_to_the_fail_open_restore_plan() {
+        let dir = temp_state_dir("plan-corrupt");
+        fs::write(snapshot_path(&dir), "not json at all").unwrap();
+        assert!(matches!(
+            restore_plan(load_snapshot(&dir)),
+            RestorePlan::FailOpenRemove
+        ));
+        let _ = fs::remove_dir_all(&dir);
+
+        // No snapshot → plain disable.
+        let empty = temp_state_dir("plan-empty");
+        assert!(matches!(
+            restore_plan(load_snapshot(&empty)),
+            RestorePlan::Disable
+        ));
+        let _ = fs::remove_dir_all(&empty);
+
+        // Healthy snapshot → apply it (payload verified too).
+        let healthy = temp_state_dir("plan-apply");
+        save_snapshot(&healthy, &sample()).unwrap();
+        match restore_plan(load_snapshot(&healthy)) {
+            RestorePlan::Apply(s) => assert_eq!(s, sample()),
+            other => panic!("expected Apply, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&healthy);
     }
 
     /// Tri-state serde (S2-REV-C P2-5): the three states map to distinct

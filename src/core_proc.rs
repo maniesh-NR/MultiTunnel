@@ -87,6 +87,10 @@ pub struct CoreProc {
     stop_flag: Arc<AtomicBool>,
     /// Consumed-once (swap) flag: child died without a manual stop.
     exited_unexpectedly: Arc<AtomicBool>,
+    /// Kill-on-close job object owning the current child (Windows only;
+    /// dropped/replaced together with the child cycle).
+    #[cfg(windows)]
+    job: Mutex<Option<JobObjectHandle>>,
 }
 
 impl CoreProc {
@@ -105,6 +109,8 @@ impl CoreProc {
             waiter: Mutex::new(None),
             stop_flag: Arc::new(AtomicBool::new(false)),
             exited_unexpectedly: Arc::new(AtomicBool::new(false)),
+            #[cfg(windows)]
+            job: Mutex::new(None),
         }
     }
 
@@ -184,6 +190,27 @@ impl CoreProc {
             .spawn()
             .map_err(|e| crate::err!("failed to spawn core {}: {}", self.bin.display(), e))?;
 
+        // 2.5 Windows: put the child in a kill-on-close job so it cannot
+        //     outlive this process (2026-11-17 audit REV-C#2). CREATE_NO_WINDOW
+        //     detaches the core from our console, so Ctrl+C (process death)
+        //     would otherwise orphan xray.exe on the SOCKS port forever —
+        //     which then feeds the foreign-listener false-Connected bug.
+        //     Failure is degraded, not fatal: stop() still works; only the
+        //     crash/Ctrl+C orphan protection is lost for this run.
+        #[cfg(windows)]
+        {
+            // Drop any job from a previous cycle (closing the handle is
+            // safe: the slot checks above guarantee its child is gone).
+            *lock(&self.job) = None;
+            match make_kill_on_close_job(&child) {
+                Ok(job) => *lock(&self.job) = Some(job),
+                Err(e) => {
+                    let mut log = lock(&shared_log);
+                    let _ = writeln!(&mut *log, "[warn] kill-on-close job not established: {e}");
+                }
+            }
+        }
+
         // 3. pump piped output into the log (EOF-terminated threads).
         let stdout = match child.stdout.take() {
             Some(s) => s,
@@ -227,6 +254,11 @@ impl CoreProc {
             let _ = c.kill();
             let _ = c.wait();
         }
+        // Close the kill-on-close job (its only member is dead anyway).
+        #[cfg(windows)]
+        {
+            *lock(&self.job) = None;
+        }
         // The waiter sees the empty slot (or the stop flag) and exits.
         let handle = lock(&self.waiter).take();
         if let Some(h) = handle {
@@ -237,6 +269,28 @@ impl CoreProc {
     /// True while a spawned child has neither been stopped nor reaped.
     pub fn running(&self) -> bool {
         lock(&self.child).is_some()
+    }
+
+    /// Direct liveness question to OUR child, independent of the 50 ms
+    /// waiter poll: a dead child is reaped on the spot (the waiter then
+    /// exits without setting `exited_unexpectedly`, and `running()` flips
+    /// false, which the supervisor's tick treats as a death). `false` when
+    /// never started, already stopped or already exited. Used right after
+    /// `wait_for_port`/`socks_probe` success to prove the port was answered
+    /// by OUR core and not by a foreign process (2026-11-17 audit REV-C#1).
+    pub fn child_alive(&self) -> bool {
+        let mut slot = lock(&self.child);
+        match slot.as_mut() {
+            None => false,
+            Some(c) => match c.try_wait() {
+                Ok(None) => true,
+                // Exited (or broken handle): reap + clear, then report dead.
+                Ok(Some(_)) | Err(_) => {
+                    *slot = None;
+                    false
+                }
+            },
+        }
     }
 
     /// Consumed-once check: did the child die without a manual stop?
@@ -521,6 +575,88 @@ fn socks_read_exact(s: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Res
         }
     }
     Ok(())
+}
+
+// ---- Windows: kill-on-close job object (2026-11-17 audit REV-C#2) --------
+
+/// Owned HANDLE wrapper: dropping it closes the job handle, which (with
+/// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) makes the kernel kill every process
+/// still inside the job — the core cannot outlive this process.
+#[cfg(windows)]
+struct JobObjectHandle(windows_sys::Win32::Foundation::HANDLE);
+
+// SAFETY: a job HANDLE is a reference to a kernel object with no thread
+// affinity — it can be closed from any thread (access is serialized by the
+// enclosing Mutex anyway). The raw-pointer type of HANDLE is an artifact of
+// the windows-sys definition, not memory in need of thread-local access.
+#[cfg(windows)]
+unsafe impl Send for JobObjectHandle {}
+
+#[cfg(windows)]
+impl std::fmt::Debug for JobObjectHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobObjectHandle").finish_non_exhaustive()
+    }
+}
+
+#[cfg(windows)]
+impl Drop for JobObjectHandle {
+    fn drop(&mut self) {
+        // SAFETY: the handle was created by CreateJobObjectW in
+        // make_kill_on_close_job and is only ever closed here.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// Create an unnamed job object marked kill-on-close and put `child` into
+/// it. The handle is NOT inheritable (NULL security attributes), so the
+/// child cannot accidentally keep the job alive itself.
+#[cfg(windows)]
+fn make_kill_on_close_job(child: &Child) -> Result<JobObjectHandle> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    // SAFETY: unnamed job object (both pointers NULL) — cannot fail on
+    // arguments; only resource exhaustion can make it return NULL.
+    let job = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
+    if job.is_null() {
+        return Err(crate::err!(
+            "CreateJobObjectW failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: `job` is a valid job handle; `info` is a properly aligned
+    // struct of exactly the declared information class' size.
+    let ok = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &mut info as *mut _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    if ok == 0 {
+        let e = std::io::Error::last_os_error();
+        // SAFETY: `job` is valid and not yet handed out.
+        unsafe { CloseHandle(job) };
+        return Err(crate::err!("SetInformationJobObject failed: {e}"));
+    }
+    // SAFETY: `job` is a valid job handle; the child raw handle is a valid
+    // process handle owned by `Child` (valid for the lifetime of the call).
+    if unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) } == 0 {
+        let e = std::io::Error::last_os_error();
+        // SAFETY: as above.
+        unsafe { CloseHandle(job) };
+        return Err(crate::err!("AssignProcessToJobObject failed: {e}"));
+    }
+    Ok(JobObjectHandle(job))
 }
 
 #[cfg(test)]
@@ -996,6 +1132,79 @@ mod tests {
             lines.iter().any(|l| l.starts_with("B-")),
             "pump B output missing"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Fake "xray" for the lifecycle tests: ignores its arguments and
+    /// either stays alive 120 s or exits immediately (2026-11-17 audit
+    /// REV-B: the manual-vs-unexpected semantics previously had no direct
+    /// unit test — only indirect coverage via the supervisor rig).
+    #[cfg(unix)]
+    fn write_stub_core(dir: &std::path::Path, immediate_exit: bool) -> PathBuf {
+        let p = dir.join(if immediate_exit {
+            "exit-core.sh"
+        } else {
+            "sleep-core.sh"
+        });
+        let body = if immediate_exit {
+            "#!/bin/sh\nexit 0\n"
+        } else {
+            "#!/bin/sh\nexec sleep 120\n"
+        };
+        fs::write(&p, body).expect("write stub core");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+        p
+    }
+
+    /// stop() is a MANUAL stop: child reaped, running() false, and the
+    /// unexpected-exit flag never flips. child_alive() agrees (2026-11-17
+    /// audit REV-C#1 support).
+    #[test]
+    #[cfg(unix)]
+    fn manual_stop_is_not_an_unexpected_exit() {
+        let tag = unique_tag();
+        let dir = std::env::temp_dir().join(format!("mt-cp-manual-{tag}"));
+        fs::create_dir_all(&dir).unwrap();
+        let bin = write_stub_core(&dir, false);
+
+        let cp = CoreProc::new(&bin, dir.join("cfg.json"), dir.join("logs"));
+        cp.start().expect("spawn sleep core");
+        assert!(cp.running());
+        assert!(cp.child_alive(), "live child must report alive");
+        assert!(!cp.exited_unexpectedly());
+
+        cp.stop();
+        assert!(!cp.running(), "stopped child must be reaped");
+        assert!(!cp.child_alive());
+        assert!(!cp.exited_unexpectedly(), "manual stop is not unexpected");
+        assert!(!cp.exited_unexpectedly(), "flag stays consumed");
+        cp.stop(); // idempotent
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Self-exit: the waiter flips the consumed-once flag exactly once and
+    /// clears the slot; child_alive() observes the death without waiting
+    /// for the 50 ms waiter poll.
+    #[test]
+    #[cfg(unix)]
+    fn self_exit_flips_the_consumed_once_flag() {
+        let tag = unique_tag();
+        let dir = std::env::temp_dir().join(format!("mt-cp-selfexit-{tag}"));
+        fs::create_dir_all(&dir).unwrap();
+        let bin = write_stub_core(&dir, true);
+
+        let cp = CoreProc::new(&bin, dir.join("cfg.json"), dir.join("logs"));
+        cp.start().expect("spawn exit core");
+        // The waiter polls every 50 ms; allow a few seconds.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while cp.running() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!cp.running(), "waiter must reap the self-exited child");
+        assert!(cp.exited_unexpectedly(), "self-exit must flip the flag");
+        assert!(!cp.exited_unexpectedly(), "flag is consumed exactly once");
+        assert!(!cp.child_alive());
         let _ = fs::remove_dir_all(&dir);
     }
 }
