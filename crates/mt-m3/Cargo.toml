@@ -10,6 +10,16 @@ description = "Material You (Material Design 3) design tokens with dynamic color
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
+# Color engine: exact port of Google's material-color-utilities (HCT +
+# dynamic color). Built no_std + libm so floating point results are
+# platform-independent (same seed -> same colors on every target) and the
+# dependency graph stays zero-dep. Do NOT enable its `std` feature in this
+# workspace: `std` and `libm` are mutually exclusive inside the crate.
+[dependencies.material-colors]
+version = "0.5"
+default-features = false
+features = ["libm"]
+
 [features]
 default = []
 iced = ["dep:iced"]

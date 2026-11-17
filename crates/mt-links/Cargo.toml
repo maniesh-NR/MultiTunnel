@@ -13,6 +13,9 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.22"
 tracing = "0.1"
+# Contract-allowed dep list (harness/CONTRACTS-S6.md "Deps allowed"): used
+# for the percent decode/encode policy documented in lib.rs NOTE #3.
+percent-encoding = "2"
 
 [features]
 default = ["fetch"]
@@ -23,3 +26,8 @@ version = "0.12"
 default-features = false
 features = ["rustls-tls"]
 optional = true
+
+[dev-dependencies]
+# Test harness only: fetch_subscription is async (global rule 7), so its
+# offline test needs a runtime. No test ever touches the network.
+tokio = { version = "1", features = ["rt", "macros"] }

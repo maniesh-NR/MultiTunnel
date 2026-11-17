@@ -5,65 +5,105 @@
 //! makes the app self-provisioning (locate → verify → embedded →
 //! download, never silently — D14); autostart; a read-only update check.
 //! sysproxy/elevate stay in the root crate this stage.
+//!
+//! Module map:
+//! * [`dirs`] — config/cache/log/state dirs (hand-rolled, XDG + Windows).
+//! * [`engine`] — `DefaultEngineLocator` (`mt_engine::EngineLocator`),
+//!   `HttpFetch` (test-injectable HTTP), optional embedded engine zip.
+//! * [`autostart`] — launch-on-login (HKCU Run key / XDG autostart).
+//! * [`update`] — read-only "newer release available?" check.
 
-use std::path::PathBuf;
+mod autostart;
+mod dirs;
+mod engine;
+mod update;
 
-/// App config dir (Windows: %APPDATA%\MultiTunnel; Linux:
-/// $XDG_CONFIG_HOME/multitunnel). Env override: MULTITUNNEL_CONFIG_DIR.
-pub fn config_dir() -> PathBuf {
-    todo!("Expert D: implement per harness/CONTRACTS-S6.md")
-}
+pub use autostart::{
+    autostart_disable, autostart_enable, autostart_is_enabled, desktop_entry, run_key_value,
+};
+pub use dirs::{cache_dir, config_dir, log_dir, state_dir};
+pub use engine::{DefaultEngineLocator, HttpFetch, PlatformError};
 
-/// App cache dir (Windows: %LOCALAPPDATA%\MultiTunnel\cache; Linux:
-/// $XDG_CACHE_HOME/multitunnel). Env override: MULTITUNNEL_CACHE_DIR.
-pub fn cache_dir() -> PathBuf {
-    todo!("Expert D: implement per harness/CONTRACTS-S6.md")
-}
+/// The production HTTP fetcher (only present with the default `net` feature).
+#[cfg(feature = "net")]
+pub use engine::ReqwestFetch;
 
-/// Log dir (config_dir/logs). Env override: MULTITUNNEL_LOG_DIR.
-pub fn log_dir() -> PathBuf {
-    todo!("Expert D: implement per harness/CONTRACTS-S6.md")
-}
+/// Engine zip embedded at build time via `MT_EMBED_ENGINE` (feature `embedded`).
+#[cfg(feature = "embedded")]
+pub use engine::embedded;
 
-/// State dir (config_dir/state). Env override: MULTITUNNEL_STATE_DIR.
-pub fn state_dir() -> PathBuf {
-    todo!("Expert D: implement per harness/CONTRACTS-S6.md")
-}
+pub use update::latest_release;
 
-/// The default [`mt_engine::EngineLocator`] (D14 resolution order).
-pub struct DefaultEngineLocator {
-    _private: (),
-}
+/// Shared test helpers: serialized env mutation + scratch dirs.
+///
+/// `cargo test` runs tests in parallel threads; every test that touches
+/// process-global env vars must hold [`test_support::env_lock`]. All
+/// scratch dirs are unique under `std::env::temp_dir()` so no test ever
+/// reads or writes the real `$HOME`.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-impl DefaultEngineLocator {
-    pub fn new() -> Self {
-        Self { _private: () }
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Serialize tests that mutate env vars (poison-tolerant lock).
+    pub(crate) fn env_lock() -> MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
-}
 
-impl Default for DefaultEngineLocator {
-    fn default() -> Self {
-        Self::new()
+    /// Unique scratch directory (never the real `$HOME`).
+    pub(crate) fn temp_root(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let n = PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "mt-platform-test-{label}-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
     }
-}
 
-/// Enable launch-on-login for the app at `app_path`.
-pub fn autostart_enable(app_path: &std::path::Path) -> anyhow::Result<()> {
-    let _ = app_path;
-    todo!("Expert D: implement per harness/CONTRACTS-S6.md")
-}
+    /// Set an env var (test-only). `set_var` is unsafe from edition 2024;
+    /// wrapped here for forward compatibility.
+    pub(crate) fn set_env(var: &str, value: impl AsRef<Path>) {
+        #[allow(deprecated_safe)]
+        unsafe {
+            std::env::set_var(var, value.as_ref())
+        };
+    }
 
-/// Disable launch-on-login.
-pub fn autostart_disable() -> anyhow::Result<()> {
-    todo!("Expert D: implement per harness/CONTRACTS-S6.md")
-}
+    /// Remove an env var (test-only).
+    pub(crate) fn unset_env(var: &str) {
+        #[allow(deprecated_safe)]
+        unsafe {
+            std::env::remove_var(var)
+        };
+    }
 
-/// Is launch-on-login currently enabled?
-pub fn autostart_is_enabled() -> bool {
-    todo!("Expert D: implement per harness/CONTRACTS-S6.md")
-}
+    /// An [`crate::engine::HttpFetch`] fixture answering every URL with the
+    /// same canned body (used by the update-check tests).
+    pub(crate) fn fixture_http(body: Vec<u8>) -> std::sync::Arc<dyn crate::engine::HttpFetch> {
+        std::sync::Arc::new(FixtureHttp { body })
+    }
 
-/// Latest release tag from GitHub, if reachable. Read-only; no auto-apply.
-pub async fn latest_release() -> anyhow::Result<Option<String>> {
-    todo!("Expert D: implement per harness/CONTRACTS-S6.md")
+    struct FixtureHttp {
+        body: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::engine::HttpFetch for FixtureHttp {
+        async fn fetch(&self, _url: &str) -> anyhow::Result<Vec<u8>> {
+            Ok(self.body.clone())
+        }
+    }
 }

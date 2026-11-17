@@ -130,3 +130,53 @@ pub enum ProxyEvent {
         down_bps: u64,
     },
 }
+
+// ---------------------------------------------------------------------------
+// S6-B implementation module map (everything below implements the frozen
+// contract above; public types/signatures are unchanged):
+//
+// - `error`    — thiserror enum (`NetError`) for library-internal errors.
+// - `outbound` — `DirectOutbound` (plain TCP, `Action::Direct`).
+// - `socks5`   — `Socks5Outbound` client (wire discipline ported from the
+//                root crate's `socks_probe`) + RFC 1928 server handshake.
+// - `http`     — HTTP proxy inbound: CONNECT + absolute-form, 431/400/502.
+// - `router`   — ordered first-match rule table (label-boundary suffixes).
+// - `merge`    — pure `pick()`, `Aggregator` (tokio-Mutex healths), EWMA +
+//                quarantine + per-link prober task.
+// - `server`   — `ProxyServer`: listeners, per-connection flow, transparent
+//                retry, live byte counters, broadcast events, graceful
+//                shutdown. The library NEVER creates its own runtime.
+// ---------------------------------------------------------------------------
+
+mod error;
+mod http;
+mod merge;
+mod outbound;
+mod router;
+mod server;
+mod shutdown;
+mod socks5;
+#[cfg(test)]
+mod test_support;
+
+pub use error::NetError;
+pub use merge::{pick, Aggregator, QuarantinePolicy};
+pub use outbound::DirectOutbound;
+pub use router::Router;
+pub use server::ProxyServer;
+pub use socks5::Socks5Outbound;
+
+impl std::fmt::Display for Host {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Host::Domain(d) => f.write_str(d),
+            Host::Ip(ip) => write!(f, "{ip}"),
+        }
+    }
+}
+
+impl std::fmt::Display for TargetAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
+    }
+}

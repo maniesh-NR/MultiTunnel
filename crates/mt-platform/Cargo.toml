@@ -8,6 +8,11 @@ description = "MultiTunnel platform layer: app dirs, engine self-provisioning, a
 
 [dependencies]
 mt-engine = { path = "../mt-engine" }
+# NOTE: the contract deps list omitted async-trait, but global rule 7
+# mandates it for object-safe async traits; the frozen `EngineLocator`
+# trait (mt-engine) is `#[async_trait]`, so the impl needs the same
+# macro. Already in the workspace lock (mt-engine uses it).
+async-trait = "0.1"
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -30,3 +35,7 @@ optional = true
 
 [target."cfg(windows)".dependencies]
 winreg = "0.56"
+
+[dev-dependencies]
+# Tests of the async `ensure()`/`latest_release()` paths need a runtime.
+tokio = { version = "1", features = ["rt", "macros"] }
