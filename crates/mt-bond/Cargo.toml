@@ -1,0 +1,22 @@
+[package]
+name = "mt-bond"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "MultiTunnel stream bonding: framed multiplexing across N VLESS+REALITY carriers (client BondOutbound + mt-merge-server daemon)"
+
+[lib]
+name = "mt_bond"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mt-merge-server"
+path = "src/bin/mt_merge_server.rs"
+
+[dependencies]
+mt-net = { path = "../mt-net" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal"] }
+async-trait = "0.1"
+anyhow = "1"
+tracing = "0.1"

@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mt_service::{MtService, ServiceEvent, ServiceState, SettingsView, StatusSnapshot};
+use mt_service::{ExitInfo, MtService, ServiceEvent, ServiceState, SettingsView, StatusSnapshot};
 use tokio::sync::broadcast;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -292,6 +292,22 @@ pub enum Message {
     AdaptersReverted,
     /// Re-enumerate adapters from the OS.
     AdaptersRefresh,
+    // --- S9: Status screen (server picker, exit probe) ---
+    /// Server picked in the Status dropdown (set active + reconnect).
+    StatusServerPicked(String),
+    /// Run the exit-IP probe through the live tunnel.
+    ExitProbe,
+    /// Exit probe finished.
+    ExitProbed(Result<ExitInfo, String>),
+    // --- S9: Advanced settings ---
+    SocksPortChanged(String),
+    HttpPortChanged(String),
+    MergePortChanged(String),
+    AllowLanToggled(bool),
+    LogLevelPicked(String),
+    BondModePicked(String),
+    ProbeTargetChanged(String),
+    ExitUrlChanged(String),
 }
 
 /// Valid routing rule kinds (matches the mt-net router matcher).
@@ -300,6 +316,12 @@ pub const RULE_KINDS: [&str; 4] = ["domain-suffix", "domain-keyword", "ip-cidr",
 pub const RULE_ACTIONS: [&str; 3] = ["proxy", "direct", "reject"];
 /// Valid merge policies (matches the mt-net aggregator).
 pub const MERGE_POLICIES: [&str; 3] = ["failover", "round-robin", "lowest-latency"];
+/// Valid bond modes (S9): whole-connection spreading vs stream bonding.
+pub const BOND_MODES: [&str; 2] = ["per-connection", "stream"];
+/// Valid log levels (engine + service).
+pub const LOG_LEVELS: [&str; 4] = ["error", "warning", "info", "debug"];
+/// Bandwidth graph window, one sample per Throughput event (1 s ticks).
+pub const RATE_HISTORY_LEN: usize = 120;
 
 /// The GUI view model.
 pub struct App {
@@ -348,6 +370,13 @@ pub struct App {
     pub logs: VecDeque<String>,
     /// Logs level filter.
     pub log_filter: LogFilter,
+    /// Bandwidth graph samples: (up_bps, down_bps) per second, newest last
+    /// (S9 / D19). Cleared on connect/disconnect.
+    pub rate_history: VecDeque<(u64, u64)>,
+    /// Exit probe result for the Status screen (None = never run).
+    pub exit: Option<Result<ExitInfo, String>>,
+    /// An exit probe is in flight.
+    pub exit_probing: bool,
 }
 
 impl App {
@@ -362,6 +391,14 @@ impl App {
             merge_policy: MERGE_POLICIES[0].to_string(),
             autostart: false,
             bonded_adapters: Vec::new(),
+            bond_mode: BOND_MODES[0].to_string(),
+            merge_port: 7443,
+            socks_port: 10808,
+            http_port: 10809,
+            allow_lan: false,
+            log_level: LOG_LEVELS[1].to_string(),
+            probe_target: "connectivitycheck.gstatic.com:80".to_string(),
+            exit_probe_url: "http://ip-api.com/json".to_string(),
         };
         Self {
             theme: MtTheme::from_settings(&settings),
@@ -386,6 +423,9 @@ impl App {
             latency: HashMap::new(),
             logs: VecDeque::new(),
             log_filter: LogFilter::All,
+            rate_history: VecDeque::new(),
+            exit: None,
+            exit_probing: false,
         }
     }
 
@@ -480,6 +520,33 @@ impl App {
         iced::Task::perform(async move { svc.adapters().await }, Message::AdaptersLoaded)
     }
 
+    /// One numeric advanced field: parse (empty = 0), apply to the draft,
+    /// save; invalid input is reported in the settings status line and NOT
+    /// persisted.
+    fn advanced_port_field(
+        &mut self,
+        apply: impl FnOnce(&mut SettingsView, u16),
+        raw: String,
+        label: &str,
+    ) -> iced::Task<Message> {
+        let trimmed = raw.trim().to_string();
+        let parsed: Option<u16> = if trimmed.is_empty() {
+            Some(0)
+        } else {
+            trimmed.parse().ok()
+        };
+        match parsed {
+            Some(v) => {
+                apply(&mut self.settings, v);
+                self.save_settings(self.settings.clone())
+            }
+            None => {
+                self.settings_status = Some(format!("{label}: enter a port number (0-65535)"));
+                iced::Task::none()
+            }
+        }
+    }
+
     fn save_settings(&self, s: SettingsView) -> iced::Task<Message> {
         let svc = Arc::clone(&self.service);
         iced::Task::perform(
@@ -527,7 +594,19 @@ impl App {
                 return self.refresh_status();
             }
             Message::Event(ev) => match ev {
-                ServiceEvent::StateChanged(_) => return self.refresh_status(),
+                ServiceEvent::StateChanged(state) => {
+                    if matches!(
+                        state,
+                        ServiceState::Disconnected
+                            | ServiceState::Connecting
+                            | ServiceState::Failed
+                    ) {
+                        // New session (or none): fresh graph, stale probe gone.
+                        self.rate_history.clear();
+                        self.exit = None;
+                    }
+                    return self.refresh_status();
+                }
                 ServiceEvent::LinkUpdated(link) => {
                     if let Some(s) = self.status.as_mut() {
                         if let Some(slot) = s.links.iter_mut().find(|l| l.name == link.name) {
@@ -537,6 +616,10 @@ impl App {
                 }
                 ServiceEvent::Throughput { up_bps, down_bps } => {
                     self.throughput = Some((up_bps, down_bps));
+                    self.rate_history.push_back((up_bps, down_bps));
+                    while self.rate_history.len() > RATE_HISTORY_LEN {
+                        self.rate_history.pop_front();
+                    }
                 }
                 ServiceEvent::Latency { profile_id, ms } => {
                     self.latency.insert(
@@ -848,6 +931,75 @@ impl App {
             Message::AdaptersRefresh => {
                 self.adapters_status = Some("refreshing…".to_string());
                 return self.load_adapters();
+            }
+            Message::StatusServerPicked(tag) => {
+                let Some(profile) = self.profiles.iter().find(|p| p.tag == tag).cloned() else {
+                    return iced::Task::none();
+                };
+                let was_connected = matches!(
+                    self.status.as_ref().map(|s| s.state),
+                    Some(ServiceState::Connected)
+                );
+                let id = profile.id.clone();
+                let svc = Arc::clone(&self.service);
+                return iced::Task::perform(
+                    async move {
+                        svc.set_active_profile(&id).await?;
+                        if was_connected {
+                            svc.disconnect().await;
+                            svc.connect().await;
+                        }
+                        Ok::<(), String>(())
+                    },
+                    |_| Message::Tick,
+                );
+            }
+            Message::ExitProbe => {
+                if self.exit_probing {
+                    return iced::Task::none();
+                }
+                self.exit_probing = true;
+                let svc = Arc::clone(&self.service);
+                return iced::Task::perform(
+                    async move { svc.exit_probe().await },
+                    Message::ExitProbed,
+                );
+            }
+            Message::ExitProbed(res) => {
+                self.exit_probing = false;
+                if let Err(e) = &res {
+                    util::push_log(&mut self.logs, format!("WARN  exit probe: {e}"));
+                }
+                self.exit = Some(res);
+            }
+            Message::SocksPortChanged(t) => {
+                return self.advanced_port_field(|st, v| st.socks_port = v, t, "SOCKS port");
+            }
+            Message::HttpPortChanged(t) => {
+                return self.advanced_port_field(|st, v| st.http_port = v, t, "HTTP port");
+            }
+            Message::MergePortChanged(t) => {
+                return self.advanced_port_field(|st, v| st.merge_port = v, t, "merge port");
+            }
+            Message::AllowLanToggled(on) => {
+                self.settings.allow_lan = on;
+                return self.save_settings(self.settings.clone());
+            }
+            Message::LogLevelPicked(level) => {
+                self.settings.log_level = level;
+                return self.save_settings(self.settings.clone());
+            }
+            Message::BondModePicked(mode) => {
+                self.settings.bond_mode = mode;
+                return self.save_settings(self.settings.clone());
+            }
+            Message::ProbeTargetChanged(t) => {
+                self.settings.probe_target = t;
+                return self.save_settings(self.settings.clone());
+            }
+            Message::ExitUrlChanged(t) => {
+                self.settings.exit_probe_url = t;
+                return self.save_settings(self.settings.clone());
             }
         }
         iced::Task::none()

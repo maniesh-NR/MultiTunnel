@@ -116,6 +116,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use mt_bond::BondOutbound;
 use mt_links::{parse_share_link, Profile, ProfileStore, Protocol, Security, Transport};
 use mt_net::{
     Action, Host, MergePolicy, Outbound, ProxyEvent, ProxyServer, Router, Rule, RuleMatcher,
@@ -123,8 +124,8 @@ use mt_net::{
 };
 use mt_platform::NetAdapter;
 use mt_service::{
-    AdapterView, LinkStatus, MtService, ProfileView, RuleView, ServiceEvent, ServiceState,
-    SettingsView, StatusSnapshot,
+    AdapterView, ExitInfo, LinkStatus, MtService, ProfileView, RuleView, ServiceEvent,
+    ServiceState, SettingsView, StatusSnapshot,
 };
 use tokio::sync::broadcast;
 
@@ -254,6 +255,7 @@ pub fn engine_specs_for(profile: &Profile, bonded: &[BondedAdapter]) -> Vec<mt_e
             tag: profile.tag.clone(),
             endpoint,
             send_through: None,
+            log_level: None,
         }];
     }
     let mut used_names: Vec<String> = Vec::new();
@@ -277,6 +279,7 @@ pub fn engine_specs_for(profile: &Profile, bonded: &[BondedAdapter]) -> Vec<mt_e
             tag: format!("{} [{}]", profile.tag, name),
             endpoint: endpoint.clone(),
             send_through: Some(a.bind_ip.clone()),
+            log_level: None,
         });
     }
     specs
@@ -291,6 +294,10 @@ pub struct EngineLinkFactory {
     locator: Arc<dyn mt_engine::EngineLocator>,
     state_dir: PathBuf,
     log_dir: PathBuf,
+    /// S9: the engine `loglevel` from Advanced settings, SHARED with the
+    /// service Core (which refreshes it from settings.json at every
+    /// connect; production new() passes the same cell into both).
+    log_level: Arc<RwLock<Option<String>>>,
 }
 
 impl EngineLinkFactory {
@@ -303,7 +310,14 @@ impl EngineLinkFactory {
             locator,
             state_dir,
             log_dir,
+            log_level: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Share the log-level cell with the service Core (production wiring).
+    pub fn shared_log_level(mut self, cell: Arc<RwLock<Option<String>>>) -> Self {
+        self.log_level = cell;
+        self
     }
 }
 
@@ -317,7 +331,12 @@ impl LinkFactory for EngineLinkFactory {
         // Conversion first: a non-convertible profile is a user-facing
         // error (module note 5), not an empty link list.
         endpoint_from_profile(profile).map_err(anyhow::Error::msg)?;
-        let specs = engine_specs_for(profile, bonded);
+        let mut specs = engine_specs_for(profile, bonded);
+        // S9: apply the Advanced-settings log level to every engine spec.
+        let level = wlock(&self.log_level).clone();
+        for spec in &mut specs {
+            spec.log_level = level.clone();
+        }
         if specs.is_empty() {
             anyhow::bail!(
                 "profile {:?}: no engine specs (endpoint conversion failed)",
@@ -502,6 +521,14 @@ impl Default for SettingsFile {
                 merge_policy: "failover".to_string(),
                 autostart: false,
                 bonded_adapters: Vec::new(),
+                bond_mode: "per-connection".to_string(),
+                merge_port: 7443,
+                socks_port: DEFAULT_SOCKS_PORT,
+                http_port: DEFAULT_HTTP_PORT,
+                allow_lan: false,
+                log_level: "warning".to_string(),
+                probe_target: DEFAULT_PROBE_TARGET.to_string(),
+                exit_probe_url: "http://ip-api.com/json".to_string(),
             },
             // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
             // settings.json must carry private-CIDR → direct rules, mirroring
@@ -517,13 +544,31 @@ impl Default for SettingsFile {
 
 impl SettingsFile {
     fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
+        let mut file = match std::fs::read_to_string(path) {
+            Ok(raw) => serde_json::from_str::<SettingsFile>(&raw).unwrap_or_else(|e| {
                 tracing::warn!("settings.json unreadable ({e}); using defaults");
                 Self::default()
             }),
             Err(_) => Self::default(),
+        };
+        // S9 migration: v0.4 persisted socks/http/probe at the TOP LEVEL
+        // (the view did not carry them). Top-level wins on load — it is
+        // what v0.4 actually used at runtime, INCLUDING port 0 ("ephemeral
+        // bind", the test/embedder mode) — then both copies agree.
+        file.settings.socks_port = file.socks_port;
+        file.settings.http_port = file.http_port;
+        if !file.probe_target.trim().is_empty() {
+            file.settings.probe_target = file.probe_target.clone();
         }
+        file
+    }
+
+    /// Persist the view's advanced fields into the legacy top-level slots
+    /// too (v0.4 CLI paths read those; one file, two views, same truth).
+    fn sync_legacy(&mut self) {
+        self.socks_port = self.settings.socks_port;
+        self.http_port = self.settings.http_port;
+        self.probe_target = self.settings.probe_target.clone();
     }
 
     fn save(&self, path: &Path) -> Result<(), Error> {
@@ -590,6 +635,9 @@ fn default_lan_rules() -> Vec<Rule> {
 /// One live connect session (server + its tasks + lifecycle signals).
 struct Session {
     server: Arc<ProxyServer>,
+    /// S9: present when stream bonding engaged — the per-carrier status
+    /// surface AND the owner of the per-adapter engines.
+    bond: Option<Arc<BondOutbound>>,
     shutdown: tokio::sync::watch::Sender<bool>,
     run_handle: tokio::task::JoinHandle<anyhow::Result<()>>,
     pump_handle: tokio::task::JoinHandle<()>,
@@ -601,6 +649,9 @@ struct Session {
 struct Core {
     paths: ServicePaths,
     factory: Arc<dyn LinkFactory>,
+    /// S9: engine loglevel cell shared with the production factory
+    /// (dummy cell when a test factory is injected).
+    engine_log_level: Arc<RwLock<Option<String>>>,
     state: RwLock<ServiceState>,
     events: broadcast::Sender<ServiceEvent>,
     session: Mutex<Option<Session>>,
@@ -666,12 +717,20 @@ impl RealService {
     /// Production constructor: platform paths + engine-backed links.
     pub fn new() -> Self {
         let paths = ServicePaths::from_platform();
-        let factory: Arc<dyn LinkFactory> = Arc::new(EngineLinkFactory::new(
-            Arc::new(mt_platform::DefaultEngineLocator::new()),
-            paths.state_dir.clone(),
-            paths.log_dir.clone(),
-        ));
-        Self::with(paths, factory)
+        let cell: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+        let factory: Arc<dyn LinkFactory> = Arc::new(
+            EngineLinkFactory::new(
+                Arc::new(mt_platform::DefaultEngineLocator::new()),
+                paths.state_dir.clone(),
+                paths.log_dir.clone(),
+            )
+            .shared_log_level(Arc::clone(&cell)),
+        );
+        let mut svc = Self::with(paths, factory);
+        Arc::get_mut(&mut svc.core)
+            .expect("RealService::new owns the only Arc")
+            .engine_log_level = cell;
+        svc
     }
 
     /// Injected paths + link factory (tests, embedders).
@@ -681,6 +740,7 @@ impl RealService {
             core: Arc::new(Core {
                 paths,
                 factory,
+                engine_log_level: Arc::new(RwLock::new(None)),
                 state: RwLock::new(ServiceState::Disconnected),
                 events,
                 session: Mutex::new(None),
@@ -738,6 +798,8 @@ impl RealService {
         let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
 
         let settings = SettingsFile::load(&self.core.paths.settings_file());
+        // S9: refresh the engine log level BEFORE links are built.
+        *wlock(&self.core.engine_log_level) = Some(settings.settings.log_level.clone());
         let store = match self.core.load_store() {
             Ok(s) => s,
             Err(e) => {
@@ -788,8 +850,49 @@ impl RealService {
             settings.rules.clone()
         };
         let router = Router::new(rules);
-        let socks = SocketAddr::from(([127, 0, 0, 1], settings.socks_port));
-        let http = SocketAddr::from(([127, 0, 0, 1], settings.http_port));
+        // S9 (v2rayN parity): allow-LAN swaps the listener bind address.
+        let bind_ip: [u8; 4] = if settings.settings.allow_lan {
+            [0, 0, 0, 0]
+        } else {
+            [127, 0, 0, 1]
+        };
+        let socks = SocketAddr::from((bind_ip, settings.settings.socks_port));
+        let http = SocketAddr::from((bind_ip, settings.settings.http_port));
+
+        // S9 stream bonding (D17): ONE BondOutbound over the per-adapter
+        // engine links — every connection's BYTES are split across the
+        // carriers and merged by mt-merge-server on the tunnel server.
+        // Carriers ride the engines via VLESS targets of 127.0.0.1:<merge
+        // port> (server-side loopback, reached THROUGH each tunnel).
+        let mut bond: Option<Arc<BondOutbound>> = None;
+        let links: Vec<Arc<dyn Outbound>> =
+            if settings.settings.bond_mode == "stream" && !links.is_empty() {
+                let merge_target = TargetAddr {
+                    host: Host::Ip("127.0.0.1".parse().expect("loopback parses")),
+                    port: settings.settings.merge_port,
+                };
+                // The bond keeps its OWN Arc clones of the engines; the
+                // originals stay usable for the per-connection fallback.
+                let candidate = BondOutbound::new(links.clone(), merge_target);
+                match candidate.ensure_carriers(CONNECT_PROBE_BUDGET).await {
+                    Ok(live) => {
+                        self.core.emit(ServiceEvent::LogLine(format!(
+                            "stream bonding active — {live} carrier(s) to the merge daemon"
+                        )));
+                        bond = Some(Arc::clone(&candidate));
+                        vec![candidate as Arc<dyn Outbound>]
+                    }
+                    Err(e) => {
+                        // Never black-hole (D17 §5): per-connection mode.
+                        self.core.emit(ServiceEvent::LogLine(format!(
+                            "stream bonding unavailable ({e}) — per-connection spreading instead"
+                        )));
+                        links
+                    }
+                }
+            } else {
+                links
+            };
         let server = Arc::new(ProxyServer::new(socks, http, links.clone(), router, policy));
         let proxy_events = server.subscribe();
 
@@ -875,6 +978,7 @@ impl RealService {
 
         let session = Session {
             server,
+            bond,
             shutdown: shutdown_tx,
             run_handle,
             pump_handle,
@@ -1109,6 +1213,32 @@ impl Core {
     }
 }
 
+/// Overall budget for one exit-IP probe (D18).
+const EXIT_PROBE_BUDGET: Duration = Duration::from_secs(12);
+
+/// Parse a plain-HTTP probe URL into `(host, port, path)` (D18). Only
+/// `http://` URLs are accepted — by design (no TLS stack in the tree).
+pub fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
+    let rest = url.strip_prefix("http://")?;
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], rest[i..].to_string()),
+        None => (rest, "/".to_string()),
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        // Beware IPv6 literals — this simple parser rejects them (the
+        // stock probe URL is a domain; power users can edit settings).
+        Some((h, p)) => (h, p.parse().ok()?),
+        None => (authority, 80),
+    };
+    if host.is_empty() || host.contains('[') {
+        return None;
+    }
+    Some((host.to_string(), port, path))
+}
+
 /// `host:port` → [`TargetAddr`] (IP literals become [`Host::Ip`]; brackets
 /// for IPv6 are unwrapped by the v0.2 parser we reuse).
 pub fn parse_probe_target(spec: &str) -> Option<TargetAddr> {
@@ -1155,22 +1285,44 @@ impl MtService for RealService {
                 .find(|p| p.id == id)
                 .map(|p| p.tag.clone())
         });
-        let (up_since, server) = {
+        let (up_since, server, bond) = {
             let guard = lock(&self.core.session);
             match guard.as_ref() {
-                Some(s) => (Some(fmt_utc(s.started_at)), Some(Arc::clone(&s.server))),
-                None => (None, None),
+                Some(s) => (
+                    Some(fmt_utc(s.started_at)),
+                    Some(Arc::clone(&s.server)),
+                    s.bond.clone(),
+                ),
+                None => (None, None, None),
             }
         }; // guard dropped before the await below (never hold a std lock
            // across .await — real_service decision #13)
-        let links = match server {
-            Some(server) => server
-                .health_snapshot()
-                .await
-                .iter()
-                .map(|(name, h)| link_status_of(&self.core, name, Some(h)))
-                .collect(),
-            None => Vec::new(),
+           // Stream mode: the Status rows are the BOND CARRIERS (one per
+           // bonded adapter, with wire byte counters + ping RTT). Per-
+           // connection mode keeps the aggregator's health table.
+        let links = if let Some(bond) = bond {
+            bond.carrier_snapshot()
+                .into_iter()
+                .map(|c| LinkStatus {
+                    name: c.name,
+                    ok: c.alive,
+                    latency_ms: c.rtt_ms,
+                    ewma_ms: c.rtt_ms.map(|r| r as f32),
+                    quarantined: !c.alive,
+                    bytes_up: c.bytes_up,
+                    bytes_down: c.bytes_down,
+                })
+                .collect()
+        } else {
+            match server {
+                Some(server) => server
+                    .health_snapshot()
+                    .await
+                    .iter()
+                    .map(|(name, h)| link_status_of(&self.core, name, Some(h)))
+                    .collect(),
+                None => Vec::new(),
+            }
         };
         StatusSnapshot {
             state,
@@ -1199,6 +1351,10 @@ impl MtService for RealService {
             }
             return;
         };
+        // S9: stop the bond's carriers/sweeper before the engines drop.
+        if let Some(bond) = &session.bond {
+            bond.shutdown();
+        }
         let _ = session.shutdown.send(true);
         drop(session.shutdown); // run() also exits when the sender drops
         let _ = session.run_handle.await;
@@ -1328,14 +1484,56 @@ impl MtService for RealService {
     async fn set_settings(&self, settings: SettingsView) -> Result<(), String> {
         let mut file = SettingsFile::load(&self.core.paths.settings_file());
         let autostart_changed = file.settings.autostart != settings.autostart;
+        // Validate the S9 advanced knobs BEFORE persisting (fail loud, no
+        // partial writes). Port 0 = "ephemeral" is legal on BOTH listeners
+        // (the documented test/embedder mode — system proxy is simply
+        // skipped then); two equal NONZERO ports would collide.
+        if settings.socks_port != 0 && settings.socks_port == settings.http_port {
+            return Err("SOCKS and HTTP ports must differ".to_string());
+        }
+        if !matches!(
+            settings.log_level.as_str(),
+            "error" | "warning" | "info" | "debug"
+        ) {
+            return Err(format!("unknown log level {:?}", settings.log_level));
+        }
+        if !matches!(settings.bond_mode.as_str(), "per-connection" | "stream") {
+            return Err(format!("unknown bond mode {:?}", settings.bond_mode));
+        }
+        if parse_http_url(&settings.exit_probe_url).is_none() {
+            return Err(format!(
+                "exit probe URL must be plain http:// ({:?})",
+                settings.exit_probe_url
+            ));
+        }
+        if settings.probe_target.split(':').count() != 2 {
+            return Err(format!(
+                "probe target must be host:port ({:?})",
+                settings.probe_target
+            ));
+        }
+        // These change the LIVE data plane — remember for the restart below.
+        let dataplane_changed = file.settings.socks_port != settings.socks_port
+            || file.settings.http_port != settings.http_port
+            || file.settings.allow_lan != settings.allow_lan
+            || file.settings.bond_mode != settings.bond_mode
+            || file.settings.merge_port != settings.merge_port;
         // Module note 15: `bonded_adapters` belongs to the Adapters screen
         // (`set_bonded_adapters`); a possibly-stale GUI settings copy must
         // never clobber a fresh selection — persist the server-side value.
         let mut settings = settings;
         settings.bonded_adapters = file.settings.bonded_adapters.clone();
         file.settings = settings.clone();
+        file.sync_legacy();
         file.save(&self.core.paths.settings_file())
             .map_err(|e| e.to_string())?;
+        if dataplane_changed && self.core.get_state() == ServiceState::Connected {
+            self.core.emit(ServiceEvent::LogLine(
+                "data-plane settings changed — reconnecting".into(),
+            ));
+            self.disconnect().await;
+            self.connect().await;
+        }
         if autostart_changed {
             let exe = std::env::current_exe()
                 .map_err(|e| Error(format!("resolve executable: {e}")))
@@ -1409,6 +1607,94 @@ impl MtService for RealService {
             _ => {}
         }
         Ok(())
+    }
+
+    async fn exit_probe(&self) -> Result<ExitInfo, String> {
+        // 1. Must ride the LIVE session (the whole point is the tunnel's
+        //    egress as the internet sees it, D18).
+        let socks_addr = {
+            let guard = lock(&self.core.session);
+            let Some(s) = guard.as_ref() else {
+                return Err("not connected".to_string());
+            };
+            s.server
+                .socks_local_addr()
+                .ok_or_else(|| "no local listener".to_string())?
+        };
+        let store = self.core.load_store_lossy();
+        let Some(profile) = store
+            .active
+            .as_deref()
+            .and_then(|id| store.profiles.iter().find(|p| p.id == id))
+            .cloned()
+        else {
+            return Err("no active profile".to_string());
+        };
+        let settings = SettingsFile::load(&self.core.paths.settings_file());
+        let url = settings.settings.exit_probe_url;
+        let (host, port, path) =
+            parse_http_url(&url).ok_or_else(|| format!("invalid exit probe URL {url:?}"))?;
+        // 2. SOCKS CONNECT through the live local listener, then a plain
+        //    HTTP/1.1 GET (no TLS stack — zero-dep rule; the client→server
+        //    leg is REALITY-encrypted and the payload is only an IP echo).
+        let target = TargetAddr {
+            host: if let Ok(ip) = host.parse() {
+                Host::Ip(ip)
+            } else {
+                Host::Domain(host.clone())
+            },
+            port,
+        };
+        let probe = async {
+            let outbound = mt_net::Socks5Outbound::new(socks_addr);
+            let mut stream = outbound.connect(&target).await?;
+            let req = format!(
+                "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: MultiTunnel/0.5\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+            );
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            stream.write_all(req.as_bytes()).await?;
+            let mut buf = Vec::new();
+            stream.read_to_end(&mut buf).await?;
+            Ok::<Vec<u8>, anyhow::Error>(buf)
+        };
+        let body = tokio::time::timeout(EXIT_PROBE_BUDGET, probe)
+            .await
+            .map_err(|_| "exit probe timed out".to_string())?
+            .map_err(|e| format!("exit probe failed: {e}"))?;
+        // 3. Body = everything after the blank line.
+        let text = String::from_utf8_lossy(&body);
+        let payload = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b)
+            .unwrap_or(text.as_ref());
+        let json: serde_json::Value = serde_json::from_str(payload.trim_start_matches('\u{feff}'))
+            .map_err(|e| format!("exit probe response not JSON: {e}"))?;
+        let field = |k: &str| {
+            json.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let exit_ip = field("query");
+        if exit_ip.is_empty() {
+            return Err("exit probe response carried no IP".to_string());
+        }
+        // 4. Direct-exit verdict: the exit IP should BE the profile server.
+        //    A domain profile is resolved locally for the comparison.
+        let server_endpoint = format!("{}:{}", profile.address, profile.port);
+        let direct = exit_ip == profile.address
+            || std::net::ToSocketAddrs::to_socket_addrs(&server_endpoint)
+                .map(|addrs| addrs.map(|a| a.ip().to_string()).any(|ip| ip == exit_ip))
+                .unwrap_or(false);
+        Ok(ExitInfo {
+            exit_ip,
+            country: field("country"),
+            city: field("city"),
+            isp: field("isp"),
+            asn: field("as"),
+            server_endpoint,
+            direct_exit: direct,
+        })
     }
 
     fn events(&self) -> broadcast::Receiver<ServiceEvent> {
@@ -1566,6 +1852,14 @@ mod tests {
                 merge_policy: "failover".to_string(),
                 autostart: false,
                 bonded_adapters: Vec::new(),
+                bond_mode: "per-connection".to_string(),
+                merge_port: 7443,
+                socks_port: DEFAULT_SOCKS_PORT,
+                http_port: DEFAULT_HTTP_PORT,
+                allow_lan: false,
+                log_level: "warning".to_string(),
+                probe_target: DEFAULT_PROBE_TARGET.to_string(),
+                exit_probe_url: "http://ip-api.com/json".to_string(),
             },
             rules: Vec::new(),
             socks_port: 0,
@@ -1574,6 +1868,239 @@ mod tests {
         };
         std::fs::create_dir_all(&paths.config_dir).expect("config dir");
         file.save(&paths.settings_file()).expect("save settings");
+    }
+
+    /// A fake exit-echo HTTP server (D18): answers any GET with a fixed
+    /// JSON identity document and closes.
+    async fn spawn_exit_echo(query_ip: &'static str) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind exit echo");
+        let addr = listener.local_addr().expect("exit addr");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                    let mut buf = vec![0u8; 2048];
+                    let _ = stream.read(&mut buf).await; // drain the request head
+                    let body = format!(
+                        "{{\"query\":\"{query_ip}\",\"country\":\"Testland\",\"city\":\"Mock City\",\"isp\":\"Example Telecom\",\"as\":\"AS64512 Example Telecom\"}}"
+                    );
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        addr
+    }
+
+    /// A local merge daemon for stream-mode tests (real mt-bond daemon on
+    /// loopback; the guard keeps it alive for the test body).
+    async fn spawn_merge_daemon() -> (SocketAddr, tokio::sync::watch::Sender<bool>) {
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind daemon probe");
+        let addr = probe.local_addr().expect("daemon addr");
+        drop(probe);
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(mt_bond::daemon::serve(addr, rx));
+        for _ in 0..100 {
+            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                return (addr, tx);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("merge daemon listener never came up");
+    }
+
+    #[test]
+    fn parse_http_url_accepts_and_rejects() {
+        assert_eq!(
+            parse_http_url("http://ip-api.com/json"),
+            Some(("ip-api.com".to_string(), 80, "/json".to_string()))
+        );
+        assert_eq!(
+            parse_http_url("http://example.org:8080"),
+            Some(("example.org".to_string(), 8080, "/".to_string()))
+        );
+        assert_eq!(
+            parse_http_url("http://example.org:8080/a/b?x=1"),
+            Some(("example.org".to_string(), 8080, "/a/b?x=1".to_string()))
+        );
+        assert_eq!(
+            parse_http_url("https://ip-api.com/json"),
+            None,
+            "TLS is out of scope"
+        );
+        assert_eq!(parse_http_url("ip-api.com/json"), None, "scheme required");
+        assert_eq!(parse_http_url("http://"), None);
+        assert_eq!(parse_http_url("http://host:notaport/"), None);
+    }
+
+    #[tokio::test]
+    async fn exit_probe_reports_identity_and_verdict() {
+        // The exit-echo server doubles as the fake link's dial target, so
+        // the probe rides the whole path: local SOCKS → link → exit.
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("exitprobe");
+        write_settings(&paths, exit.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.exit_probe_url = format!("http://127.0.0.1:{}/json", exit.port());
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+
+        // Not connected → refused.
+        assert_eq!(svc.exit_probe().await.unwrap_err(), "not connected");
+
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+
+        // The synthetic profile points at 203.0.113.10 — the exit
+        // (127.0.0.1) differs → extra-hop verdict.
+        let info = svc.exit_probe().await.expect("probe");
+        assert_eq!(info.exit_ip, "127.0.0.1");
+        assert_eq!(info.country, "Testland");
+        assert_eq!(info.city, "Mock City");
+        assert_eq!(info.isp, "Example Telecom");
+        assert!(info.asn.contains("AS64512"));
+        assert_eq!(info.server_endpoint, "203.0.113.10:443");
+        assert!(
+            !info.direct_exit,
+            "203.0.113.10 profile must NOT match a 127.0.0.1 exit"
+        );
+        svc.disconnect().await;
+    }
+
+    #[tokio::test]
+    async fn exit_probe_direct_exit_matches_loopback_profile() {
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("exitdirect");
+        write_settings(&paths, exit.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.exit_probe_url = format!("http://127.0.0.1:{}/json", exit.port());
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        // A profile whose server IS 127.0.0.1 → direct verdict.
+        let local_link = VLESS_REALITY.replace("@203.0.113.10:", "@127.0.0.1:");
+        let view = svc.import_link(&local_link).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+        svc.connect().await;
+        let info = svc.exit_probe().await.expect("probe");
+        assert!(
+            info.direct_exit,
+            "the loopback profile matches the loopback exit"
+        );
+        assert_eq!(info.server_endpoint, "127.0.0.1:443");
+        svc.disconnect().await;
+    }
+
+    #[tokio::test]
+    async fn stream_bond_mode_connects_and_carries_traffic() {
+        let (daemon, _guard) = spawn_merge_daemon().await;
+        let echo = spawn_echo().await;
+        let paths = scratch("streambond");
+        write_settings(&paths, echo.port(), false);
+        // Stream mode: the fake links dial the DAEMON (in production the
+        // engines' VLESS connections land there through the tunnel).
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.bond_mode = "stream".to_string();
+        file.settings.merge_port = daemon.port();
+        file.save(&paths.settings_file()).expect("save settings");
+
+        // NOTE: synthetic bonded-adapter ids are SKIPPED by resolve_bonded
+        // (they are not real adapters on this machine), so the factory
+        // builds exactly ONE unbound link — the bond therefore rides ONE
+        // carrier here. Multi-carrier coverage lives in mt-bond's own
+        // integration tests (two fake links).
+
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: daemon,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+        svc.connect().await;
+        assert_eq!(
+            svc.status().await.state,
+            ServiceState::Connected,
+            "stream mode must connect when the daemon is reachable"
+        );
+
+        // Status rows are BOND CARRIERS now (D19): the fake factory's one
+        // link became one carrier named after it.
+        let status = svc.status().await;
+        assert!(
+            status.links.len() == 1,
+            "one carrier row expected, got {:?}",
+            status.links
+        );
+        assert_eq!(status.links[0].name, "fake-0");
+        assert!(status.links[0].ok, "carrier healthy");
+        // Traffic through the bond: SOCKS CONNECT to the echo target.
+        let (socks, _) = svc.session_addrs();
+        let socks = socks.expect("socks bound");
+        let outbound = mt_net::Socks5Outbound::new(socks);
+        let target = TargetAddr {
+            host: Host::Ip("127.0.0.1".parse().unwrap()),
+            port: echo.port(),
+        };
+        let mut stream = outbound.connect(&target).await.expect("socks connect");
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        stream.write_all(b"bonded hello").await.expect("write");
+        stream.shutdown().await.expect("shutdown");
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.expect("read");
+        assert_eq!(buf, b"bonded hello", "echo must survive the bond");
+
+        svc.disconnect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn stream_bond_falls_back_when_daemon_unreachable() {
+        // merge port with nothing listening: connect must still succeed
+        // (per-connection fallback, D17 §5) and log the fallback.
+        let echo = spawn_echo().await;
+        let paths = scratch("streamfallback");
+        write_settings(&paths, echo.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.bond_mode = "stream".to_string();
+        file.settings.merge_port = 9; // discard port — nothing listens
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(paths, Arc::new(FakeFactory { echo, fail: false }));
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+        svc.connect().await;
+        assert_eq!(
+            svc.status().await.state,
+            ServiceState::Connected,
+            "fallback must never black-hole the tunnel"
+        );
+        svc.disconnect().await;
     }
 
     #[tokio::test]
@@ -1664,6 +2191,14 @@ mod tests {
             merge_policy: "lowestlatency".to_string(),
             autostart: false,
             bonded_adapters: Vec::new(),
+            bond_mode: "per-connection".to_string(),
+            merge_port: 7443,
+            socks_port: 0, // ephemeral — tests never bind fixed ports
+            http_port: 0,
+            allow_lan: false,
+            log_level: "warning".to_string(),
+            probe_target: "connectivitycheck.gstatic.com:80".to_string(),
+            exit_probe_url: "http://ip-api.com/json".to_string(),
         };
         svc.set_settings(view.clone()).await.expect("save settings");
         assert_eq!(svc.settings().await, view);

@@ -143,6 +143,47 @@ certificate the REALITY handshake borrows), `PORT` (default `8443`), `DEST`
 all credentials). The REALITY private key is written only to the server
 config; the script never prints it and it never leaves the VM.
 
+## Stream bonding (v0.5) — one logical connection across adapters
+
+Per-connection spreading (since v0.3) assigns each TCP connection to ONE
+link. Stream bonding splits the BYTES of every connection across ALL
+bonded adapters and merges them on the server — the net-merge promise at
+stream granularity:
+
+- The client runs one carrier per bonded adapter: an ordinary
+  VLESS+REALITY connection (per-adapter engine, `sendThrough` pinned)
+  whose target is the merge daemon on the server (`127.0.0.1:<merge
+  port>`, reached through the tunnel). No new ports are exposed.
+- `mt-bond` frames the streams (24-byte headers: HELLO/OPEN/DATA/CLOSE/
+  ACK/PING/PONG), stripes DATA frames round-robin across carriers,
+  reorders per session, and replays unacked frames on a carrier that
+  dies — a Wi-Fi drop mid-download costs zero bytes. Cumulative ACKs
+  bound the replay window; TCP-native backpressure provides flow control.
+- `mt-merge-server` (the daemon, installed by
+  `server/setup-merge-daemon.sh`) accepts the carriers, re-merges each
+  session in order, dials the real target, and splits the reverse
+  traffic back across all carriers.
+- Bonding mode is a setting: `per-connection` (default, no server
+  changes) or `stream`. Stream mode falls back to per-connection with a
+  log line when the daemon is unreachable — never a black hole.
+
+The Status tab verifies the whole path live: one row per carrier (RTT,
+wire bytes), a Task-Manager-style bandwidth graph scaled to the window,
+and the Exit identity card (see below).
+
+## Exit identity (v0.5) — no hidden hops, verifiable in one click
+
+The Status tab's "Check exit IP" rides the live tunnel and reports the
+exit IP with geo/ISP plus a verdict against the active profile's server:
+
+- exit == server -> single hop. MultiTunnel never inserts intermediary
+  servers: each adapter's engine dials the profile endpoint directly.
+- exit != server -> the exit is the SERVER's own egress (e.g. a VPN on
+  the VM — the documented ProtonVPN scenario in
+  `server/setup-xray-reality.sh`). If you expected the GCP IP and see a
+  VPN provider's ASN instead, that is the VM's default route, not an
+  added hop.
+
 ## The v0.3 way: GUI + profiles (recommended)
 
 1. Double-click `multitunnel.exe` — since v0.3.1 the bare launch IS the

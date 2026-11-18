@@ -428,6 +428,14 @@ mod tests {
             merge_policy: "failover".into(),
             autostart: false,
             bonded_adapters: Vec::new(),
+            bond_mode: "per-connection".into(),
+            merge_port: 7443,
+            socks_port: 10808,
+            http_port: 10809,
+            allow_lan: false,
+            log_level: "warning".into(),
+            probe_target: String::new(),
+            exit_probe_url: String::new(),
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);

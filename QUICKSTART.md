@@ -98,11 +98,53 @@ from a terminal) is the first stop for clues.
 ## Step 4 (optional) — multi-server profiles and bonding
 
 - Add as many `vless://` links as you like on the Servers screen and switch
-  the active profile with one click (`profiles use` / `profiles export` on
-  the CLI). Latency tests run per profile from the Servers screen.
-- The v0.3 data plane bonds multiple links in-process (failover or
+  the active profile with one click — or with the server dropdown on the
+  Status tab (switching while connected reconnects automatically).
+  Latency tests run per profile from the Servers screen.
+- The data plane bonds multiple links in-process (failover, round-robin or
   lowest-latency merge policy in Settings). The legacy external net-merge
   tool is no longer needed; see the appendix if you used it with v0.2.
+
+## Step 5 (optional) — stream bonding: one connection, split across adapters
+
+Per-connection spreading (Step 4) sends each TCP connection down ONE
+adapter. Stream bonding (v0.5) goes further — exactly what the net-merge
+promise means at stream granularity: the system sends and receives as if
+it used one connection, the BYTES of every connection are split across
+the bonded adapters, and the server merges them into single requests
+again. Reverse traffic is split the same way back.
+
+1. On the VM, install the merge daemon (one command, downloads the
+   release binary and registers a systemd service):
+   `sudo ./server/setup-merge-daemon.sh`
+   (it listens on 127.0.0.1:7443 — loopback only, never exposed).
+2. In MultiTunnel: Settings -> Advanced -> bonding mode = "stream"
+   (leave the merge port at 7443 unless you changed it on the VM).
+3. Adapters tab: tick the adapters to bond, Apply, connect.
+
+The Status tab then shows one row per bonded adapter (carrier) with live
+RTT and byte counters. If the daemon is not reachable, MultiTunnel logs
+`stream bonding unavailable` and falls back to per-connection spreading —
+the tunnel never goes down because of a daemon problem. A carrier that
+dies mid-stream (Wi-Fi drop) is replayed on the surviving carriers: no
+bytes are lost.
+
+## Step 6 — verify your exit (the Status tab's Exit identity card)
+
+"Check exit IP" answers the classic "which server am I actually exiting
+through?" question in one click: it rides the live tunnel and shows the
+exit IP, its country/city/ISP, and a verdict.
+
+- `single hop — the exit IS your server` — the exit matches your profile's
+  endpoint. There are no hidden hops: MultiTunnel adds none, ever.
+- `extra egress hop` — the exit differs from your server. This is NOT a
+  MultiTunnel hop: it means the server's OWN outbound egress goes through
+  something else (typically a VPN on the VM, e.g. ProtonVPN — see the
+  appendix below). If the exit ISP is not what you expect, check the VM.
+
+The bandwidth graph above it plots the last two minutes of up/down
+throughput, one sample per second, and scales with the window (Task
+Manager style).
 
 ## Appendix — the legacy v0.2 path (config.json + tray)
 

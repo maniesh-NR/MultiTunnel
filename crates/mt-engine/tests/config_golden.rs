@@ -23,6 +23,7 @@ fn spec() -> EngineSpec {
             spider_x: None,
         },
         send_through: None,
+        log_level: None,
     }
 }
 
@@ -145,4 +146,24 @@ fn send_through_binds_the_outbound_to_a_local_address() {
     });
     let parsed: EngineSpec = serde_json::from_value(legacy).expect("legacy spec deserializes");
     assert_eq!(parsed.send_through, None);
+}
+
+/// S9: the Advanced-settings log level lands in the generated config;
+/// unknown values fall back to "warning" (fail-safe).
+#[test]
+fn log_level_passes_through_or_falls_back() {
+    let mut debug_spec = spec();
+    debug_spec.log_level = Some("debug".into());
+    assert_eq!(
+        generate_config(&debug_spec, listen())["log"]["loglevel"],
+        "debug"
+    );
+
+    let mut garbage_spec = spec();
+    garbage_spec.log_level = Some("verbose-trace-extra".into());
+    assert_eq!(
+        generate_config(&garbage_spec, listen())["log"]["loglevel"],
+        "warning",
+        "unknown levels must fail safe to warning"
+    );
 }

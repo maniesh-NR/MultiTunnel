@@ -76,6 +76,11 @@ pub struct EngineSpec {
     /// them. `#[serde(default)]` keeps old serialized specs loading.
     #[serde(default)]
     pub send_through: Option<String>,
+    /// S9 (Advanced settings): the child's Xray `loglevel`
+    /// ("error" | "warning" | "info" | "debug"). `None` = "warning" (the
+    /// proven default). `#[serde(default)]` keeps old specs loading.
+    #[serde(default)]
+    pub log_level: Option<String>,
 }
 
 /// Where the xray binary comes from. Implemented by mt-platform
@@ -139,8 +144,14 @@ pub fn generate_config(spec: &EngineSpec, socks_listen: SocketAddr) -> serde_jso
     if let Some(ip) = send_through {
         outbound["sendThrough"] = json!(ip);
     }
+    let loglevel = spec
+        .log_level
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| matches!(*v, "error" | "warning" | "info" | "debug"))
+        .unwrap_or("warning");
     json!({
-        "log": { "loglevel": "warning" },
+        "log": { "loglevel": loglevel },
         "inbounds": [{
             "tag": "socks-in",
             "listen": socks_listen.ip().to_string(),

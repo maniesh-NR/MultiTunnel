@@ -164,3 +164,46 @@ unbound engine — bonding had no adapter surface at all. S8 rules:
    decides). GUI: new "Adapters" screen (checkbox rows + IPv4/up chips,
    Apply/Revert/Refresh — the Routing-editor draft idiom); CLI:
    `multitunnel adapters` prints the same view for headless diagnosis.
+## D17 — Stream bonding protocol (S9, 2026-11-18): mt-bond framing over N REALITY carriers
+User want: one logical connection, bytes split across the bonded adapters,
+re-merged at the server; reverse symmetric. Design:
+1. TRANSPORT: each adapter keeps its per-adapter engine (D16); a CARRIER is
+   one long-lived connection dialed through one engine whose VLESS target is
+   `127.0.0.1:<merge_port>` ON THE SERVER — server Xray (freedom) pipes it to
+   the `mt-merge-server` daemon. REALITY/vision unchanged per carrier.
+2. FRAMING: fixed 24-byte little-endian header (magic 0x4D54, version 1,
+   kind, bond_id u32, session u32, seq u64, len u32) + payload; kinds
+   HELLO/OPEN/DATA/CLOSE/ACK/PING/PONG; DATA ≤ 16 KiB. Carriers are plain
+   byte streams — framing is end-to-end between client bond engine and the
+   daemon, invisible to Xray.
+3. RELIABILITY: per-session cumulative ACKs; sender keeps unacked frames;
+   carrier death (write err / EOF / pong timeout) replays unacked frames on
+   live carriers; receiver reorders (drop dupes, buffer gaps, stall-close at
+   10 s). Backpressure is TCP-native: bounded demux channels → reader blocks
+   → carrier socket buffers fill → sender stalls (no windowing protocol).
+4. SCHEDULING: round-robin across live carriers (predictable even split —
+   exactly what the user asked); per-carrier PING RTT EWMA powers health +
+   the Status rows; weighted scheduling is future work.
+5. FALLBACK: `bond_mode=stream` with <2 usable carriers → per-connection
+   mode + LogLine (never black-hole).
+6. DAEMON: loopback-only (127.0.0.1) — authentication is REALITY+UUID at
+   the Xray edge; no extra secret in v0.5, documented.
+
+## D18 — Exit probe: plain HTTP inside the tunnel (S9, 2026-11-18)
+`exit_probe()` rides the LIVE session: SOCKS CONNECT (through the local
+listener) to `ip-api.com:80` + hand-rolled HTTP/1.1 GET, parse
+{query,country,city,isp,as}. Plain HTTP is deliberate: the client→server leg
+is REALITY-encrypted, and the last hop carries only the echo payload — no
+TLS stack enters the tree (zero-dep rule). The Status card compares the
+measured exit against the profile endpoint and calls out mismatches (the
+GCP-VM-VPN-egress case: exit ISP ≠ Google → server-side egress explanation,
+NOT a hidden MultiTunnel hop).
+
+## D19 — Status tab becomes a live dashboard (S9, 2026-11-18)
+1. Bandwidth graph = iced canvas, 120 s ring of (up_bps, down_bps) 1 s
+   samples from ProxyEvent::Tick; Fill-sized (grows with the window, Task
+   Manager style); auto-scaled axes; theme-aware; down=primary, up=tertiary.
+2. Server picker = pick_list over profile tags; changing it while connected
+   = set_active + automatic reconnect.
+3. Status screen leaves the global scrollable (fixed state card + graph
+   Fill + links scrollable) so the graph can scale with the window.

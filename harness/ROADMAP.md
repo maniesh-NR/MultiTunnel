@@ -197,6 +197,68 @@ Delivered (see D16 + LEDGER):
 Gates: 335 tests / 0 failed, clippy + fmt clean, zigbuild green,
 `gui --smoke` 6/6 views. Tagged v0.4.0.
 
+## S9 — Stream bonding (true per-stream split) + live graph + server picker + advanced settings (v0.5.0)
+
+User report 2026-11-18: (a) exit IP shows Singapore 103.216.221.95 — "are there
+any additional server hops? I want each adapter to connect directly to the GCP
+server via v2ray reality"; (b) "the system sends and receives as if it is using
+one connection; this traffic is split across the two adapters who send it via
+v2ray reality to the GCP server where it is merged as a single request again —
+same in reverse"; (c) real-time bandwidth graph on the Status tab that scales
+with the window (Task Manager style); (d) server selector dropdown on the
+Status tab; (e) more advanced settings from v2rayN and net-merge.
+
+Hop analysis (answered with evidence): MultiTunnel adds ZERO server hops —
+each per-adapter engine dials the profile's VLESS+REALITY endpoint directly.
+103.216.221.95 is Host Universal Pty Ltd (ASN 136557, Singapore — a VPN
+provider range), i.e. the GCP VM's own VPN egress (the setup script's
+documented ProtonVPN scenario: freedom outbound rides the VM default route).
+The in-app Exit Probe (Status tab) makes this verifiable live: exit IP +
+geo + ISP vs the profile endpoint.
+
+Delivered (D17–D19):
+- `crates/mt-bond` (Expert: stream-bonding): 24-byte framed multiplexing
+  protocol (HELLO/OPEN/DATA/CLOSE/ACK/PING/PONG), per-session reordering,
+  cumulative-ACK replay on carrier death, round-robin frame scheduling
+  across carriers, per-carrier RTT/byte stats. Client `BondOutbound`
+  (implements `mt_net::Outbound` — ProxyServer unchanged) + server
+  `mt-merge-server` daemon (loopback listener; carriers arrive via Xray
+  VLESS → freedom → 127.0.0.1:<merge_port>).
+- Bonding mode setting: `per-connection` (S8 default) vs `stream`; stream
+  mode falls back to per-connection with a log line when carriers cannot
+  be established (no daemon / single link).
+- GUI Status: server pick_list (hot-switch reconnects), canvas bandwidth
+  graph (window-scaling, up/down series), Exit Probe card.
+- GUI Settings → Advanced: SOCKS/HTTP ports, allow-LAN bind, engine log
+  level, probe target, bond mode + merge port (v2rayN/net-merge parity).
+- Server: `server/setup-merge-daemon.sh` + systemd unit; release.yml gains
+  an ubuntu leg building the Linux `mt-merge-server` artifact.
+
+Acceptance: all 5 gates green workspace-wide; mt-bond integration tests
+(loopback daemon + 2 fake links: echo integrity, carrier-death failover,
+1 MiB blob hash, concurrent sessions); zigbuild PE32+ x3 + Linux daemon
+PE/ELF verified; gui --smoke 6/6; docs refreshed; v0.5.0 tagged + released.
+
+> S9 CLOSED 2026-11-18: single-implementation with orchestrator audit
+> (S8 precedent). Delivered: crates/mt-bond (frame codec, reorder buffer,
+> endpoint with round-robin carriers + cumulative-ACK replay + keepalives,
+> BondOutbound, mt-merge-server daemon) — 22 tests incl. full loopback
+> integration (1 MiB echo integrity across BOTH carriers, carrier-death
+> failover with zero byte loss, concurrent sessions, refused/one-dead-link
+> fallback); RealService stream-mode wiring with per-connection fallback;
+> exit probe (SOCKS→plain-HTTP ip-echo, D18) + verdict; carrier rows in
+> status; engine log level; GUI: server pick_list, window-scaling canvas
+> bandwidth graph, exit identity card, Advanced settings card; server
+> setup-merge-daemon.sh + systemd unit; release.yml ubuntu daemon leg
+> (x86_64 + aarch64). Gates: fmt clean, clippy host+windows-gnu -D
+> warnings clean, 356 workspace tests 0 failed, zigbuild PE32+ x4,
+> gui --smoke 6 ticks/6 views, linux daemon ELF smoke (listens 127.0.0.1).
+> Mid-stage protocol fix found by the integration tests: CLOSE was
+> fire-and-forget and could OVERTAKE in-flight DATA on another carrier —
+> replaced with ack-flush-then-CLOSE + asymmetric half-close semantics
+> (client CLOSE(Eof) = write-close; daemon CLOSE = final) so a lost tail
+> is impossible. v0.5.0 tagged + released.
+
 ## S7 — Native REALITY core (parked)
 
 Pure-Rust VLESS+REALITY+vision client (hand-rolled TLS 1.3 with Chrome

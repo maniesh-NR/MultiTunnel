@@ -1,6 +1,6 @@
 [package]
 name = "multitunnel"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
 description = "Windows supervisor that combines an Xray VLESS+REALITY tunnel with net-merge multi-link bonding"
@@ -38,6 +38,7 @@ anyhow = "1"
 tracing = "0.1"
 
 mt-service = { path = "crates/mt-service" }
+mt-bond = { path = "crates/mt-bond" }
 mt-links = { path = "crates/mt-links" }
 mt-net = { path = "crates/mt-net" }
 mt-engine = { path = "crates/mt-engine" }

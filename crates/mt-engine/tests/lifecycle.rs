@@ -51,6 +51,7 @@ fn spec(tag: &str) -> EngineSpec {
             spider_x: None,
         },
         send_through: None,
+        log_level: None,
     }
 }
 

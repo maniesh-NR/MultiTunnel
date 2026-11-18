@@ -14,9 +14,10 @@ use iced::{Length, Padding};
 use mt_service::{ProfileView, ServiceState};
 
 use crate::app::{
-    App, LatencyState, LogFilter, Message, RuleRow, Screen, MERGE_POLICIES, RULE_ACTIONS,
-    RULE_KINDS,
+    App, LatencyState, LogFilter, Message, RuleRow, Screen, BOND_MODES, LOG_LEVELS, MERGE_POLICIES,
+    RATE_HISTORY_LEN, RULE_ACTIONS, RULE_KINDS,
 };
+use crate::graph::{RateGraph, RateGraphStyle};
 use crate::theme as t3;
 use crate::util;
 use crate::Element;
@@ -46,6 +47,28 @@ pub fn nav_rail(app: &App) -> Element<'_> {
         .into()
 }
 
+/// Screen scaffold WITHOUT the scrollable (Status): the bandwidth graph
+/// must scale with the window, so the column owns Fill heights and only
+/// the links list scrolls internally (D19 §3).
+fn scaffold_fixed<'a>(app: &'a App, title: &'a str, body: Element<'a>) -> Element<'a> {
+    let ts = app.theme.ts;
+    let inner = column![
+        text(title)
+            .size(ts.headline_s.size)
+            .color(app.theme.scheme.on_background),
+        body,
+    ]
+    .spacing(16)
+    .width(Length::Fill)
+    .height(Length::Fill);
+    container(inner)
+        .padding(24)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .max_width(980)
+        .into()
+}
+
 /// Screen scaffold: headline + body column, scrollable.
 fn scaffold<'a>(app: &'a App, title: &'a str, body: Element<'a>) -> Element<'a> {
     let s = app.theme.scheme;
@@ -65,6 +88,12 @@ fn scaffold<'a>(app: &'a App, title: &'a str, body: Element<'a>) -> Element<'a> 
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+/// A color at reduced opacity (graph fills / grid).
+fn translucent(mut c: iced::Color, a: f32) -> iced::Color {
+    c.a = a;
+    c
 }
 
 /// A chip: small rounded container with a label.
@@ -118,7 +147,10 @@ enum ButtonKind {
 // Status
 // ---------------------------------------------------------------------------
 
-/// Status screen: big state card + connect switch + links + throughput.
+/// Status screen (S9 / D19): state card + server picker, live bandwidth
+/// graph (window-scaling, Task-Manager style), exit probe card, links.
+/// No outer scrollable — the graph grows with the window; the links list
+/// scrolls internally.
 pub fn status(app: &App) -> Element<'_> {
     let s = app.theme.scheme;
     let ts = app.theme.ts;
@@ -148,6 +180,28 @@ pub fn status(app: &App) -> Element<'_> {
         format!("up since {since}   ·   restarts: {}", x.restarts)
     });
 
+    // --- server picker (D19 §2) -------------------------------------------
+    let active_tag = snap
+        .as_ref()
+        .and_then(|x| x.active_profile.clone())
+        .unwrap_or_default();
+    let tags: Vec<String> = app.profiles.iter().map(|p| p.tag.clone()).collect();
+    let selected = tags.iter().find(|t| **t == active_tag).cloned();
+    let picker = pick_list(tags.clone(), selected, |t: String| {
+        Message::StatusServerPicked(t)
+    })
+    .width(Length::Fixed(260.0))
+    .padding(6)
+    .style(t3::pick_list_style(s))
+    .menu_style(t3::menu_style(s));
+    let picker_label = if tags.is_empty() {
+        "no servers — add one on the Servers tab".to_string()
+    } else if active_tag.is_empty() {
+        "pick a server".to_string()
+    } else {
+        String::new()
+    };
+
     let state_card = column![
         text("Tunnel state")
             .size(ts.label_m.size)
@@ -156,41 +210,152 @@ pub fn status(app: &App) -> Element<'_> {
         text(profile_line).size(ts.body_m.size).color(state_fg),
         text(meta_line).size(ts.body_s.size).color(state_fg),
         vertical_space().height(Length::Fixed(8.0)),
-        toggler(app.is_connected())
-            .size(36.0)
-            .label("connect")
-            .on_toggle(Message::ConnectToggle)
-            .style(t3::switch(s)),
+        row![
+            toggler(app.is_connected())
+                .size(36.0)
+                .label("connect")
+                .on_toggle(Message::ConnectToggle)
+                .style(t3::switch(s)),
+            horizontal_space().width(Length::Fill),
+            text(picker_label)
+                .size(ts.body_s.size)
+                .color(s.on_surface_variant),
+            picker,
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
     ]
     .spacing(6)
     .padding(20)
     .width(Length::Fill);
 
-    let mut head = column![container(state_card)
-        .style(t3::card(s, state_bg))
-        .width(Length::Fill)]
-    .spacing(12);
-
-    if let Some((up, down)) = app.throughput {
-        head = head.push(
-            row![
-                chip(
-                    format!("up {}", util::fmt_bps(up)),
-                    app,
-                    s.tertiary_container,
-                    s.on_tertiary_container
-                ),
-                chip(
-                    format!("down {}", util::fmt_bps(down)),
-                    app,
-                    s.tertiary_container,
-                    s.on_tertiary_container
-                ),
-            ]
-            .spacing(8),
-        );
+    // --- bandwidth graph (D19 §1) ------------------------------------------
+    let graph = RateGraph {
+        samples: app.rate_history.iter().copied().collect(),
+        style: RateGraphStyle {
+            down_stroke: t3::col(s.primary),
+            down_fill: translucent(t3::col(s.primary), 0.30),
+            up_stroke: t3::col(s.tertiary),
+            up_fill: translucent(t3::col(s.tertiary), 0.30),
+            grid: translucent(t3::col(s.on_surface_variant), 0.35),
+            label: t3::col(s.on_surface_variant),
+        },
+        font_size: ts.label_s.size,
     }
+    .canvas();
 
+    let connected = app.is_connected();
+    let graph_inner: Element<'_> = if connected {
+        graph.into()
+    } else {
+        column![
+            text("connect to see live bandwidth")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant),
+            vertical_space().height(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    };
+    let graph_card = container(graph_inner)
+        .padding(8)
+        .style(t3::card(s, s.surface_container_lowest))
+        .width(Length::Fill)
+        .height(Length::FillPortion(3));
+    let _ = util::fmt_bps; // rate labels live in graph.rs; kept for chips/tests
+
+    // --- exit probe card (D18) ---------------------------------------------
+    let mut exit_col = column![
+        text("Exit identity")
+            .size(ts.title_m.size)
+            .color(s.on_surface),
+        text("checks which IP the internet sees when the tunnel is up")
+            .size(ts.body_s.size)
+            .color(s.on_surface_variant),
+    ]
+    .spacing(6);
+    if app.exit_probing {
+        exit_col = exit_col.push(
+            text("probing…")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant),
+        );
+    } else {
+        exit_col = exit_col.push(m3_button(
+            "Check exit IP",
+            connected,
+            ButtonKind::Tonal,
+            Message::ExitProbe,
+            app,
+        ));
+    }
+    if let Some(res) = &app.exit {
+        match res {
+            Ok(info) => {
+                let (verdict, vbg, vfg) = if info.direct_exit {
+                    (
+                        format!(
+                            "single hop — the exit IS your server ({})",
+                            info.server_endpoint
+                        ),
+                        s.tertiary_container,
+                        s.on_tertiary_container,
+                    )
+                } else {
+                    (
+                        format!(
+                            "extra egress hop — the exit differs from your server ({}); the server's own outbound (e.g. a VPN on the VM) is the exit",
+                            info.server_endpoint
+                        ),
+                        s.error_container,
+                        s.on_error_container,
+                    )
+                };
+                exit_col = exit_col
+                    .push(
+                        row![
+                            text(info.exit_ip.clone())
+                                .size(ts.headline_s.size)
+                                .color(s.on_surface),
+                            horizontal_space().width(Length::Fill),
+                            chip(
+                                format!("{} {}", info.country, info.city),
+                                app,
+                                s.secondary_container,
+                                s.on_secondary_container
+                            ),
+                            chip(
+                                info.isp.clone(),
+                                app,
+                                s.secondary_container,
+                                s.on_secondary_container
+                            ),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .push(
+                        container(text(verdict).size(ts.body_s.size).color(vfg))
+                            .padding(10)
+                            .style(t3::card(s, vbg))
+                            .width(Length::Fill),
+                    );
+            }
+            Err(e) => {
+                exit_col = exit_col.push(
+                    text(format!("probe failed: {e}"))
+                        .size(ts.body_s.size)
+                        .color(s.error),
+                );
+            }
+        }
+    }
+    let exit_card = container(exit_col.spacing(8).padding(16))
+        .style(t3::card(s, s.surface_container_low))
+        .width(Length::Fill);
+
+    // --- links (scrollable) -------------------------------------------------
     let mut links_col = column![].spacing(8);
     match snap.as_ref().map(|x| x.links.as_slice()) {
         Some([]) => {
@@ -267,14 +432,30 @@ pub fn status(app: &App) -> Element<'_> {
             );
         }
     }
+    // NOTE: scrollable content must NOT fill the scroll axis (iced
+    // layout rule) — the inner container shrinks; the scrollable itself
+    // owns the FillPortion height.
+    let links_scroll = scrollable(container(links_col).padding(12).width(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::FillPortion(2));
+    let links_card = container(links_scroll)
+        .style(t3::card(s, s.surface_container_lowest))
+        .width(Length::Fill)
+        .height(Length::FillPortion(2));
 
-    head = head.push(
-        container(links_col)
-            .style(t3::card(s, s.surface_container_lowest))
-            .width(Length::Fill)
-            .padding(12),
-    );
-    scaffold(app, "Status", head.into())
+    let _ = RATE_HISTORY_LEN; // (documented window; the App enforces it)
+
+    let head = column![
+        container(state_card)
+            .style(t3::card(s, state_bg))
+            .width(Length::Fill),
+        exit_card,
+        graph_card,
+        links_card,
+    ]
+    .spacing(12)
+    .height(Length::Fill);
+    scaffold_fixed(app, "Status", head.into())
 }
 
 // ---------------------------------------------------------------------------
@@ -839,6 +1020,105 @@ pub fn settings(app: &App) -> Element<'_> {
     ]
     .spacing(10);
 
+    // Advanced card (S9: v2rayN + net-merge parity) -------------------------
+    fn port_field<'a>(
+        s: mt_m3::M3Scheme,
+        ts: &mt_m3::M3TypeScale,
+        label: &'a str,
+        value: u16,
+        msg: fn(String) -> Message,
+    ) -> iced::widget::Row<'a, Message> {
+        row![
+            text(label)
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant)
+                .width(Length::Fixed(210.0)),
+            text_input("port", &value.to_string())
+                .on_input(msg)
+                .padding(6)
+                .width(Length::Fixed(110.0))
+                .style(crate::theme::text_field(s)),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center)
+    }
+    let bond_mode_row = row![
+        text("bonding mode")
+            .size(ts.body_m.size)
+            .color(s.on_surface_variant)
+            .width(Length::Fixed(210.0)),
+        pick_list(BOND_MODES, Some(app.settings.bond_mode.as_str()), |m| {
+            Message::BondModePicked(m.to_string())
+        },)
+        .width(Length::Fixed(190.0))
+        .padding(6)
+        .style(t3::pick_list_style(s))
+        .menu_style(t3::menu_style(s)),
+    ]
+    .spacing(10)
+    .align_y(iced::Alignment::Center);
+    let log_level_row = row![
+        text("engine log level")
+            .size(ts.body_m.size)
+            .color(s.on_surface_variant)
+            .width(Length::Fixed(210.0)),
+        pick_list(LOG_LEVELS, Some(app.settings.log_level.as_str()), |l| {
+            Message::LogLevelPicked(l.to_string())
+        },)
+        .width(Length::Fixed(190.0))
+        .padding(6)
+        .style(t3::pick_list_style(s))
+        .menu_style(t3::menu_style(s)),
+    ]
+    .spacing(10)
+    .align_y(iced::Alignment::Center);
+    let advanced = column![
+        text("Advanced").size(ts.title_m.size).color(s.on_surface),
+        text("mux stays OFF by design — it would collapse bonding into one stream per link")
+            .size(ts.body_s.size)
+            .color(s.on_surface_variant),
+        port_field(s, &ts, "SOCKS port (0 = ephemeral)", app.settings.socks_port, Message::SocksPortChanged),
+        port_field(s, &ts, "HTTP port (0 = ephemeral)", app.settings.http_port, Message::HttpPortChanged),
+        port_field(s, &ts, "server merge port (stream mode)", app.settings.merge_port, Message::MergePortChanged),
+        bond_mode_row,
+        log_level_row,
+        toggler(app.settings.allow_lan)
+            .label("allow LAN clients (bind 0.0.0.0 — exposes the proxy)")
+            .size(28.0)
+            .on_toggle(Message::AllowLanToggled)
+            .style(t3::switch(s)),
+        row![
+            text("latency test target")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant)
+                .width(Length::Fixed(210.0)),
+            text_input("host:port", &app.settings.probe_target)
+                .on_input(Message::ProbeTargetChanged)
+                .padding(6)
+                .width(Length::Fixed(240.0))
+                .style(t3::text_field(s)),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
+        row![
+            text("exit probe URL")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant)
+                .width(Length::Fixed(210.0)),
+            text_input("http://host/path", &app.settings.exit_probe_url)
+                .on_input(Message::ExitUrlChanged)
+                .padding(6)
+                .width(Length::Fixed(240.0))
+                .style(t3::text_field(s)),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
+        text("stream mode splits every connection's bytes across the bonded adapters and merges them on the server (needs the mt-merge-server daemon; falls back to per-connection when unreachable)")
+            .size(ts.body_s.size)
+            .color(s.on_surface_variant),
+    ]
+    .spacing(10);
+
     // Startup card ---------------------------------------------------------
     let startup = column![
         text("Startup").size(ts.title_m.size).color(s.on_surface),
@@ -856,6 +1136,10 @@ pub fn settings(app: &App) -> Element<'_> {
             .style(t3::card(s, s.surface_container_low))
             .width(Length::Fill),
         container(network)
+            .padding(16)
+            .style(t3::card(s, s.surface_container_low))
+            .width(Length::Fill),
+        container(advanced)
             .padding(16)
             .style(t3::card(s, s.surface_container_low))
             .width(Length::Fill),

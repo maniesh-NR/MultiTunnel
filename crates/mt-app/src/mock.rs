@@ -26,8 +26,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use mt_service::{
-    LinkStatus, MtService, ProfileView, RuleView, ServiceEvent, ServiceState, SettingsView,
-    StatusSnapshot,
+    ExitInfo, LinkStatus, MtService, ProfileView, RuleView, ServiceEvent, ServiceState,
+    SettingsView, StatusSnapshot,
 };
 use tokio::sync::{broadcast, Mutex};
 
@@ -82,6 +82,14 @@ impl MockService {
             merge_policy: "failover".to_string(),
             autostart: false,
             bonded_adapters: vec!["mock-wifi".to_string()],
+            bond_mode: "per-connection".to_string(),
+            merge_port: 7443,
+            socks_port: 10808,
+            http_port: 10809,
+            allow_lan: false,
+            log_level: "warning".to_string(),
+            probe_target: "connectivitycheck.gstatic.com:80".to_string(),
+            exit_probe_url: "http://ip-api.com/json".to_string(),
         };
         let inner = Inner {
             state: ServiceState::Disconnected,
@@ -560,6 +568,31 @@ impl MtService for MockService {
 
     fn events(&self) -> broadcast::Receiver<ServiceEvent> {
         self.tx.subscribe()
+    }
+
+    async fn exit_probe(&self) -> Result<ExitInfo, String> {
+        // Simulated identity (RFC 5737 documentation range — clearly fake,
+        // no real network in mock builds). The exit IS the seed server:
+        // single hop, matching production's happy path.
+        let inner = self.inner.lock().await;
+        if inner.state != ServiceState::Connected {
+            return Err("not connected".to_string());
+        }
+        let endpoint = inner
+            .profiles
+            .iter()
+            .find(|p| Some(&p.id) == inner.active.as_ref())
+            .map(|p| format!("{}:{}", p.address, p.port))
+            .unwrap_or_else(|| "203.0.113.10:443".to_string());
+        Ok(ExitInfo {
+            exit_ip: "203.0.113.10".to_string(),
+            country: "Testland".to_string(),
+            city: "Mock City".to_string(),
+            isp: "Example Telecom".to_string(),
+            asn: "AS64512 Example Telecom".to_string(),
+            server_endpoint: endpoint,
+            direct_exit: true,
+        })
     }
 }
 

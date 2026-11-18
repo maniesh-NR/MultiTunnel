@@ -13,7 +13,7 @@ description = "MultiTunnel Material You GUI (iced 0.13, tiny-skia renderer)"
 [dependencies.iced]
 version = "0.13"
 default-features = false
-features = ["tokio", "tiny-skia"]
+features = ["tokio", "tiny-skia", "canvas"]
 
 [dependencies]
 mt-m3 = { path = "../mt-m3", features = ["iced"] }

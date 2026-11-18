@@ -51,6 +51,7 @@
 //!   will call [`run_app`] with its own `Arc<dyn MtService>`.
 
 pub mod app;
+pub mod graph;
 pub mod screens;
 pub mod theme;
 

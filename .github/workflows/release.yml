@@ -40,6 +40,7 @@ jobs:
             "LICENSE",
             "THIRD_PARTY_NOTICES.md",
             "server/setup-xray-reality.sh",
+            "server/setup-merge-daemon.sh",
             "README.md",
             "QUICKSTART.md"
           )
@@ -47,7 +48,7 @@ jobs:
             if (-not (Test-Path $f)) { throw "missing required file: $f" }
           }
           Copy-Item "target/release/multitunnel.exe","target/release/multitunnel-tray.exe","config.example.json","LICENSE","THIRD_PARTY_NOTICES.md" $root
-          Copy-Item "server/setup-xray-reality.sh" "$root/server/"
+          Copy-Item "server/setup-xray-reality.sh","server/setup-merge-daemon.sh" "$root/server/"
           # Hard-required above; plain copy (still listed in the zip manifest).
           Copy-Item "README.md","QUICKSTART.md" $root
           # Self-diagnosing listing: the run log shows exactly what is in
@@ -69,4 +70,43 @@ jobs:
           files: dist/*.zip
           # S2-REV-B P2-7: a path typo must fail loudly, not ship a
           # release with zero assets.
+          fail_on_unmatched_files: true
+
+  build-linux-daemon:
+    # S9 (D17): stream bonding needs the merge daemon ON THE TUNNEL
+    # SERVER. Cross-compiling Linux binaries from windows-latest is not
+    # worth the pain — a native ubuntu leg builds it and the release
+    # attaches the raw binaries (the setup script downloads them by tag).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # Same rationale as the windows leg: a tag never ships unlinted or
+      # untested artifacts.
+      - run: cargo fmt --all --check
+      - run: cargo clippy -p mt-bond --all-targets -- -D warnings
+      - run: cargo test -p mt-bond
+      - run: cargo build --release -p mt-bond --bin mt-merge-server
+      - name: Package (x86_64)
+        run: |
+          cp target/release/mt-merge-server mt-merge-server-x86_64-unknown-linux-gnu
+      - name: Package (aarch64)
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          # tokio has no C dependencies — a plain cross build links.
+          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          cargo build --release -p mt-bond --bin mt-merge-server --target aarch64-unknown-linux-gnu
+          cp target/aarch64-unknown-linux-gnu/release/mt-merge-server mt-merge-server-aarch64-unknown-linux-gnu
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-daemon
+          path: mt-merge-server-*-unknown-linux-gnu
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: mt-merge-server-*-unknown-linux-gnu
           fail_on_unmatched_files: true

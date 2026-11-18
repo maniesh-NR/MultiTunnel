@@ -1,39 +1,53 @@
-# STATE — rewritten at the end of every stage. Last update: S8 (adapter bonding, v0.4.0)
+# STATE — rewritten at the end of every stage. Last update: S9 (stream bonding, v0.5.0)
 
 ## Current position
-- Stage: S8 CLOSED — the adapter-bonding menu the user asked for shipped as
-  v0.4.0. All gates green: 335 tests / 0 failed, clippy clean, fmt clean,
-  zigbuild x86_64-pc-windows-gnu green (multitunnel.exe, multitunnel-tray.exe,
-  mt-app.exe), `gui --smoke` 6/6 views on the real backend.
-- Shipped surface: GUI "Adapters" screen (checkbox rows, IPv4 + up/down chips,
-  Apply/Revert/Refresh); one ManagedEngine per selected adapter bound via Xray
-  `sendThrough`; merge policies spread connections across the per-adapter
-  links; `multitunnel adapters` CLI; settings.json carries
-  `bondedAdapters` (v0.3 files load unchanged via serde default).
-- Review mode this stage: single-implementation with orchestrator audit (the
-  MoE split was one parallel expert for mt-platform + orchestrator for the
-  contract/engine/service/GUI); no adversarial consensus round was run —
-  FLAGGED as process debt if S9 needs a reference precedent.
+- Stage: S9 CLOSED — stream bonding (true per-stream split + server-side
+  merge), Status-tab live dashboard (bandwidth graph, server picker, exit
+  identity probe) and Advanced settings (v2rayN/net-merge parity) shipped
+  as v0.5.0. All gates green: 356 tests / 0 failed, fmt clean, clippy
+  host + windows-gnu -D warnings clean, zigbuild x86_64-pc-windows-gnu
+  release PE32+ x4 (console, tray, gui, mt-merge-server.exe), linux
+  mt-merge-server ELF verified listening, `gui --smoke` 6/6 on the real
+  backend.
+- Shipped surface: crates/mt-bond (D17 protocol: 24-byte framing,
+  per-session reorder, cumulative-ACK replay-on-carrier-death, PING/PONG
+  keepalives; client BondOutbound as a single mt-net Outbound; daemon in
+  server/setup-merge-daemon.sh); bond_mode setting with NEVER-BLACK-HOLE
+  fallback; exit probe (D18) answering the user's Singapore-exit question
+  in-product; Status rows = carriers in stream mode; engine loglevel,
+  ports, allow-LAN, probe/exit targets in Advanced settings.
 
 ## Next actions
-1. Watch the v0.4.0 release run (release.yml on windows-latest) and verify
-   the zip publishes (PE32+ x2 in dist).
-2. User verification on real Windows: Adapters screen lists NICs, selection
-   persists, Status screen shows N links (one per adapter) while connected.
-3. Backlog from v0.3.1 notes still open (engine log rotation, profiles.json
-   locking, vmess validation, listener max_conns, body-size caps).
-4. S7 (native REALITY core) remains parked; pick it up or queue S9 from the
-   v0.3.1 backlog + user feedback.
+1. Watch the v0.5.0 release run (windows zip + linux daemon assets) and
+   verify the assets (PE32+ x2 in zip, 2 linux ELFs).
+2. USER VERIFICATION on real Windows + the GCP VM: run
+   `sudo ./server/setup-merge-daemon.sh` on the VM, pick "stream" mode,
+   tick two adapters, confirm (a) Status shows two carrier rows, (b) a
+   big download keeps flowing when one adapter is disabled, (c) exit
+   probe explains the Singapore IP (expected: Host Universal Pty Ltd =
+   the VM's VPN egress, NOT a hidden hop).
+3. Backlog: weighted carrier scheduling by RTT/throughput (D17 §4 future),
+   subscription auto-update, vmess validation, profiles.json locking,
+   engine log rotation, listener max_conns (carried from v0.3.1).
+4. S7 (native REALITY core) still parked.
 
 ## Blockers / open items
-- None blocking. Watch item: disk headroom in the sandbox (the 9.9G rootfs
-  filled twice during S8; clean /tmp/mt-target/debug before big builds).
+- None blocking. Watch item: disk headroom (release zigbuild needs ~5G;
+   debug dirs were cleaned pre-build). The cargo registry needed a REPAIR
+   this stage (sandbox recycle dropped .cargo-checksum.json from 390
+   extracted crates — removed them; cargo re-extracted from the .crate
+   cache; note for next recycle).
 
 ## Environment map (sandbox)
 - Repo: /home/z/my-project/MultiTunnel — branch main, remote
   github.com/maniesh-NR/MultiTunnel (origin URL embeds the token; push via
   harness/backup.sh or the existing remote).
 - Toolchains: /home/z/my-project/tools/ — source tools/env.sh first
-  (RUSTUP_HOME/CARGO_HOME/PATH incl. zig; CARGO_TARGET_DIR=/tmp/mt-target).
-  Rust 1.99.1, zig 0.17.1, cargo-zigbuild, target x86_64-pc-windows-gnu.
-- Cross build: cargo zigbuild --target x86_64-pc-windows-gnu --workspace
+  (RUSTUP_HOME/CARGO_HOME/PATH; CARGO_TARGET_DIR=/tmp/mt-target).
+  Rust 1.100.0, zig 0.14.1 via the pip wheel (`python3 -m ziglang`,
+  reinstalled with `pip3 install ziglang==0.14.1` after this recycle),
+  cargo-zigbuild, target x86_64-pc-windows-gnu. Windows-target clippy:
+  `sh scripts/mingw-zig-shims.sh /tmp/mt-zig-shims` then export the
+  CC/CXX/AR vars (see the script header).
+- Cross build: cargo zigbuild --target x86_64-pc-windows-gnu --release
+  --workspace

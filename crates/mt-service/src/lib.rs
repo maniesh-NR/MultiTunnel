@@ -88,6 +88,11 @@ pub struct RuleView {
 }
 
 /// App settings as the GUI sees them.
+///
+/// S9 advanced fields carry `#[serde(default)]` so settings.json written
+/// by v0.3/v0.4 loads unchanged; the RealService mirrors the legacy
+/// top-level `socksPort`/`httpPort`/`probeTarget` into the view on load
+/// (top-level wins — it is what v0.4 actually used at runtime).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettingsView {
     pub theme_seed: u32,
@@ -100,6 +105,57 @@ pub struct SettingsView {
     /// no adapter pinning).
     #[serde(default)]
     pub bonded_adapters: Vec<String>,
+    /// S9: how the bonded adapters carry traffic — "per-connection"
+    /// (S8: whole TCP connections spread across links) or "stream"
+    /// (bytes of every connection split across carriers, merged by the
+    /// mt-merge-server daemon on the tunnel server; falls back to
+    /// per-connection when the daemon is unreachable).
+    #[serde(default = "default_bond_mode")]
+    pub bond_mode: String,
+    /// S9: the merge-daemon port ON THE SERVER (stream mode).
+    #[serde(default = "default_merge_port")]
+    pub merge_port: u16,
+    /// S9 (v2rayN parity): local SOCKS5 listener port.
+    #[serde(default = "default_socks_port")]
+    pub socks_port: u16,
+    /// S9 (v2rayN parity): local HTTP proxy listener port.
+    #[serde(default = "default_http_port")]
+    pub http_port: u16,
+    /// S9 (v2rayN parity): bind listeners on 0.0.0.0 instead of loopback
+    /// (exposes the proxy to the LAN — opt-in, off by default).
+    #[serde(default)]
+    pub allow_lan: bool,
+    /// S9: engine/core log level — "error" | "warning" | "info" | "debug".
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+    /// S9 (v2rayN parity): latency-test target, "host:port".
+    #[serde(default = "default_probe_target")]
+    pub probe_target: String,
+    /// S9: exit-IP probe URL (plain HTTP inside the tunnel, D18).
+    #[serde(default = "default_exit_probe_url")]
+    pub exit_probe_url: String,
+}
+
+fn default_bond_mode() -> String {
+    "per-connection".to_string()
+}
+fn default_merge_port() -> u16 {
+    7443
+}
+fn default_socks_port() -> u16 {
+    10808
+}
+fn default_http_port() -> u16 {
+    10809
+}
+fn default_log_level() -> String {
+    "warning".to_string()
+}
+fn default_probe_target() -> String {
+    "connectivitycheck.gstatic.com:80".to_string()
+}
+fn default_exit_probe_url() -> String {
+    "http://ip-api.com/json".to_string()
 }
 
 /// Live events pushed to the GUI.
@@ -146,4 +202,30 @@ pub trait MtService: Send + Sync {
 
     /// Subscribe to live events (state, links, throughput, logs).
     fn events(&self) -> broadcast::Receiver<ServiceEvent>;
+
+    /// Probe the tunnel's EXIT identity (Status screen, D18): rides the
+    /// LIVE session, so it errors ("not connected") when disconnected.
+    async fn exit_probe(&self) -> Result<ExitInfo, String>;
+}
+
+/// Result of the Status-screen exit probe (D18): which IP the tunnel
+/// EXITS from, as the internet sees it, plus the profile endpoint for the
+/// match/mismatch verdict.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExitInfo {
+    /// The measured exit IP (the echo service's "query" field).
+    pub exit_ip: String,
+    /// Geolocation reported for the exit IP ("" when unknown).
+    pub country: String,
+    pub city: String,
+    /// ISP / organization of the exit IP ("" when unknown).
+    pub isp: String,
+    /// Autonomous-system label of the exit ("" when unknown).
+    pub asn: String,
+    /// The ACTIVE profile's server endpoint ("host:port") for comparison.
+    pub server_endpoint: String,
+    /// Human verdict: true when the exit IS the profile server (single
+    /// hop); false means an extra egress hop exists (e.g. a VPN on the
+    /// server VM's default route).
+    pub direct_exit: bool,
 }
