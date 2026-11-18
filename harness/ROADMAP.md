@@ -103,7 +103,7 @@ reached + backup completed).
 > dismissed with reason. 114 tests, all gates clean, both exes PE32+.
 > Full verdicts: harness/memory/consensus/S5-consensus.md.
 
-## S6 — v0.3: All-in-One + Material You GUI + native core `[~]`
+## S6 — v0.3: All-in-One + Material You GUI + native core `[x]`
 
 User directive 2026-11-17: MultiTunnel becomes an all-in-one app with ZERO
 user-installed dependencies, combining the functions of v2rayN and net-merge
@@ -153,6 +153,18 @@ style (parallel expert agents, one crate each). Full per-expert contracts in
 > QUICKSTART); gates re-verified: fmt, clippy host+windows -D warnings,
 > 321 tests, release zigbuild PE32+ x3, gui --smoke exit 0.
 > Full verdicts: harness/memory/consensus/S6-consensus.md.
+>
+> S6 CLOSED 2026-11-18: review round 2×APPROVE; all 8 P1s fixed (+4 P2s
+> folded); docs refreshed. RELEASE STORY: the first v0.3.0 tag was retracted
+> when the frontier's own CI failures (mt-net Windows RST class + mt-engine
+> respawn race — see LEDGER 05:30Z) were diagnosed; both fixed with
+> production-grade remedies (graceful_close on all error paths, dedicated
+> NetError::ProxyUnreachable, forced respawn + synchronous reap); CI green
+> on both runners (ubuntu + windows), release workflow green, v0.3.0 zip
+> published + verified (PE32+ x2, 5,561,966 bytes) + restored to sandbox
+> download/. v0.3.1 backlog: GUI autostart target, same-tag engine file
+> races, body-size caps, engine log rotation, profiles.json locking, vmess
+> pbk/sid validation, listener max_conns.
 
 ## S7 — Native REALITY core (parked)
 

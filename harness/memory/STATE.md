@@ -1,42 +1,43 @@
-# STATE — rewritten at the end of every stage. Last update: S6 review round closed + P1 fixes (2026-11-18)
+# STATE — rewritten at the end of every stage. Last update: S6 CLOSED, v0.3.0 RELEASED (2026-11-18)
 
 ## Current position
-- **ROADMAP S0–S5 CLOSED; S6 (v0.3 All-in-One) IMPLEMENTED, REVIEWED AND
-  FIXED — ready to release.**
-- S6 review round 2026-11-18: 2× APPROVE under D6 (REV-C 0P0/5P1/15P2,
-  REV-B 0P0/3P1/8P2). All 8 P1s fixed + 4 cheap P2s folded (details in
-  harness/memory/consensus/S6-consensus.md and ROADMAP).
-- Gates re-verified on the fixed tree: fmt --all; clippy host +
-  windows-gnu (zig shims) -D warnings; cargo test --workspace 321/0;
-  release zigbuild PE32+ x3 (multitunnel.exe console, multitunnel-tray.exe
-  GUI, mt-app.exe); `gui --smoke` exit 0 ("6 ticks, 0 events, 6 views").
-- Docs rewritten for v0.3: README (all-in-one architecture, workspace
-  table, gui/profiles/import CLI, MSRV 1.97), QUICKSTART (GUI-first path,
-  legacy v0.2 as appendix), THIRD_PARTY_NOTICES regenerated from
-  Cargo.lock (391 crates, scripts/gen_notices.py in-repo, OFL fonts +
-  license elections recorded).
+- **ROADMAP S0–S6 ALL CLOSED. v0.3.0 (All-in-One: Material You GUI, Rust
+  core, v2rayN+net-merge functions, zero user-installed deps) IS RELEASED.**
+- S6 review round: 2× APPROVE (REV-C 0P0/5P1/15P2, REV-B 0P0/3P1/8P2); all
+  8 P1s + 4 cheap P2s fixed; docs rewritten (README/QUICKSTART/NOTICES).
+- Release story: first v0.3.0 tag retracted — the frontier CI had failed
+  on both runners (mt-net Windows RST error-close class; mt-engine
+  respawn race). Both fixed properly (graceful_close everywhere, dedicated
+  NetError::ProxyUnreachable, forced respawn + synchronous reap);
+  re-tagged; **CI green on ubuntu + windows; release workflow green;
+  v0.3.0 zip published** (multitunnel-v0.3.0-windows-x64.zip, 5,561,966
+  bytes, both exes PE32+; restored to sandbox download/).
+- Workspace at v0.3.0: 8 crates, 321 tests, all gates green (fmt, clippy
+  host + windows-gnu via zig shims, -D warnings, release zigbuild PE32+ x3,
+  gui --smoke exit 0).
 
-## Next actions (v0.3.0 release, in order)
-1. `harness/backup.sh s6-review-fixes` (commit + push of the fix set).
-2. Tag `v0.3.0` + push → release.yml (workspace gates + MSVC build + zip
-   + GitHub Release). Verify the workflow run and the attached asset
-   (`fail_on_unmatched_files` set); restore the zip to sandbox download/.
-3. User manual steps (needs a real Windows box): run `multitunnel gui`
-   (first REAL display smoke of the Material You window — window open,
-   theme, import of the live xray-gcp vless link, connect, LAN bypass,
-   close-window proxy restore), tray coexistence check, autostart check
-   (note C-P2-10: autostart registers the console exe — verify it errors
-   sanely; fix queued for v0.3.1).
-4. Optional v0.3.1 backlog (parked, see consensus): GUI autostart target,
-   same-tag engine file races, body-size caps, engine log rotation,
-   profiles.json locking, vmess pbk/sid validation, max_conns.
+## Next actions
+1. USER MANUAL STEP (needs a real Windows box, per QUICKSTART step 2-3):
+   run `multitunnel gui` — first REAL display of the Material You window;
+   import the live xray-gcp vless link; connect; verify LAN bypass,
+   close-window proxy restore, tray coexistence. Note: GUI autostart
+   registers the console exe (C-P2-10, v0.3.1 backlog).
+2. Optional v0.3.1 backlog (parked; see S6-consensus + reports): GUI
+   autostart target, same-tag engine file races, subscription/download
+   body-size caps + staging GC, engine log rotation, blocking I/O notes,
+   Stopped-event race, vmess pbk/sid validation, listener max_conns,
+   profiles.json cross-process locking, mt-app.exe packaging decision.
+3. S7 (parked): native pure-Rust REALITY core.
 
 ## Blockers / open items
 - None blocking. GitHub pushes MUST go through harness/backup.sh (token in
   upload/, never printed).
-- RESUME RULE (violated twice, incidents #9/#10): `git fetch origin && git
+- RESUME RULE (violated in incidents #9/#10): `git fetch origin && git
   log --oneline -5 origin/main` FIRST on every session start, BEFORE any
   work. The local snapshot can be days behind the remote.
+- CI lesson (v0.3.0 tag retraction): ALWAYS check the frontier's latest CI
+  runs (actions API) before cutting a tag — a green local sandbox is not
+  proof of green runners (Windows RST semantics + timing races differ).
 
 ## Environment map (sandbox)
 - Repo: /home/z/my-project/MultiTunnel — branch main, remote
@@ -53,3 +54,4 @@
   CC/CXX/AR per the script header.
 - Stale registry cache after a sandbox recycle breaks cargo with "path
   source" internal errors → move tools/cargo/registry aside, re-download.
+- Notices regeneration: python3 scripts/gen_notices.py (repo copy).
