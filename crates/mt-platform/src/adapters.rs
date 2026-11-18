@@ -616,12 +616,18 @@ wlan0
 
         #[test]
         fn unicast_ipv4_reads_sin_addr_network_order() {
+            // A real Winsock buffer holds the address as NETWORK-ORDER
+            // BYTES in memory ([192,168,1,42]); `from_ne_bytes` models
+            // exactly that ("these are the bytes in memory"). Writing
+            // `from_be_bytes` here would pre-swap on little-endian hosts
+            // and assert the wrong thing — caught by the first REAL
+            // Windows CI run (v0.4.0 release attempt 1).
             let sockaddr_in = SOCKADDR_IN {
                 sin_family: AF_INET,
                 sin_port: 0,
                 sin_addr: IN_ADDR {
                     S_un: IN_ADDR_0 {
-                        S_addr: u32::from_be_bytes([192, 168, 1, 42]),
+                        S_addr: u32::from_ne_bytes([192, 168, 1, 42]),
                     },
                 },
                 sin_zero: [0; 8],
