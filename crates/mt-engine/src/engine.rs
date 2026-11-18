@@ -176,6 +176,15 @@ pub enum EngineError {
 struct LiveState {
     child: Option<Child>,
     socks_addr: Option<SocketAddr>,
+    /// Windows kill-on-close job owning `child` (S6-REV-C P1-2): the ONLY
+    /// handle lives here, so if this process dies for ANY reason (including
+    /// TerminateProcess / Ctrl+C / power loss, where Drop never runs) the
+    /// kernel closes the handle and kills the engine. Replaced together
+    /// with `child` on every respawn (dropping the old one is safe — the
+    /// old child is already dead in the respawn path, and `kill_current`
+    /// has already killed it in the abandon path).
+    #[cfg(windows)]
+    job: Option<JobObjectHandle>,
     /// Cycle token: waiters exit when a newer cycle owns the slot.
     generation: u64,
     /// Set before a kill we caused (drop / abandoned spawn); a death
@@ -330,21 +339,20 @@ impl EngineInner {
         let mut st = lock(&self.state);
         match st.child.as_mut() {
             None => None,
-            Some(c) => {
-                let pid = c.id();
-                let tw = c.try_wait();
-                eprintln!("[dbg-eng] probe pid={pid:?} tw={tw:?}");
-                match tw {
-                    // Alive: the recorded address is ours.
-                    Ok(None) => st.socks_addr,
-                    // Exited (reaped here) or broken handle: clear.
-                    Ok(Some(_)) | Err(_) => {
-                        st.child = None;
-                        st.socks_addr = None;
-                        None
+            Some(c) => match c.try_wait() {
+                // Alive: the recorded address is ours.
+                Ok(None) => st.socks_addr,
+                // Exited (reaped here) or broken handle: clear.
+                Ok(Some(_)) | Err(_) => {
+                    st.child = None;
+                    st.socks_addr = None;
+                    #[cfg(windows)]
+                    {
+                        st.job = None;
                     }
+                    None
                 }
-            }
+            },
         }
     }
 
@@ -360,6 +368,13 @@ impl EngineInner {
         st.manual_stop = true;
         if let Some(c) = st.child.as_mut() {
             let _ = c.kill();
+        }
+        // Drop the job handle first-hand too: closing it makes the kernel
+        // kill anything still inside the job (belt and suspenders with
+        // c.kill(); also covers grandchildren the engine may have forked).
+        #[cfg(windows)]
+        {
+            st.job = None;
         }
     }
 
@@ -463,6 +478,21 @@ impl EngineInner {
             .spawn()
             .map_err(|e| anyhow::anyhow!("engine `{tag}`: spawn failed: {e}"))?;
 
+        // 3b. Windows: put the child in a kill-on-close job object
+        //     (S6-REV-C P1-2). Assignment failures are fatal for this
+        //     spawn — without the job, an abnormal death of THIS process
+        //     would orphan the engine.
+        #[cfg(windows)]
+        let job = {
+            let j = make_kill_on_close_job(&child).map_err(|e| {
+                // Never leave the child running outside a job.
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::anyhow!("engine `{tag}`: job object setup failed: {e}")
+            })?;
+            Some(j)
+        };
+
         // 4. Pumps (stdout → info, stderr → warn; both to the log file).
         let stdout = match child.stdout.take() {
             Some(s) => s,
@@ -480,6 +510,10 @@ impl EngineInner {
             let mut st = lock(&self.state);
             st.generation += 1;
             st.socks_addr = Some(addr);
+            #[cfg(windows)]
+            {
+                st.job = job;
+            }
             st.child = Some(child);
             st.generation
         };
@@ -510,6 +544,92 @@ fn pick_free_port() -> anyhow::Result<SocketAddr> {
     let addr = s.local_addr()?;
     drop(s);
     Ok(addr)
+}
+
+// ---- Windows: kill-on-close job object (S6-REV-C P1-2) --------------------
+// Ported from the v0.2 core_proc discipline (2026-11-17 audit REV-C#2): Drop
+// alone cannot guarantee "the engine cannot outlive this process" —
+// TerminateProcess, console Ctrl+C and power loss never run destructors. The
+// kernel CAN: a job object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE kills
+// every process inside it the moment the last handle closes, and our process
+// death closes all our handles unconditionally.
+
+/// Owned job HANDLE: dropping closes it → kernel kill of the job members.
+#[cfg(windows)]
+struct JobObjectHandle(windows_sys::Win32::Foundation::HANDLE);
+
+// SAFETY: a job HANDLE is a reference to a kernel object with no thread
+// affinity — it can be closed from any thread (access is serialized by the
+// enclosing Mutex anyway). The raw-pointer type of HANDLE is an artifact of
+// the windows-sys definition, not memory in need of thread-local access.
+#[cfg(windows)]
+unsafe impl Send for JobObjectHandle {}
+
+#[cfg(windows)]
+impl std::fmt::Debug for JobObjectHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobObjectHandle").finish_non_exhaustive()
+    }
+}
+
+#[cfg(windows)]
+impl Drop for JobObjectHandle {
+    fn drop(&mut self) {
+        // SAFETY: the handle was created by make_kill_on_close_job and is
+        // only ever closed here.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// Create an unnamed kill-on-close job and put `child` into it. The handle
+/// is NOT inheritable (NULL security attributes), so the child cannot
+/// accidentally keep the job alive itself.
+#[cfg(windows)]
+fn make_kill_on_close_job(child: &Child) -> anyhow::Result<JobObjectHandle> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    // SAFETY: unnamed job object (both pointers NULL) — cannot fail on
+    // arguments; only resource exhaustion can make it return NULL.
+    let job = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
+    if job.is_null() {
+        return Err(anyhow::anyhow!(
+            "CreateJobObjectW failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: `job` is a valid job handle; `info` is a properly aligned
+    // struct of exactly the declared information class' size.
+    let ok = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &mut info as *mut _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    if ok == 0 {
+        let e = std::io::Error::last_os_error();
+        // SAFETY: `job` is valid and not yet handed out.
+        unsafe { CloseHandle(job) };
+        return Err(anyhow::anyhow!("SetInformationJobObject failed: {e}"));
+    }
+    // SAFETY: `job` is a valid job handle; the child raw handle is a valid
+    // process handle owned by `Child` (valid for the lifetime of the call).
+    if unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) } == 0 {
+        let e = std::io::Error::last_os_error();
+        // SAFETY: as above.
+        unsafe { CloseHandle(job) };
+        return Err(anyhow::anyhow!("AssignProcessToJobObject failed: {e}"));
+    }
+    Ok(JobObjectHandle(job))
 }
 
 /// Poll `addr` until a TCP connect succeeds or `budget` elapses; bails

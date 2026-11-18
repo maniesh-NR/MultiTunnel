@@ -131,7 +131,11 @@ pub struct Config {
     pub behavior: Behavior,
 }
 
-fn default_proxy_override() -> String {
+/// The documented default WinINET `ProxyOverride`: loopback + RFC1918
+/// ranges + `<local>` (LAN traffic never rides the tunnel). pub(crate) so
+/// the S6 RealService reuses the exact same golden string for the GUI
+/// system-proxy path (S6-REV-C P1-4).
+pub(crate) fn default_proxy_override() -> String {
     let mut s = String::from("localhost;127.*;10.*;192.168.*");
     for i in 16..=31 {
         s.push_str(&format!(";172.{i}.*"));

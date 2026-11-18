@@ -58,8 +58,9 @@
 //! family, (b) display large = global maximum, label small = global minimum,
 //! (c) the display > headline > title > body > label top-role chain.
 //!
-//! `thiserror` stays in `Cargo.toml` as frozen, but is currently unused:
-//! the frozen API is infallible (`from_seed` accepts any ARGB).
+//! The frozen API is infallible (`from_seed` accepts any ARGB), so the crate
+//! carries no error type (the never-used `thiserror` dep was removed,
+//! S6-REV-B P2-2).
 //!
 //! Serde derives are kept exactly as frozen. (No serializer is available in
 //! the allowed dependency set, so serde is exercised by compilation of the

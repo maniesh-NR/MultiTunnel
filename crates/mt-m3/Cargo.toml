@@ -8,7 +8,6 @@ description = "Material You (Material Design 3) design tokens with dynamic color
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-thiserror = "2"
 
 # Color engine: exact port of Google's material-color-utilities (HCT +
 # dynamic color). Built no_std + libm so floating point results are

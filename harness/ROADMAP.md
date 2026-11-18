@@ -138,6 +138,21 @@ style (parallel expert agents, one crate each). Full per-expert contracts in
 > zigbuild PE32+ x3 (console/tray/gui); smoke: profiles add/list/use +
 > gui --smoke exit 0. STAGE CLOSE PENDING: D6 review round (2x APPROVE),
 > README/QUICKSTART/NOTICES refresh, v0.3.0 release.
+>
+> S6 REVIEW ROUND COMPLETE 2026-11-18: consensus 2×APPROVE (REV-C 0P0/5P1/15P2,
+> REV-B 0P0/3P1/8P2 — both ran all gates independently, incl. a full 391-package
+> license sweep with no copyleft). All 8 P1s fixed by the orchestrator:
+> debug eprintln removed + Windows kill-on-close Job Object ported (mt-engine),
+> GUI fail-open/self-heal (step-0 stale restore, window-close/Ctrl+C exit
+> hooks, pump-based all-links-down supervisor with D5 give-up), LAN bypass
+> restored (stock private-CIDR→direct rules + v0.2 ProxyOverride), engine-
+> download URL redaction (D9), release.yml workspace gates, MSRV 1.97,
+> THIRD_PARTY_NOTICES regenerated (391 crates + OFL fonts + elections).
+> Folded P2s: mt-m3 thiserror, CI --smoke leg, stale disconnect flag, GUI
+> cancel-while-Connecting. Docs rewritten for the all-in-one (README,
+> QUICKSTART); gates re-verified: fmt, clippy host+windows -D warnings,
+> 321 tests, release zigbuild PE32+ x3, gui --smoke exit 0.
+> Full verdicts: harness/memory/consensus/S6-consensus.md.
 
 ## S7 — Native REALITY core (parked)
 

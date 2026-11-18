@@ -5,7 +5,9 @@ edition = "2021"
 license = "MIT"
 description = "Windows supervisor that combines an Xray VLESS+REALITY tunnel with net-merge multi-link bonding"
 repository = "https://github.com/maniesh-NR/MultiTunnel"
-rust-version = "1.78"
+# True MSRV floor (S6-REV-B P1-2): material-colors 0.5.0 declares 1.97;
+# uuid 1.89, tokio 1.85, iced 1.80 — cargo hard-fails below the max of these.
+rust-version = "1.97"
 publish = false
 
 [workspace]
@@ -30,7 +32,7 @@ serde_json = "1"
 regex = "1"
 
 # --- S6 wave 3: all-in-one wiring (GUI + data plane + engine + platform) ---
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "signal"] }
 async-trait = "0.1"
 anyhow = "1"
 tracing = "0.1"

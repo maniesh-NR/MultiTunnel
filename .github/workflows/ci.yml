@@ -18,6 +18,12 @@ jobs:
       # no custom paths).
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # S6-REV-B P2-5: the GUI headless smoke run (view construction, theme
+      # derivation, update loop) — wired as promised by CONTRACTS-S6; ubuntu
+      # only (the leg is display-free by design).
+      - name: gui headless smoke
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo run -q --bin multitunnel -- gui --smoke
 
   # S2-REV-B P2-2: the harness treats fmt/clippy cleanliness as gate
   # criteria; enforce them in CI instead of trusting local runs. The

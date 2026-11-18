@@ -61,9 +61,10 @@
 //!    restore, no-op on non-Windows) is applied AFTER `Connected`, driven by
 //!    `SettingsView.system_proxy`, non-fatal (failure is logged, the tunnel
 //!    stays up). The proxy address is the HTTP listener; the override is the
-//!    fixed `"localhost"` (the v0.2 config template default). When disabled
-//!    (or the bind is ephemeral) nothing is written — no registry touch, no
-//!    snapshot file.
+//!    v0.2 full LAN-bypass default (`crate::config::default_proxy_override()`,
+//!    S6-REV-C P1-4). `connect_flow` begins with a best-effort stale-snapshot
+//!    self-heal (v0.2 connect step 0 / D5). When disabled (or the bind is
+//!    ephemeral) nothing is written — no registry touch, no snapshot file.
 //! 9. **StatusSnapshot**: state from the state machine; `active_profile` is
 //!    the active profile's tag; `up_since` is a UTC timestamp formatted by
 //!    [`fmt_utc`] (dependency-free civil-from-days, no chrono); `restarts`
@@ -373,7 +374,11 @@ impl Default for SettingsFile {
                 merge_policy: "failover".to_string(),
                 autostart: false,
             },
-            rules: Vec::new(),
+            // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
+            // settings.json must carry private-CIDR → direct rules, mirroring
+            // v0.2's `geoip:private → direct` invariant, so router admin
+            // pages / printers / NAS never ride the tunnel.
+            rules: default_lan_rules(),
             socks_port: DEFAULT_SOCKS_PORT,
             http_port: DEFAULT_HTTP_PORT,
             probe_target: DEFAULT_PROBE_TARGET.to_string(),
@@ -413,6 +418,44 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// the write lock too, which keeps transitions atomic).
 fn wlock<T>(m: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
     m.write().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Supervision cadence (S6-REV-C P1-3c): the event pump doubles as the
+/// session supervisor. Every [`SUPERVISE_INTERVAL`] the link health is
+/// checked; if EVERY link is down for [`SUPERVISE_STRIKES`] consecutive
+/// checks (after [`SUPERVISE_GRACE`]), the D5 fail-open give-up fires:
+/// system proxy restored, State::Failed, session stopped — the v0.2
+/// supervisor semantics for restart exhaustion.
+const SUPERVISE_INTERVAL: Duration = Duration::from_secs(5);
+/// Grace after session start before all-down strikes count (lets the
+/// probers establish a first health picture; health starts optimistic).
+const SUPERVISE_GRACE: Duration = Duration::from_secs(15);
+/// Consecutive all-down checks before the give-up fires.
+const SUPERVISE_STRIKES: u32 = 3;
+
+/// Stock routing rules: private/LAN CIDRs → Direct (S6-REV-C P1-4 — the
+/// v0.2 `geoip:private → direct` invariant). Applied when settings.json
+/// carries NO rules (an empty list means "stock"); a user-defined rule
+/// list is respected verbatim.
+fn default_lan_rules() -> Vec<Rule> {
+    [
+        "127.0.0.0/8",
+        "::1/128",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "fe80::/10",
+        "fc00::/7",
+    ]
+    .iter()
+    .map(|cidr| Rule {
+        matcher: RuleMatcher::IpCidr {
+            cidr: (*cidr).to_string(),
+        },
+        action: Action::Direct,
+    })
+    .collect()
 }
 
 /// One live connect session (server + its tasks + lifecycle signals).
@@ -531,7 +574,10 @@ impl RealService {
     }
 
     /// Transition into `Connecting` (no-op otherwise); returns whether this
-    /// caller owns the connect attempt.
+    /// caller owns the connect attempt. A stale `disconnect_requested` flag
+    /// from a previous cycle is cleared HERE (S6-REV-C P2-1): a disconnect
+    /// landing between the post-probe check and session installation must
+    /// not abort the NEXT connect.
     fn begin_connect(&self) -> bool {
         let mut st = wlock(&self.core.state);
         if !matches!(*st, ServiceState::Disconnected | ServiceState::Failed) {
@@ -539,6 +585,9 @@ impl RealService {
         }
         *st = ServiceState::Connecting;
         drop(st);
+        self.core
+            .disconnect_requested
+            .store(false, Ordering::SeqCst);
         self.core
             .emit(ServiceEvent::StateChanged(ServiceState::Connecting));
         true
@@ -553,6 +602,12 @@ impl RealService {
 
     /// Build links + server, probe, and finish the state transition.
     async fn connect_flow(&self) {
+        // 0. Stale sysproxy self-heal (v0.2 connect step 0 / D5,
+        //    S6-REV-C P1-3b): a previous run that died without disconnecting
+        //    may have left the registry pointing at a dead local listener.
+        //    Best-effort — a failure never blocks connecting.
+        let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
+
         let settings = SettingsFile::load(&self.core.paths.settings_file());
         let store = match self.core.load_store() {
             Ok(s) => s,
@@ -585,7 +640,14 @@ impl RealService {
         };
 
         let policy = merge_policy_from_str(&settings.settings.merge_policy);
-        let router = Router::new(settings.rules.clone());
+        // Empty rule list = stock rules (LAN/private bypass, S6-REV-C P1-4);
+        // a user-defined list is respected verbatim.
+        let rules = if settings.rules.is_empty() {
+            default_lan_rules()
+        } else {
+            settings.rules.clone()
+        };
+        let router = Router::new(rules);
         let socks = SocketAddr::from(([127, 0, 0, 1], settings.socks_port));
         let http = SocketAddr::from(([127, 0, 0, 1], settings.http_port));
         let server = Arc::new(ProxyServer::new(socks, http, links.clone(), router, policy));
@@ -593,7 +655,13 @@ impl RealService {
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let run_handle = tokio::spawn(Arc::clone(&server).run(shutdown_rx.clone()));
-        let pump_handle = tokio::spawn(pump(Arc::clone(&self.core), proxy_events, shutdown_rx));
+        let pump_handle = tokio::spawn(pump(
+            Arc::clone(&self.core),
+            Arc::clone(&server),
+            proxy_events,
+            shutdown_tx.clone(),
+            shutdown_rx,
+        ));
 
         // Wait for the listeners to bind (run binds at startup; a bind
         // failure ends the run task).
@@ -693,9 +761,12 @@ impl RealService {
                 .as_ref()
                 .and_then(|s| s.server.http_local_addr());
             if let Some(http) = http_addr {
+                // The v0.2 full LAN-bypass override (S6-REV-C P1-4): LAN and
+                // loopback hosts must never ride the tunnel.
+                let override_list = crate::config::default_proxy_override();
                 match crate::sysproxy::set(
                     &http.to_string(),
-                    "localhost",
+                    &override_list,
                     &self.core.paths.state_dir,
                 ) {
                     Ok(()) => {
@@ -738,12 +809,23 @@ impl Default for RealService {
     }
 }
 
-/// Map one `ProxyEvent` stream into `ServiceEvent`s until shutdown.
+/// Map one `ProxyEvent` stream into `ServiceEvent`s until shutdown, and
+/// SUPERVISE the session (S6-REV-C P1-3c): every [`SUPERVISE_INTERVAL`] the
+/// link health is checked; ALL links down for [`SUPERVISE_STRIKES`]
+/// consecutive checks (after [`SUPERVISE_GRACE`]) fires the D5 fail-open
+/// give-up — system proxy restored, `State::Failed`, session stopped (the
+/// v0.2 supervisor semantics for restart exhaustion, which the engine's own
+/// respawn budget exhaustion cannot express on its own).
 async fn pump(
     core: Arc<Core>,
+    server: Arc<ProxyServer>,
     mut events: broadcast::Receiver<ProxyEvent>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
+    let started = tokio::time::Instant::now();
+    let mut next_check = started + SUPERVISE_INTERVAL;
+    let mut strikes = 0u32;
     loop {
         let ev = tokio::select! {
             biased;
@@ -758,6 +840,28 @@ async fn pump(
                 }
                 continue;
             }
+            // sleep_until (not sleep) + biased order: a steady event stream
+            // can never starve the health check — once the deadline passes
+            // this branch is immediately ready and polled before `recv`.
+            _ = tokio::time::sleep_until(next_check) => {
+                next_check = tokio::time::Instant::now() + SUPERVISE_INTERVAL;
+                if started.elapsed() >= SUPERVISE_GRACE {
+                    let health = server.health_snapshot().await;
+                    if !health.is_empty() && health.iter().all(|(_, h)| !h.ok) {
+                        strikes += 1;
+                        tracing::warn!(
+                            "supervisor: all links down ({strikes}/{SUPERVISE_STRIKES} checks)"
+                        );
+                        if strikes >= SUPERVISE_STRIKES {
+                            give_up(&core, &shutdown_tx).await;
+                            break;
+                        }
+                    } else {
+                        strikes = 0;
+                    }
+                }
+                continue;
+            }
             ev = events.recv() => match ev {
                 Ok(ev) => ev,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -769,6 +873,27 @@ async fn pump(
         };
         handle_proxy_event(&core, ev).await;
     }
+}
+
+/// D5 fail-open give-up (v0.2 supervisor semantics for restart exhaustion):
+/// restore the system proxy, retire the session, mark `Failed`, and stop
+/// the server. Best-effort throughout — the user's browsing keeps working.
+async fn give_up(core: &Core, shutdown: &tokio::sync::watch::Sender<bool>) {
+    tracing::warn!("supervisor: all tunnel links exhausted — giving up (fail-open)");
+    if core.sysproxy_set.swap(false, Ordering::SeqCst) {
+        if let Err(e) = crate::sysproxy::restore(&core.paths.state_dir) {
+            tracing::warn!("system proxy restore failed: {e}");
+        }
+    }
+    // Retire the session so status/profiles views stop reporting the dead
+    // server (the next connect replaces it anyway; dropping it also drops
+    // the last server Arc → run() exits).
+    drop(lock(&core.session).take());
+    core.emit(ServiceEvent::LogLine(
+        "all tunnel links down — disconnected (system proxy restored)".into(),
+    ));
+    core.set_state(ServiceState::Failed);
+    let _ = shutdown.send(true);
 }
 
 async fn handle_proxy_event(core: &Core, ev: ProxyEvent) {

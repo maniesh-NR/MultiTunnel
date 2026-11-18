@@ -561,7 +561,7 @@ fn usage() {
     println!("  (-config <path>, --config <path>) or be attached with an equals");
     println!("  sign (-config=<path>, --config=<path>).\n");
     println!("Commands:");
-    println!("  (none)     start the tray app (Windows)");
+    println!("  (none)     print this usage (the tray app is the separate multitunnel-tray.exe)");
     println!("  connect    connect headless, run until Ctrl+C");
     println!("  import     fill config.json's server block from a vless:// link");
     println!("  profiles   manage the multi-server profile store (list/add/use/remove/export)");
@@ -629,7 +629,34 @@ fn cmd_gui(args: &[String]) -> Result<(), multitunnel::Error> {
         .build()
         .map_err(|e| multitunnel::Error(format!("gui: runtime: {e}")))?;
     let _runtime_guard = rt.enter();
-    mt_app::run_app(service, flags).map_err(|e| multitunnel::Error(format!("gui: {e}")))
+
+    // Ctrl+C exit hook (S6-REV-C P1-3a): the console host dies without
+    // unwinding on Ctrl+C, so intercept it — disconnect FIRST (restores the
+    // system proxy), then exit. The engine dies with us regardless via its
+    // kill-on-close job object; this hook exists for the registry.
+    {
+        let svc = std::sync::Arc::clone(&service);
+        rt.spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                svc.disconnect().await;
+                std::process::exit(0);
+            }
+        });
+    }
+
+    let gui_result = {
+        let exit_service = std::sync::Arc::clone(&service);
+        let result =
+            mt_app::run_app(service, flags).map_err(|e| multitunnel::Error(format!("gui: {e}")));
+
+        // Window-closed exit hook (S6-REV-C P1-3a): run_app returns when the
+        // last window closes — tear the session down so the system proxy can
+        // never outlive the app. No-op when already disconnected.
+        rt.block_on(exit_service.disconnect());
+        result
+    };
+
+    gui_result
 }
 
 #[cfg(test)]

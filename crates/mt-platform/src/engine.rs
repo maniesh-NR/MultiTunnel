@@ -127,9 +127,26 @@ impl Default for ReqwestFetch {
 #[async_trait::async_trait]
 impl HttpFetch for ReqwestFetch {
     async fn fetch(&self, url: &str) -> anyhow::Result<Vec<u8>> {
-        let resp = self.client.get(url).send().await?;
-        let resp = resp.error_for_status()?;
-        Ok(resp.bytes().await?.to_vec())
+        // D9 (S6-REV-C P1-5): reqwest's error Display embeds the FULL request
+        // URL, and user-set mirror URLs can carry tokens in the query string
+        // (`…/xray.zip?token=…`). Strip the URL from every error before it
+        // propagates into GUI logs / bug reports — same treatment as
+        // mt-links' subscription fetch.
+        let resp =
+            self.client.get(url).send().await.map_err(|e| {
+                anyhow::anyhow!("engine download request failed: {}", e.without_url())
+            })?;
+        let resp = resp.error_for_status().map_err(|e| {
+            anyhow::anyhow!(
+                "engine download server rejected the request: {}",
+                e.without_url()
+            )
+        })?;
+        Ok(resp
+            .bytes()
+            .await
+            .map_err(|e| anyhow::anyhow!("engine download body read failed: {}", e.without_url()))?
+            .to_vec())
     }
 }
 

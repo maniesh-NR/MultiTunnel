@@ -17,11 +17,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # S4-REV-C P2-1: tag pushes bypass ci.yml, so a tag must not ship an
       # unlinted build either — fmt and clippy run before anything is built.
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      # S6-REV-B P1-1: gates cover the WHOLE workspace (all 8 crates, 321
+      # tests) — the root-only scope shipped the 7 new crates untested.
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       # S2-REV-B P1-1: a v* tag must never ship an untested build — tag
       # pushes bypass ci.yml, so the suite runs here before the build.
-      - run: cargo test
+      - run: cargo test --workspace
       - run: cargo build --release
       - name: Package
         shell: pwsh

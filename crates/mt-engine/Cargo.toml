@@ -15,3 +15,9 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
+
+# Kill-on-close Job Object (S6-REV-C P1-2: the kernel must guarantee the
+# engine cannot outlive this process even on abnormal death — Task Manager
+# kill, Ctrl+C, power loss — mirroring the v0.2 core_proc discipline).
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects"] }

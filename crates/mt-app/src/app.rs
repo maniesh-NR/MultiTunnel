@@ -521,7 +521,11 @@ impl App {
                         },
                         |_| Message::Tick,
                     );
-                } else if !on && cur == ServiceState::Connected {
+                } else if !on && matches!(cur, ServiceState::Connected | ServiceState::Connecting) {
+                    // Connecting counts too (S6-REV-C P2-2): the service
+                    // honors a disconnect request mid-connect (flag checked
+                    // right after the link probe), so the switch cancels a
+                    // pending connect instead of bouncing back silently.
                     return iced::Task::perform(
                         async move {
                             svc.disconnect().await;
