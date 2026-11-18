@@ -607,6 +607,10 @@ impl Endpoint {
     /// Send one session frame: track it as unacked (keyed by seq, tagged
     /// with the carrier) then queue the encoded bytes. DATA + OPEN only —
     /// CLOSE/ACK/PING are fire-and-forget.
+    ///
+    /// RETRY: a carrier can die between the pick and the queue (the death
+    /// raced our snapshot of the alive set); re-pick and re-tag instead of
+    /// erroring the session (the receiver drops duplicates).
     pub(crate) async fn send_tracked(
         &self,
         session: &Session,
@@ -614,13 +618,25 @@ impl Endpoint {
         seq: u64,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
-        let (idx, _c) = self
-            .pick_carrier()
-            .ok_or_else(|| anyhow::anyhow!("no live bond carrier"))?;
         let frame = Frame::session(kind, self.bond_id, session.id, seq, payload);
         let bytes = frame.encode_to_vec();
-        lock(&session.unacked).insert(seq, (idx, bytes.clone()));
-        self.send_bytes(idx, bytes).await
+        let mut last_err = None;
+        for _ in 0..4 {
+            let Some((idx, _c)) = self.pick_carrier() else {
+                break;
+            };
+            lock(&session.unacked).insert(seq, (idx, bytes.clone()));
+            match self.send_bytes(idx, bytes.clone()).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    // The pick went stale — the entry stays in `unacked`
+                    // (the death handler replays it onto a live carrier).
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| anyhow::anyhow!("no live bond carrier")))
     }
 
     /// Client session open: OPEN is seq 0 of the client→server direction.
@@ -743,12 +759,20 @@ impl Endpoint {
         Ok(())
     }
 
-    /// Queue encoded bytes on the scheduler's carrier pick.
+    /// Queue encoded bytes on the scheduler's carrier pick (retrying past
+    /// the pick-vs-death race; fire-and-forget frames only).
     async fn schedule_bytes(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
-        let (idx, _c) = self
-            .pick_carrier()
-            .ok_or_else(|| anyhow::anyhow!("no live bond carrier"))?;
-        self.send_bytes(idx, bytes).await
+        let mut last_err = None;
+        for _ in 0..4 {
+            let Some((idx, _c)) = self.pick_carrier() else {
+                break;
+            };
+            match self.send_bytes(idx, bytes.clone()).await {
+                Ok(()) => return Ok(()),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no live bond carrier")))
     }
 
     /// Carrier death: mark dead, replay its unacked frames elsewhere,
