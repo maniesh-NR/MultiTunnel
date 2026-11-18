@@ -635,8 +635,7 @@ impl Endpoint {
                 }
             }
         }
-        Err(last_err
-            .unwrap_or_else(|| anyhow::anyhow!("no live bond carrier")))
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no live bond carrier")))
     }
 
     /// Client session open: OPEN is seq 0 of the client→server direction.
