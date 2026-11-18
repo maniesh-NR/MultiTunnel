@@ -58,7 +58,8 @@ pub mod theme;
 pub mod mock;
 
 pub use app::{
-    run_app, run_smoke, App, Flags, LogFilter, Message, ParsedPreview, RuleRow, Screen, SmokeReport,
+    run_app, run_smoke, AdapterRow, App, Flags, LogFilter, Message, ParsedPreview, RuleRow, Screen,
+    SmokeReport,
 };
 pub use theme::MtTheme;
 

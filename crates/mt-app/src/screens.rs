@@ -1,12 +1,14 @@
-//! Screen views: Status / Servers / Routing / Settings / Logs + nav rail.
+//! Screen views: Status / Servers / Adapters / Routing / Settings / Logs +
+//! nav rail.
 //!
 //! Functionality-level fidelity per the wave-2 contract (not pixel-perfect):
 //! M3 rail with active pill, cards on tonal surfaces, filled/tonal/outlined/
-//! text buttons, chips, switches, text fields, pick lists.
+//! text buttons, chips, switches, text fields, pick lists, checkboxes (S7
+//! Adapters screen).
 
 use iced::widget::{
-    button, column, container, horizontal_space, pick_list, row, scrollable, text, text_input,
-    toggler, vertical_space,
+    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
+    text_input, toggler, vertical_space,
 };
 use iced::{Length, Padding};
 use mt_service::{ProfileView, ServiceState};
@@ -610,6 +612,142 @@ fn rule_row<'a>(app: &'a App, i: usize, r: &'a RuleRow) -> Element<'a> {
         .align_y(iced::Alignment::Center),
     )
     .into()
+}
+
+// ---------------------------------------------------------------------------
+// Adapters (S7: bonded-adapter selection)
+// ---------------------------------------------------------------------------
+
+/// The Adapters screen: one checkbox row per network adapter (name,
+/// description, IPv4 chips, up/down chip) + Apply / Revert / Refresh.
+///
+/// Semantics (mirrors the Routing editor): rows are a DRAFT; Apply pushes
+/// the selected ids through `set_bonded_adapters` (the service persists and
+/// restarts a live session); Revert drops the draft; Refresh re-enumerates
+/// (USB NICs come and go). An adapter without IPv4 can be checked but is
+/// skipped by the service at connect time (shown by its "no IPv4" chip).
+pub fn adapters(app: &App) -> Element<'_> {
+    let s = app.theme.scheme;
+    let ts = app.theme.ts;
+
+    let dirty = app.adapters.iter().any(|r| r.selected != r.view.selected);
+    let selected = app.adapters.iter().filter(|r| r.selected).count();
+
+    let toolbar = row![
+        m3_button(
+            "Apply",
+            dirty,
+            ButtonKind::Filled,
+            Message::AdaptersApply,
+            app
+        ),
+        m3_button(
+            "Revert",
+            dirty,
+            ButtonKind::Text,
+            Message::AdaptersReverted,
+            app
+        ),
+        m3_button(
+            "Refresh",
+            true,
+            ButtonKind::Tonal,
+            Message::AdaptersRefresh,
+            app
+        ),
+        horizontal_space().width(Length::Fill),
+        match &app.adapters_status {
+            Some(t) => text(t.clone())
+                .size(ts.body_s.size)
+                .color(s.on_surface_variant),
+            None => text(format!(
+                "{selected} selected — one engine per adapter, spread by merge policy"
+            ))
+            .size(ts.body_s.size)
+            .color(s.on_surface_variant),
+        },
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
+
+    let explainer = column![
+        text("Bonded adapters")
+            .size(ts.title_m.size)
+            .color(s.on_surface),
+        text(
+            "Check the network adapters the tunnel should bond across. Each checked \
+             adapter gets its own engine bound to that adapter (sendThrough), and new \
+             connections are spread across them by the merge policy (Settings). No \
+             selection = a single link and Windows picks the route.",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
+    ]
+    .spacing(6);
+
+    let mut rows = column![toolbar, explainer].spacing(10);
+    if app.adapters.is_empty() {
+        rows = rows.push(
+            text("no adapters found — plug one in or press Refresh")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant),
+        );
+    }
+    for (i, r) in app.adapters.iter().enumerate() {
+        let v = &r.view;
+        let mut line = row![checkbox(v.name.clone(), r.selected)
+            .size(ts.body_m.size)
+            .spacing(8)
+            .on_toggle(move |_| Message::AdapterToggled(i))
+            .style(t3::checkbox(s))]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+
+        if !v.description.is_empty() {
+            line = line.push(
+                text(util::short(&v.description, 40))
+                    .size(ts.body_s.size)
+                    .color(s.on_surface_variant),
+            );
+        }
+        line = line.push(horizontal_space().width(Length::Fill));
+        if v.ipv4.is_empty() {
+            line = line.push(chip(
+                "no IPv4",
+                app,
+                s.error_container,
+                s.on_error_container,
+            ));
+        } else {
+            for ip in &v.ipv4 {
+                line = line.push(chip(
+                    ip.clone(),
+                    app,
+                    s.surface_container_high,
+                    s.on_surface_variant,
+                ));
+            }
+        }
+        line = line.push(if v.up {
+            chip("up", app, s.secondary_container, s.on_secondary_container)
+        } else {
+            chip("down", app, s.error_container, s.on_error_container)
+        });
+
+        rows = rows.push(
+            container(line)
+                .padding(14)
+                .style(t3::card(s, s.surface_container_low))
+                .width(Length::Fill),
+        );
+    }
+
+    let card = container(rows)
+        .padding(16)
+        .style(t3::card(s, s.surface_container_low))
+        .width(Length::Fill);
+
+    scaffold(app, "Adapters", column![card].width(Length::Fill).into())
 }
 
 // ---------------------------------------------------------------------------

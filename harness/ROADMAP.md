@@ -175,6 +175,28 @@ style (parallel expert agents, one crate each). Full per-expert contracts in
 > panic found while verifying was fixed (gui_args). 323 tests, all gates
 > green, tagged v0.3.1 (see LEDGER 05:33–05:40Z).
 
+## S8 — Adapter bonding menu (CLOSED v0.4.0, 2026-11-18)
+
+User report: "There is no menu to select the network adapters that are being
+bonded for the vless connection." The aggregator/policies/probers existed
+since S6 but the factory built exactly one unbound engine — bonding had no
+adapter surface.
+
+Delivered (see D16 + LEDGER):
+- mt-platform `adapters`: Win32 `GetAdaptersAddresses` FFI (loopback
+  excluded, IPv4-first ordering, fail-open) + pure-std procfs dev path.
+- mt-engine `sendThrough` per engine; one `ManagedEngine` per selected
+  adapter with distinct tags (config/log files never collide).
+- RealService: `adapters()` / `set_bonded_adapters()` (id validation,
+  persistence, live-session restart, set_settings guard); connect resolves
+  the selection against the CURRENT enumeration (fail-open skips).
+- GUI: new "Adapters" screen (M3 checkboxes, IPv4/up/down chips,
+  Apply/Revert/Refresh — Routing-editor draft idiom); MockService seeds
+  three synthetic adapters.
+- CLI: `multitunnel adapters` (headless diagnostics).
+Gates: 335 tests / 0 failed, clippy + fmt clean, zigbuild green,
+`gui --smoke` 6/6 views. Tagged v0.4.0.
+
 ## S7 — Native REALITY core (parked)
 
 Pure-Rust VLESS+REALITY+vision client (hand-rolled TLS 1.3 with Chrome

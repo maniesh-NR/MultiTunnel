@@ -7,6 +7,7 @@
 //!   generate     write the generated Xray client config and exit
 //!   doctor       environment check (stage S2)
 //!   profiles     multi-server profile store CLI (S6, mt-links store)
+//!   adapters     list network adapters + bonded selection (S7)
 //!   gui          launch the Material You GUI on the real backend (S6)
 //!   tray         pointer only: the tray app is the separate multitunnel-tray.exe
 //!   version      print version
@@ -16,6 +17,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use multitunnel::{config::Config, xrayconf};
+// Trait methods on RealService (adapters/settings) need the trait in scope.
+use mt_service::MtService;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -55,6 +58,7 @@ fn main() -> ExitCode {
         "doctor" => cmd_doctor(cfg_path),
         "connect" => cmd_connect(cfg_path),
         "profiles" => cmd_profiles(&cmd_args[1..]),
+        "adapters" => cmd_adapters(),
         "gui" => cmd_gui(gui_args(&cmd_args)),
         "tray" => Err(multitunnel::Error(
             "the tray UI ships as the separate multitunnel-tray.exe binary".into(),
@@ -595,6 +599,7 @@ fn usage() {
     println!("  connect    connect headless, run until Ctrl+C");
     println!("  import     fill config.json's server block from a vless:// link");
     println!("  profiles   manage the multi-server profile store (list/add/use/remove/export)");
+    println!("  adapters   list network adapters and the bonded selection (GUI Adapters screen)");
     println!("  gui        launch the all-in-one Material You GUI");
     println!("  generate   write the generated Xray client config and exit");
     println!("  doctor     check environment (binaries, config, ports)");
@@ -613,6 +618,51 @@ fn cmd_profiles(args: &[String]) -> Result<(), multitunnel::Error> {
     for line in lines {
         println!("{line}");
     }
+    Ok(())
+}
+
+// ---- adapters (S7: bonding selection diagnostics) -------------------------
+
+/// List the machine's network adapters and which are selected for
+/// bonding, exactly as the GUI's Adapters screen sees them (same
+/// RealService paths — reads settings.json, never writes). Useful when a
+/// user reports "bonding does not use my second NIC": this shows the ids,
+/// IPv4s and up-state the selection resolves against.
+fn cmd_adapters() -> Result<(), multitunnel::Error> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| multitunnel::Error(format!("adapters: runtime: {e}")))?;
+    let svc = multitunnel::RealService::new();
+    rt.block_on(async move {
+        let adapters = svc.adapters().await;
+        let settings = svc.settings().await;
+        println!(
+            "network adapters ({} found, merge policy: {}):",
+            adapters.len(),
+            settings.merge_policy
+        );
+        if adapters.is_empty() {
+            println!("  none — enumeration failed or no non-loopback adapters");
+        }
+        for a in &adapters {
+            let mark = if a.selected { "[x]" } else { "[ ]" };
+            let state = if a.up { "up" } else { "down" };
+            let ips = if a.ipv4.is_empty() {
+                "no IPv4".to_string()
+            } else {
+                a.ipv4.join(", ")
+            };
+            println!("  {mark} {} — {ips} — {state}", a.name);
+            if !a.description.is_empty() {
+                println!("        {}", a.description);
+            }
+        }
+        match settings.bonded_adapters.len() {
+            0 => println!("\nbonding: no adapters selected — one link, the OS routing table decides"),
+            n => println!("\nbonding: {n} adapter(s) selected — one engine per adapter, connections spread by policy"),
+        }
+    });
     Ok(())
 }
 

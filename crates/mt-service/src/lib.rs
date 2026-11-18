@@ -6,6 +6,12 @@
 //! mt-platform + legacy sysproxy); mt-app ships a `MockService` for
 //! standalone development. All payloads are UI-shaped (Strings, millis) —
 //! this crate depends on no other mt-* crate by design.
+//!
+//! S7 (adapter bonding): [`AdapterView`] + the `adapters` /
+//! `set_bonded_adapters` trait methods + `SettingsView::bonded_adapters`.
+//! `bonded_adapters` holds adapter IDS (not display names): on Windows the
+//! stable adapter GUID, on dev hosts the interface name. Empty = no
+//! pinning (one link, the OS routing table decides — v0.3 behavior).
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -53,6 +59,26 @@ pub struct ProfileView {
     pub active: bool,
 }
 
+/// One network adapter as the GUI's Adapters screen sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterView {
+    /// Stable id — matches entries in
+    /// [`SettingsView::bonded_adapters`].
+    pub id: String,
+    /// Friendly display name ("Wi-Fi", "Ethernet").
+    pub name: String,
+    /// Hardware/driver description ("Intel(R) Wi-Fi 6 AX201").
+    pub description: String,
+    /// Unicast IPv4 addresses (display; the service binds the engine to
+    /// the first one when the adapter is bonded).
+    pub ipv4: Vec<String>,
+    /// OS reports the interface operationally up.
+    pub up: bool,
+    /// Currently selected for bonding (derived from settings by the
+    /// service; a pure convenience for the GUI draft state).
+    pub selected: bool,
+}
+
 /// A routing rule as the GUI sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleView {
@@ -69,6 +95,11 @@ pub struct SettingsView {
     pub system_proxy: bool,
     pub merge_policy: String,
     pub autostart: bool,
+    /// Adapter ids to bond the tunnel across (S7). `#[serde(default)]` so
+    /// settings.json written by v0.3 loads unchanged (empty = one link,
+    /// no adapter pinning).
+    #[serde(default)]
+    pub bonded_adapters: Vec<String>,
 }
 
 /// Live events pushed to the GUI.
@@ -102,6 +133,16 @@ pub trait MtService: Send + Sync {
 
     async fn settings(&self) -> SettingsView;
     async fn set_settings(&self, settings: SettingsView) -> Result<(), String>;
+
+    /// Enumerate the machine's network adapters with their current
+    /// bonding selection (never errors — enumeration fails open to an
+    /// empty list, like the rest of the contract's read paths).
+    async fn adapters(&self) -> Vec<AdapterView>;
+
+    /// Replace the bonded-adapter selection (ids from [`Self::adapters`]).
+    /// Persists immediately; a live session is restarted so the new link
+    /// set takes effect. Unknown ids are an `Err` naming the id.
+    async fn set_bonded_adapters(&self, ids: Vec<String>) -> Result<(), String>;
 
     /// Subscribe to live events (state, links, throughput, logs).
     fn events(&self) -> broadcast::Receiver<ServiceEvent>;

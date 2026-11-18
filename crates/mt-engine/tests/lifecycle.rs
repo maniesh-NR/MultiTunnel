@@ -50,6 +50,7 @@ fn spec(tag: &str) -> EngineSpec {
             fingerprint: "chrome".into(),
             spider_x: None,
         },
+        send_through: None,
     }
 }
 

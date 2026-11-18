@@ -63,11 +63,19 @@ pub struct VlessRealityEndpoint {
     pub spider_x: Option<String>,
 }
 
-/// One managed engine: tag + endpoint.
+/// One managed engine: tag + endpoint (+ optional local bind).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineSpec {
     pub tag: String,
     pub endpoint: VlessRealityEndpoint,
+    /// S7 (adapter bonding): local IPv4 to bind the engine's outgoing
+    /// socket to (Xray `sendThrough`). `None` = the OS routing table
+    /// decides (v0.3 behavior). Binding to an adapter's address forces
+    /// the VLESS connection to egress through that adapter — one engine
+    /// per bonded adapter, the aggregator spreads connections across
+    /// them. `#[serde(default)]` keeps old serialized specs loading.
+    #[serde(default)]
+    pub send_through: Option<String>,
 }
 
 /// Where the xray binary comes from. Implemented by mt-platform
@@ -87,6 +95,50 @@ pub trait EngineLocator: Send + Sync {
 /// router in mt-net decides what reaches the engine.
 pub fn generate_config(spec: &EngineSpec, socks_listen: SocketAddr) -> serde_json::Value {
     let ep = &spec.endpoint;
+    // Xray `sendThrough`: a top-level outbound field — the dialer binds the
+    // socket to this local address before connecting (adapter pinning).
+    // Tolerant: an empty/whitespace string is treated as "not set".
+    let send_through = spec
+        .send_through
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let mut outbound = json!({
+        "tag": "proxy",
+        "protocol": "vless",
+        "settings": {
+            "vnext": [{
+                "address": ep.address,
+                "port": ep.port,
+                "users": [{
+                    "id": ep.uuid,
+                    // See module docs: flow is not on the frozen
+                    // endpoint; the root crate's REALITY config uses
+                    // vision, so we pin it here too.
+                    "flow": "xtls-rprx-vision",
+                    "encryption": "none",
+                }],
+            }],
+        },
+        "streamSettings": {
+            "network": "tcp",
+            "security": "reality",
+            "realitySettings": {
+                "serverName": ep.sni,
+                "fingerprint": ep.fingerprint,
+                "publicKey": ep.public_key,
+                "shortId": ep.short_id,
+                "spiderX": ep.spider_x.clone().unwrap_or_else(|| "/".to_string()),
+            },
+        },
+        // CRITICAL CONTRACT: mux must stay off. net-merge bonds by
+        // spreading individual TCP connections; a muxed tunnel is one
+        // stream on one link (see module docs).
+        "mux": { "enabled": false },
+    });
+    if let Some(ip) = send_through {
+        outbound["sendThrough"] = json!(ip);
+    }
     json!({
         "log": { "loglevel": "warning" },
         "inbounds": [{
@@ -96,38 +148,6 @@ pub fn generate_config(spec: &EngineSpec, socks_listen: SocketAddr) -> serde_jso
             "protocol": "socks",
             "settings": { "auth": "noauth", "udp": false },
         }],
-        "outbounds": [{
-            "tag": "proxy",
-            "protocol": "vless",
-            "settings": {
-                "vnext": [{
-                    "address": ep.address,
-                    "port": ep.port,
-                    "users": [{
-                        "id": ep.uuid,
-                        // See module docs: flow is not on the frozen
-                        // endpoint; the root crate's REALITY config uses
-                        // vision, so we pin it here too.
-                        "flow": "xtls-rprx-vision",
-                        "encryption": "none",
-                    }],
-                }],
-            },
-            "streamSettings": {
-                "network": "tcp",
-                "security": "reality",
-                "realitySettings": {
-                    "serverName": ep.sni,
-                    "fingerprint": ep.fingerprint,
-                    "publicKey": ep.public_key,
-                    "shortId": ep.short_id,
-                    "spiderX": ep.spider_x.clone().unwrap_or_else(|| "/".to_string()),
-                },
-            },
-            // CRITICAL CONTRACT: mux must stay off. net-merge bonds by
-            // spreading individual TCP connections; a muxed tunnel is one
-            // stream on one link (see module docs).
-            "mux": { "enabled": false },
-        }],
+        "outbounds": [outbound],
     })
 }

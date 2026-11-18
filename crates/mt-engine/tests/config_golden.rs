@@ -22,6 +22,7 @@ fn spec() -> EngineSpec {
             fingerprint: "chrome".into(),
             spider_x: None,
         },
+        send_through: None,
     }
 }
 
@@ -76,6 +77,11 @@ fn golden_config_matches_contract() {
     let rendered = serde_json::to_string(&cfg).unwrap();
     assert!(!rendered.contains("freedom"), "no freedom outbound");
     assert!(!rendered.contains("blackhole"), "no blackhole outbound");
+    // Unbound engine: no sendThrough key at all (v0.3 golden shape).
+    assert!(
+        out.get("sendThrough").is_none(),
+        "sendThrough absent when unbound"
+    );
 
     // The engine consumes camelCase wire names; assert every contract
     // field survives a JSON round trip.
@@ -107,4 +113,36 @@ fn spider_x_override_and_listen_are_honored() {
     );
     assert_eq!(cfg["inbounds"][0]["listen"], "127.0.0.1");
     assert_eq!(cfg["inbounds"][0]["port"], 1);
+}
+
+#[test]
+fn send_through_binds_the_outbound_to_a_local_address() {
+    // S7 adapter bonding: a bound engine writes its adapter's IPv4 as the
+    // outbound `sendThrough` (top-level field, NOT inside settings).
+    let mut bound = spec();
+    bound.send_through = Some("192.168.1.42".into());
+    let cfg = generate_config(&bound, listen());
+    let out = &cfg["outbounds"][0];
+    assert_eq!(out["sendThrough"], "192.168.1.42");
+    // Everything else is untouched by the bind.
+    assert_eq!(out["mux"]["enabled"], false, "mux still off when bound");
+    assert_eq!(out["streamSettings"]["security"], "reality");
+
+    // Whitespace-only bind is treated as unbound (tolerant input).
+    let mut blank = spec();
+    blank.send_through = Some("   ".into());
+    let cfg2 = generate_config(&blank, listen());
+    assert!(cfg2["outbounds"][0].get("sendThrough").is_none());
+
+    // Old serialized specs (no sendThrough key) still deserialize.
+    let legacy = serde_json::json!({
+        "tag": "legacy",
+        "endpoint": {
+            "address": "203.0.113.10", "port": 443, "uuid": UUID,
+            "sni": "tunnel.example.org", "public_key": PBK,
+            "short_id": "0123abcd", "fingerprint": "chrome"
+        }
+    });
+    let parsed: EngineSpec = serde_json::from_value(legacy).expect("legacy spec deserializes");
+    assert_eq!(parsed.send_through, None);
 }

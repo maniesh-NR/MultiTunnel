@@ -90,6 +90,24 @@
 //! 14. **CLI**: `profiles` (see [`crate::profiles`]) and `gui` reuse this
 //!     module's paths/settings shapes so the CLI, GUI and service agree on
 //!     one on-disk format.
+//! 15. **Adapter bonding (S7)**: `SettingsView::bonded_adapters` holds
+//!     adapter ids; at connect time they are resolved against the CURRENT
+//!     machine enumeration ([`resolve_bonded`]) and the engine factory
+//!     builds ONE `ManagedEngine` PER bonded adapter (`sendThrough` binds
+//!     its outgoing socket to that adapter's IPv4 — Windows source-address
+//!     binding selects the egress interface), each with a distinct tag
+//!     (`"profile [adapter]"`) so config/log files never collide. The
+//!     aggregator + merge policy then spread individual TCP connections
+//!     across the per-adapter links — the net-merge bonding model, mux-off
+//!     contract preserved. Unknown ids or IPv4-less adapters are skipped
+//!     with a warning (fail-open: a USB modem unplugged between selection
+//!     and connect must not black-hole the tunnel); empty selection = one
+//!     unbound link, the OS routing table decides (v0.3 behavior).
+//!     `set_bonded_adapters` validates ids, persists, and RESTARTS a live
+//!     session so the new link set takes effect immediately. `set_settings`
+//!     NEVER writes `bonded_adapters` (the Adapters screen owns that field
+//!     via `set_bonded_adapters`; a stale GUI settings copy must not
+//!     clobber a fresh selection).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -103,9 +121,10 @@ use mt_net::{
     Action, Host, MergePolicy, Outbound, ProxyEvent, ProxyServer, Router, Rule, RuleMatcher,
     TargetAddr,
 };
+use mt_platform::NetAdapter;
 use mt_service::{
-    LinkStatus, MtService, ProfileView, RuleView, ServiceEvent, ServiceState, SettingsView,
-    StatusSnapshot,
+    AdapterView, LinkStatus, MtService, ProfileView, RuleView, ServiceEvent, ServiceState,
+    SettingsView, StatusSnapshot,
 };
 use tokio::sync::broadcast;
 
@@ -160,11 +179,107 @@ impl ServicePaths {
 ///
 /// The seam that keeps the Xray engine out of RealService's test surface:
 /// production ([`EngineLinkFactory`]) resolves the locator and constructs a
-/// [`ManagedEngine`]; tests inject fakes. `Err` messages must be
-/// credential-free (they become UI error strings).
+/// [`ManagedEngine`] per link; tests inject fakes. `bonded` is the resolved
+/// adapter selection (S7): empty → one unbound link; one entry per bonded
+/// adapter otherwise. `Err` messages must be credential-free (they become
+/// UI error strings).
 #[async_trait::async_trait]
 pub trait LinkFactory: Send + Sync {
-    async fn build(&self, profile: &Profile) -> anyhow::Result<Vec<Arc<dyn Outbound>>>;
+    async fn build(
+        &self,
+        profile: &Profile,
+        bonded: &[BondedAdapter],
+    ) -> anyhow::Result<Vec<Arc<dyn Outbound>>>;
+}
+
+/// One selected adapter resolved to an engine bind address (S7). Built by
+/// [`resolve_bonded`] at connect time; consumed by [`EngineLinkFactory`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BondedAdapter {
+    /// Stable adapter id (as enumerated — Windows GUID / Linux ifname).
+    pub id: String,
+    /// Friendly name for engine tags and logs ("Wi-Fi").
+    pub name: String,
+    /// The local IPv4 the engine's `sendThrough` binds to.
+    pub bind_ip: String,
+}
+
+/// Resolve persisted bonded-adapter ids against `adapters` (pure — the
+/// caller passes the CURRENT enumeration so tests can inject fixtures).
+/// Fail-open per id: unknown ids and IPv4-less adapters are skipped with a
+/// warning (see module note 15); the remaining adapters keep their
+/// settings-file order, duplicates collapse.
+pub fn resolve_bonded(ids: &[String], adapters: &[NetAdapter]) -> Vec<BondedAdapter> {
+    let mut out: Vec<BondedAdapter> = Vec::new();
+    for id in ids {
+        if out.iter().any(|b| &b.id == id) {
+            continue;
+        }
+        let Some(adapter) = adapters.iter().find(|a| &a.id == id) else {
+            tracing::warn!("bonded adapter {id:?} is not present on this machine; skipping");
+            continue;
+        };
+        // IPv4 list is normal-first/link-local-last (mt-platform), so
+        // `first` is the right bind address.
+        let Some(ip) = adapter.ipv4.first() else {
+            tracing::warn!(
+                "bonded adapter {:?} has no IPv4 address (down or IPv6-only); skipping",
+                adapter.name
+            );
+            continue;
+        };
+        out.push(BondedAdapter {
+            id: adapter.id.clone(),
+            name: adapter.name.clone(),
+            bind_ip: ip.to_string(),
+        });
+    }
+    out
+}
+
+/// Engine specs for one profile + resolved bonded adapters (pure; the
+/// testable seam behind [`EngineLinkFactory`]). Empty `bonded` → exactly
+/// one UNBOUND spec (v0.3 behavior). Otherwise one spec per adapter, tag
+/// `"<profile-tag> [<name>]"` (deduplicated — two adapters may share a
+/// friendly name), `send_through` = the adapter's bind IPv4.
+pub fn engine_specs_for(profile: &Profile, bonded: &[BondedAdapter]) -> Vec<mt_engine::EngineSpec> {
+    let Ok(endpoint) = endpoint_from_profile(profile) else {
+        // Conversion errors are the factory's job to report (it re-runs
+        // `endpoint_from_profile`); specs_for only runs on convertible
+        // profiles in practice.
+        return Vec::new();
+    };
+    if bonded.is_empty() {
+        return vec![mt_engine::EngineSpec {
+            tag: profile.tag.clone(),
+            endpoint,
+            send_through: None,
+        }];
+    }
+    let mut used_names: Vec<String> = Vec::new();
+    let mut specs = Vec::with_capacity(bonded.len());
+    for a in bonded {
+        let mut name = a.name.clone();
+        if name.trim().is_empty() {
+            name = a.id.clone();
+        }
+        // Distinct adapters can share a friendly name (two "Ethernet");
+        // engine tag → config/log filename, so it MUST be unique.
+        if used_names.contains(&name) {
+            let mut n = 2;
+            while used_names.contains(&format!("{name} #{n}")) {
+                n += 1;
+            }
+            name = format!("{name} #{n}");
+        }
+        used_names.push(name.clone());
+        specs.push(mt_engine::EngineSpec {
+            tag: format!("{} [{}]", profile.tag, name),
+            endpoint: endpoint.clone(),
+            send_through: Some(a.bind_ip.clone()),
+        });
+    }
+    specs
 }
 
 /// Production factory: one [`ManagedEngine`] per VLESS+REALITY+TCP profile.
@@ -194,19 +309,32 @@ impl EngineLinkFactory {
 
 #[async_trait::async_trait]
 impl LinkFactory for EngineLinkFactory {
-    async fn build(&self, profile: &Profile) -> anyhow::Result<Vec<Arc<dyn Outbound>>> {
-        let endpoint = endpoint_from_profile(profile).map_err(anyhow::Error::msg)?;
-        let spec = mt_engine::EngineSpec {
-            tag: profile.tag.clone(),
-            endpoint,
-        };
-        let engine = mt_engine::ManagedEngine::new(
-            spec,
-            Arc::clone(&self.locator),
-            self.state_dir.clone(),
-            self.log_dir.clone(),
-        );
-        Ok(vec![Arc::new(engine)])
+    async fn build(
+        &self,
+        profile: &Profile,
+        bonded: &[BondedAdapter],
+    ) -> anyhow::Result<Vec<Arc<dyn Outbound>>> {
+        // Conversion first: a non-convertible profile is a user-facing
+        // error (module note 5), not an empty link list.
+        endpoint_from_profile(profile).map_err(anyhow::Error::msg)?;
+        let specs = engine_specs_for(profile, bonded);
+        if specs.is_empty() {
+            anyhow::bail!(
+                "profile {:?}: no engine specs (endpoint conversion failed)",
+                profile.tag
+            );
+        }
+        Ok(specs
+            .into_iter()
+            .map(|spec| {
+                Arc::new(mt_engine::ManagedEngine::new(
+                    spec,
+                    Arc::clone(&self.locator),
+                    self.state_dir.clone(),
+                    self.log_dir.clone(),
+                )) as Arc<dyn Outbound>
+            })
+            .collect())
     }
 }
 
@@ -373,6 +501,7 @@ impl Default for SettingsFile {
                 system_proxy: false,
                 merge_policy: "failover".to_string(),
                 autostart: false,
+                bonded_adapters: Vec::new(),
             },
             // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
             // settings.json must carry private-CIDR → direct rules, mirroring
@@ -627,7 +756,18 @@ impl RealService {
             return;
         };
 
-        let links = match self.core.factory.build(&profile).await {
+        let links = match self
+            .core
+            .factory
+            .build(
+                &profile,
+                &resolve_bonded(
+                    &settings.settings.bonded_adapters,
+                    &mt_platform::enumerate_adapters(),
+                ),
+            )
+            .await
+        {
             Ok(l) if !l.is_empty() => l,
             Ok(_) => {
                 Self::fail_connect(&self.core, "link factory produced no links".into()).await;
@@ -1137,16 +1277,20 @@ impl MtService for RealService {
         let profile = find_profile(&store, id)
             .ok_or_else(|| format!("no profile matches {id:?}"))?
             .clone();
+        let settings = SettingsFile::load(&self.core.paths.settings_file());
+        let bonded = resolve_bonded(
+            &settings.settings.bonded_adapters,
+            &mt_platform::enumerate_adapters(),
+        );
         let mut links = self
             .core
             .factory
-            .build(&profile)
+            .build(&profile, &bonded)
             .await
             .map_err(|e| e.to_string())?;
         let Some(link) = links.pop() else {
             return Err("link factory produced no links".to_string());
         };
-        let settings = SettingsFile::load(&self.core.paths.settings_file());
         let target = parse_probe_target(&settings.probe_target)
             .unwrap_or_else(|| parse_probe_target(DEFAULT_PROBE_TARGET).expect("constant parses"));
         let started = Instant::now();
@@ -1184,6 +1328,11 @@ impl MtService for RealService {
     async fn set_settings(&self, settings: SettingsView) -> Result<(), String> {
         let mut file = SettingsFile::load(&self.core.paths.settings_file());
         let autostart_changed = file.settings.autostart != settings.autostart;
+        // Module note 15: `bonded_adapters` belongs to the Adapters screen
+        // (`set_bonded_adapters`); a possibly-stale GUI settings copy must
+        // never clobber a fresh selection — persist the server-side value.
+        let mut settings = settings;
+        settings.bonded_adapters = file.settings.bonded_adapters.clone();
         file.settings = settings.clone();
         file.save(&self.core.paths.settings_file())
             .map_err(|e| e.to_string())?;
@@ -1196,6 +1345,68 @@ impl MtService for RealService {
             } else {
                 mt_platform::autostart_disable().map_err(|e| e.to_string())?;
             }
+        }
+        Ok(())
+    }
+
+    async fn adapters(&self) -> Vec<AdapterView> {
+        let selected = SettingsFile::load(&self.core.paths.settings_file())
+            .settings
+            .bonded_adapters;
+        mt_platform::enumerate_adapters()
+            .into_iter()
+            .map(|a| AdapterView {
+                selected: selected.contains(&a.id),
+                id: a.id,
+                name: a.name,
+                description: a.description,
+                ipv4: a.ipv4.iter().map(|ip| ip.to_string()).collect(),
+                up: a.up,
+            })
+            .collect()
+    }
+
+    async fn set_bonded_adapters(&self, ids: Vec<String>) -> Result<(), String> {
+        // Validate against the CURRENT enumeration: a typo'd or vanished
+        // id is a hard error naming the id (the GUI refreshes its list from
+        // the same source, so this only fires on races).
+        let known = mt_platform::enumerate_adapters();
+        for id in &ids {
+            if !known.iter().any(|a| &a.id == id) {
+                return Err(format!(
+                    "unknown adapter {id:?} — refresh the adapter list and pick again"
+                ));
+            }
+        }
+        // Dedupe preserving first-seen order.
+        let mut deduped: Vec<String> = Vec::with_capacity(ids.len());
+        for id in ids {
+            if !deduped.contains(&id) {
+                deduped.push(id);
+            }
+        }
+        let mut file = SettingsFile::load(&self.core.paths.settings_file());
+        file.settings.bonded_adapters = deduped;
+        file.save(&self.core.paths.settings_file())
+            .map_err(|e| e.to_string())?;
+        // A live session rides the OLD link set — restart so the new
+        // selection takes effect immediately (module note 15). Connecting
+        // sessions finish first (their links are already fixed); the next
+        // manual connect picks the selection up.
+        match self.core.get_state() {
+            ServiceState::Connected => {
+                self.core.emit(ServiceEvent::LogLine(
+                    "bonded adapters changed — reconnecting".into(),
+                ));
+                self.disconnect().await;
+                self.connect().await;
+            }
+            ServiceState::Connecting => {
+                self.core.emit(ServiceEvent::LogLine(
+                    "bonded adapters changed — applies after the pending connect".into(),
+                ));
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -1294,14 +1505,54 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LinkFactory for FakeFactory {
-        async fn build(&self, _profile: &Profile) -> anyhow::Result<Vec<Arc<dyn Outbound>>> {
+        async fn build(
+            &self,
+            _profile: &Profile,
+            bonded: &[BondedAdapter],
+        ) -> anyhow::Result<Vec<Arc<dyn Outbound>>> {
             if self.fail {
                 anyhow::bail!("no engine available (synthetic factory failure)");
             }
-            Ok(vec![Arc::new(FakeLink {
-                name: "fake-0",
-                echo: self.echo,
-            })])
+            // Bonding fidelity: one fake link per bonded adapter, named
+            // like the real factory would (empty selection → one link).
+            if bonded.is_empty() {
+                return Ok(vec![Arc::new(FakeLink {
+                    name: "fake-0",
+                    echo: self.echo,
+                })]);
+            }
+            Ok(bonded
+                .iter()
+                .map(|a| {
+                    Arc::new(FakeLinkNamed {
+                        name: format!("fake [{}]", a.name),
+                        echo: self.echo,
+                    }) as Arc<dyn Outbound>
+                })
+                .collect())
+        }
+    }
+
+    /// FakeLink variant with an owned name (bonded links are named after
+    /// adapters, which are runtime strings).
+    struct FakeLinkNamed {
+        name: String,
+        echo: SocketAddr,
+    }
+
+    #[async_trait::async_trait]
+    impl Outbound for FakeLinkNamed {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        async fn connect(&self, _target: &TargetAddr) -> anyhow::Result<mt_net::ProxyStream> {
+            let s = tokio::net::TcpStream::connect(self.echo).await?;
+            Ok(Box::new(s))
+        }
+        async fn probe(&self, _target: &TargetAddr) -> anyhow::Result<Duration> {
+            let started = Instant::now();
+            tokio::net::TcpStream::connect(self.echo).await?;
+            Ok(started.elapsed())
         }
     }
 
@@ -1314,6 +1565,7 @@ mod tests {
                 system_proxy,
                 merge_policy: "failover".to_string(),
                 autostart: false,
+                bonded_adapters: Vec::new(),
             },
             rules: Vec::new(),
             socks_port: 0,
@@ -1411,6 +1663,7 @@ mod tests {
             system_proxy: false, // never true in tests: autostart/sysproxy touch the host
             merge_policy: "lowestlatency".to_string(),
             autostart: false,
+            bonded_adapters: Vec::new(),
         };
         svc.set_settings(view.clone()).await.expect("save settings");
         assert_eq!(svc.settings().await, view);
@@ -1513,5 +1766,173 @@ mod tests {
         let secs: i64 = 1709210096;
         let t = UNIX_EPOCH + Duration::from_secs(secs as u64);
         assert_eq!(fmt_utc(t), "2024-02-29 12:34:56 UTC");
+    }
+
+    // --- S7: adapter bonding -------------------------------------------------
+
+    fn net_adapter(id: &str, name: &str, ips: &[&str], up: bool) -> NetAdapter {
+        NetAdapter {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: format!("desc of {name}"),
+            ipv4: ips.iter().map(|s| s.parse().expect("test ip")).collect(),
+            up,
+        }
+    }
+
+    #[test]
+    fn resolve_bonded_keeps_order_skips_unknown_and_ipless() {
+        let adapters = vec![
+            net_adapter("guid-wifi", "Wi-Fi", &["192.168.1.42", "169.254.1.1"], true),
+            net_adapter("guid-eth", "Ethernet", &["10.0.0.5"], true),
+            net_adapter("guid-dead", "Dead NIC", &[], false),
+        ];
+        // Settings order is preserved; unknown + IPv4-less skipped.
+        let ids = ["guid-eth", "nope", "guid-dead", "guid-wifi"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let bonded = resolve_bonded(&ids, &adapters);
+        assert_eq!(
+            bonded,
+            vec![
+                BondedAdapter {
+                    id: "guid-eth".into(),
+                    name: "Ethernet".into(),
+                    bind_ip: "10.0.0.5".into(),
+                },
+                BondedAdapter {
+                    id: "guid-wifi".into(),
+                    name: "Wi-Fi".into(),
+                    bind_ip: "192.168.1.42".into(),
+                },
+            ]
+        );
+        // Duplicates collapse; empty input → empty output.
+        let dup = ["guid-wifi", "guid-wifi"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(resolve_bonded(&dup, &adapters).len(), 1);
+        assert!(resolve_bonded(&[], &adapters).is_empty());
+    }
+
+    #[test]
+    fn engine_specs_for_binds_one_engine_per_adapter() {
+        let profile = parse_share_link(VLESS_REALITY).expect("parse");
+        // No selection → exactly one UNBOUND spec with the plain tag.
+        let unbound = engine_specs_for(&profile, &[]);
+        assert_eq!(unbound.len(), 1);
+        assert_eq!(unbound[0].tag, profile.tag);
+        assert_eq!(unbound[0].send_through, None);
+
+        // Two adapters → two specs, tags embed the adapter name,
+        // sendThrough pins each adapter's IPv4.
+        let bonded = vec![
+            BondedAdapter {
+                id: "guid-wifi".into(),
+                name: "Wi-Fi".into(),
+                bind_ip: "192.168.1.42".into(),
+            },
+            BondedAdapter {
+                id: "guid-eth".into(),
+                name: "Ethernet".into(),
+                bind_ip: "10.0.0.5".into(),
+            },
+        ];
+        let specs = engine_specs_for(&profile, &bonded);
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].tag, "synthetic-reality [Wi-Fi]");
+        assert_eq!(specs[0].send_through.as_deref(), Some("192.168.1.42"));
+        assert_eq!(specs[1].tag, "synthetic-reality [Ethernet]");
+        assert_eq!(specs[1].send_through.as_deref(), Some("10.0.0.5"));
+
+        // Duplicate friendly names get distinct tags (config/log filenames
+        // derive from the tag and must never collide).
+        let twins = vec![
+            BondedAdapter {
+                id: "a1".into(),
+                name: "Ethernet".into(),
+                bind_ip: "10.0.0.5".into(),
+            },
+            BondedAdapter {
+                id: "a2".into(),
+                name: "Ethernet".into(),
+                bind_ip: "10.0.0.6".into(),
+            },
+        ];
+        let specs = engine_specs_for(&profile, &twins);
+        assert_ne!(specs[0].tag, specs[1].tag, "twin names must diverge");
+    }
+
+    #[tokio::test]
+    async fn set_bonded_adapters_validates_persists_and_reconnects() {
+        let echo = spawn_echo().await;
+        let paths = scratch("bonded");
+        write_settings(&paths, echo.port(), false);
+        let svc = RealService::with(paths.clone(), Arc::new(FakeFactory { echo, fail: false }));
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("active");
+
+        // Unknown ids are rejected with a message naming the id.
+        let err = svc
+            .set_bonded_adapters(vec!["definitely-not-an-adapter-id".into()])
+            .await
+            .expect_err("unknown id must be rejected");
+        assert!(err.contains("definitely-not-an-adapter-id"));
+
+        // Machine-dependent part: use a REAL adapter id when the host has
+        // one (Linux CI: eth0; Windows runners: several). None at all →
+        // only the validation path above is exercisable; skip the rest.
+        let adapters = svc.adapters().await;
+        let Some(first) = adapters.iter().find(|a| a.up || !a.ipv4.is_empty()) else {
+            return;
+        };
+        let pick = first.id.clone();
+
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+        let restarts_before = svc.status().await.restarts;
+
+        // Applying a selection while connected restarts the session
+        // (FakeFactory builds one link per bonded adapter).
+        svc.set_bonded_adapters(vec![pick.clone()])
+            .await
+            .expect("valid selection");
+        let snap = svc.status().await;
+        assert_eq!(snap.state, ServiceState::Connected, "reconnected");
+        assert!(snap.restarts > restarts_before, "a fresh connect ran");
+
+        // The selection is persisted and reflected by adapters().
+        let adapters = svc.adapters().await;
+        let selected: Vec<_> = adapters.iter().filter(|a| a.selected).collect();
+        assert_eq!(selected.len(), 1, "exactly one adapter selected");
+        assert_eq!(selected[0].id, pick);
+
+        // settings() carries it too; set_settings must NOT clobber it.
+        let mut s = svc.settings().await;
+        s.dark_mode = !s.dark_mode;
+        svc.set_settings(s).await.expect("save settings");
+        assert_eq!(
+            svc.settings().await.bonded_adapters,
+            vec![pick.clone()],
+            "set_settings preserves the bonded selection"
+        );
+
+        // Clearing the selection restores the single unbound link and
+        // restarts again.
+        svc.set_bonded_adapters(Vec::new()).await.expect("clear");
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+        assert!(
+            svc.adapters().await.iter().all(|a| !a.selected),
+            "selection cleared"
+        );
+        let snap = svc.status().await;
+        // Linux CI: IPv4 discovery is unavailable (mt-platform note), so
+        // the resolved bonded list can be EMPTY → the single fake link
+        // carries the name "fake-0". With a resolvable adapter the link
+        // name embeds the adapter name. Both are correct; assert >=1 link.
+        assert!(!snap.links.is_empty());
+        svc.disconnect().await;
     }
 }

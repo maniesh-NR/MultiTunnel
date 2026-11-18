@@ -1,59 +1,39 @@
-# STATE — rewritten at the end of every stage. Last update: v0.3.1 HOTFIX (2026-11-18)
+# STATE — rewritten at the end of every stage. Last update: S8 (adapter bonding, v0.4.0)
 
 ## Current position
-- **v0.3.0 (S6, all-in-one) released; first real-Windows user run hit the
-  bare-launch UX bug → v0.3.1 hotfix implemented, gated, and shipped.**
-- v0.3.1 changes (D15): no-args launch = the Material You GUI (was the
-  `tray` pointer error — a double-click looked like "no launch activity");
-  Explorer/autostart launches free their orphan console (FreeConsole when
-  sole owner); GUI errors and panics can no longer die invisibly
-  (MessageBoxW when no shared console); `gui_args` empty-argv panic fixed
-  (caught by running the host binary bare); README/QUICKSTART updated
-  (QUICKSTART step 2 leads with double-click).
-- Workspace: 8 crates, 323 tests, all gates green (fmt, clippy host +
-  windows-gnu via zig shims, -D warnings, release zigbuild PE32+ x3,
-  gui --smoke exit 0, bare host launch reaches iced).
+- Stage: S8 CLOSED — the adapter-bonding menu the user asked for shipped as
+  v0.4.0. All gates green: 335 tests / 0 failed, clippy clean, fmt clean,
+  zigbuild x86_64-pc-windows-gnu green (multitunnel.exe, multitunnel-tray.exe,
+  mt-app.exe), `gui --smoke` 6/6 views on the real backend.
+- Shipped surface: GUI "Adapters" screen (checkbox rows, IPv4 + up/down chips,
+  Apply/Revert/Refresh); one ManagedEngine per selected adapter bound via Xray
+  `sendThrough`; merge policies spread connections across the per-adapter
+  links; `multitunnel adapters` CLI; settings.json carries
+  `bondedAdapters` (v0.3 files load unchanged via serde default).
+- Review mode this stage: single-implementation with orchestrator audit (the
+  MoE split was one parallel expert for mt-platform + orchestrator for the
+  contract/engine/service/GUI); no adversarial consensus round was run —
+  FLAGGED as process debt if S9 needs a reference precedent.
 
 ## Next actions
-1. USER MANUAL STEP (retry on the v0.3.1 zip — now double-click friendly):
-   double-click `multitunnel.exe`; import the live xray-gcp vless link on
-   the Servers screen; connect; verify LAN bypass, close-window proxy
-   restore, tray coexistence. If a MessageBox ever appears, its text is the
-   bug report.
-2. Optional v0.3.2 backlog (parked; see S6-consensus + reports): same-tag
-   engine file races, subscription/download body-size caps + staging GC,
-   engine log rotation, blocking I/O notes, Stopped-event race, vmess
-   pbk/sid validation, listener max_conns, profiles.json cross-process
-   locking, mt-app.exe packaging decision. (C-P2-10 "autostart registers
-   the console exe" is largely resolved by the D15 console policy.)
-3. S7 (parked): native pure-Rust REALITY core.
+1. Watch the v0.4.0 release run (release.yml on windows-latest) and verify
+   the zip publishes (PE32+ x2 in dist).
+2. User verification on real Windows: Adapters screen lists NICs, selection
+   persists, Status screen shows N links (one per adapter) while connected.
+3. Backlog from v0.3.1 notes still open (engine log rotation, profiles.json
+   locking, vmess validation, listener max_conns, body-size caps).
+4. S7 (native REALITY core) remains parked; pick it up or queue S9 from the
+   v0.3.1 backlog + user feedback.
 
 ## Blockers / open items
-- None blocking. GitHub pushes MUST go through harness/backup.sh (token in
-  upload/, never printed).
-- RESUME RULE (violated in incidents #9/#10): `git fetch origin && git
-  log --oneline -5 origin/main` FIRST on every session start, BEFORE any
-  work. The local snapshot can be days behind the remote.
-- CI lesson (v0.3.0 tag retraction): ALWAYS check the frontier's latest CI
-  runs (actions API) before cutting a tag — a green local sandbox is not
-  proof of green runners (Windows RST semantics + timing races differ).
-- v0.3.1 lesson (D15): after changing a dispatch default, run the binary
-  BARE on the host — unit tests and `gui --smoke` never exercise the
-  empty-argv path.
+- None blocking. Watch item: disk headroom in the sandbox (the 9.9G rootfs
+  filled twice during S8; clean /tmp/mt-target/debug before big builds).
 
 ## Environment map (sandbox)
 - Repo: /home/z/my-project/MultiTunnel — branch main, remote
-  github.com/maniesh-NR/MultiTunnel (origin embeds the token; prefer
-  harness/backup.sh for pushes).
+  github.com/maniesh-NR/MultiTunnel (origin URL embeds the token; push via
+  harness/backup.sh or the existing remote).
 - Toolchains: /home/z/my-project/tools/ — source tools/env.sh first
-  (RUSTUP_HOME/CARGO_HOME/PATH). Rust 1.100.0, rustfmt + clippy,
-  x86_64-pc-windows-gnu target, cargo-zigbuild 0.24.1, ziglang 0.17.1 pip
-  wheel (this pair WORKS — the 9th-incident note was a corrupted wheel).
-- Cross build: CARGO_TARGET_DIR=/tmp/mt-target cargo zigbuild --release
-  --target x86_64-pc-windows-gnu --workspace (3 exes). Debug artifacts eat
-  ~5G — clean /tmp/mt-target between phases.
-- Windows-gnu clippy: sh scripts/mingw-zig-shims.sh /tmp/shims + export
-  CC/CXX/AR per the script header.
-- Stale registry cache after a sandbox recycle breaks cargo with "path
-  source" internal errors → move tools/cargo/registry aside, re-download.
-- Notices regeneration: python3 scripts/gen_notices.py (repo copy).
+  (RUSTUP_HOME/CARGO_HOME/PATH incl. zig; CARGO_TARGET_DIR=/tmp/mt-target).
+  Rust 1.99.1, zig 0.17.1, cargo-zigbuild, target x86_64-pc-windows-gnu.
+- Cross build: cargo zigbuild --target x86_64-pc-windows-gnu --workspace

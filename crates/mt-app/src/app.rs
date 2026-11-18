@@ -15,11 +15,12 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::theme::{MtTheme, SEED_SWATCHES};
 use crate::{screens, util, Element};
 
-/// The five top-level screens (left navigation rail order).
+/// The six top-level screens (left navigation rail order).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Status,
     Servers,
+    Adapters,
     Routing,
     Settings,
     Logs,
@@ -27,9 +28,10 @@ pub enum Screen {
 
 impl Screen {
     /// Rail order.
-    pub const ALL: [Screen; 5] = [
+    pub const ALL: [Screen; 6] = [
         Screen::Status,
         Screen::Servers,
+        Screen::Adapters,
         Screen::Routing,
         Screen::Settings,
         Screen::Logs,
@@ -40,6 +42,7 @@ impl Screen {
         match self {
             Screen::Status => "Status",
             Screen::Servers => "Servers",
+            Screen::Adapters => "Adapters",
             Screen::Routing => "Routing",
             Screen::Settings => "Settings",
             Screen::Logs => "Logs",
@@ -100,6 +103,15 @@ pub struct RuleRow {
     pub value: String,
     /// One of: proxy, direct, reject.
     pub action: String,
+}
+
+/// One row of the Adapters screen: the service's adapter view plus the
+/// DRAFT checkbox state (the view's own `selected` mirrors what is
+/// persisted; the row's `selected` is what the user is editing).
+#[derive(Debug, Clone)]
+pub struct AdapterRow {
+    pub view: mt_service::AdapterView,
+    pub selected: bool,
 }
 
 /// The parsed preview shown under the "add by paste" field.
@@ -268,6 +280,18 @@ pub enum Message {
     LogFilterPicked(String),
     /// Clear the log buffer.
     LogsCleared,
+    /// Loaded the adapter list (Adapters screen).
+    AdaptersLoaded(Vec<mt_service::AdapterView>),
+    /// An adapter checkbox flipped (draft state, index into `adapters`).
+    AdapterToggled(usize),
+    /// Push the drafted selection to the service.
+    AdaptersApply,
+    /// set_bonded_adapters finished.
+    AdaptersSaved(Result<(), String>),
+    /// Discard the draft, restore the persisted selection.
+    AdaptersReverted,
+    /// Re-enumerate adapters from the OS.
+    AdaptersRefresh,
 }
 
 /// Valid routing rule kinds (matches the mt-net router matcher).
@@ -308,6 +332,10 @@ pub struct App {
     pub rules_saved: Vec<RuleRow>,
     /// Routing editor status line.
     pub rules_status: Option<String>,
+    /// Adapters screen rows (service view + draft selection).
+    pub adapters: Vec<AdapterRow>,
+    /// Adapters screen status line.
+    pub adapters_status: Option<String>,
     /// Settings draft (mutated live, saved immediately on change).
     pub settings: SettingsView,
     /// Numeric seed field text.
@@ -333,6 +361,7 @@ impl App {
             system_proxy: false,
             merge_policy: MERGE_POLICIES[0].to_string(),
             autostart: false,
+            bonded_adapters: Vec::new(),
         };
         Self {
             theme: MtTheme::from_settings(&settings),
@@ -349,6 +378,8 @@ impl App {
             rules: Vec::new(),
             rules_saved: Vec::new(),
             rules_status: None,
+            adapters: Vec::new(),
+            adapters_status: None,
             settings,
             seed_text,
             settings_status: None,
@@ -367,6 +398,7 @@ impl App {
             app.load_profiles(),
             app.load_rules(),
             app.load_settings(),
+            app.load_adapters(),
         ];
         (app, iced::Task::batch(tasks))
     }
@@ -391,6 +423,16 @@ impl App {
         app.rules_saved = app.rules.clone();
         app.settings = app.service.settings().await;
         app.seed_text = app.settings.theme_seed.to_string();
+        app.adapters = app
+            .service
+            .adapters()
+            .await
+            .into_iter()
+            .map(|view| AdapterRow {
+                selected: view.selected,
+                view,
+            })
+            .collect();
         app.theme
             .rederive(app.settings.theme_seed, app.settings.dark_mode);
         app.seed_initial_logs();
@@ -431,6 +473,11 @@ impl App {
     fn load_settings(&self) -> iced::Task<Message> {
         let svc = Arc::clone(&self.service);
         iced::Task::perform(async move { svc.settings().await }, Message::SettingsLoaded)
+    }
+
+    fn load_adapters(&self) -> iced::Task<Message> {
+        let svc = Arc::clone(&self.service);
+        iced::Task::perform(async move { svc.adapters().await }, Message::AdaptersLoaded)
     }
 
     fn save_settings(&self, s: SettingsView) -> iced::Task<Message> {
@@ -503,6 +550,7 @@ impl App {
                 self.screen = s;
                 return match s {
                     Screen::Servers => self.load_profiles(),
+                    Screen::Adapters => self.load_adapters(),
                     Screen::Routing => self.load_rules(),
                     _ => iced::Task::none(),
                 };
@@ -739,6 +787,68 @@ impl App {
             },
             Message::LogFilterPicked(l) => self.log_filter = LogFilter::from_label(&l),
             Message::LogsCleared => self.logs.clear(),
+            Message::AdaptersLoaded(views) => {
+                // Fresh enumeration: the draft resets to the persisted
+                // selection (an unsaved draft is discarded — same contract
+                // as the Routing screen's reload).
+                self.adapters = views
+                    .into_iter()
+                    .map(|view| AdapterRow {
+                        selected: view.selected,
+                        view,
+                    })
+                    .collect();
+            }
+            Message::AdapterToggled(idx) => {
+                if let Some(row) = self.adapters.get_mut(idx) {
+                    row.selected = !row.selected;
+                }
+                self.adapters_status = None;
+            }
+            Message::AdaptersApply => {
+                let svc = Arc::clone(&self.service);
+                let ids: Vec<String> = self
+                    .adapters
+                    .iter()
+                    .filter(|r| r.selected)
+                    .map(|r| r.view.id.clone())
+                    .collect();
+                self.adapters_status = Some("applying…".to_string());
+                return iced::Task::perform(
+                    async move { svc.set_bonded_adapters(ids).await },
+                    Message::AdaptersSaved,
+                );
+            }
+            Message::AdaptersSaved(result) => {
+                match result {
+                    Ok(()) => {
+                        let n = self.adapters.iter().filter(|r| r.selected).count();
+                        self.adapters_status = Some(if n == 0 {
+                            "applied — no adapters selected (single link, OS picks the route)"
+                                .to_string()
+                        } else {
+                            format!(
+                                "applied — bonding across {n} adapter(s); a live session was restarted"
+                            )
+                        });
+                    }
+                    Err(e) => self.adapters_status = Some(format!("apply failed: {e}")),
+                }
+                // Re-sync rows (the service re-derived `selected`);
+                // also refresh status so the link list reflects the new
+                // link set after the reconnect.
+                return self.load_adapters().chain(self.refresh_status());
+            }
+            Message::AdaptersReverted => {
+                for row in &mut self.adapters {
+                    row.selected = row.view.selected;
+                }
+                self.adapters_status = None;
+            }
+            Message::AdaptersRefresh => {
+                self.adapters_status = Some("refreshing…".to_string());
+                return self.load_adapters();
+            }
         }
         iced::Task::none()
     }
@@ -752,6 +862,7 @@ impl App {
         let content = match self.screen {
             Screen::Status => screens::status(self),
             Screen::Servers => screens::servers(self),
+            Screen::Adapters => screens::adapters(self),
             Screen::Routing => screens::routing(self),
             Screen::Settings => screens::settings(self),
             Screen::Logs => screens::logs(self),
@@ -958,11 +1069,65 @@ mod tests {
         let mut app = App::init_async(service, Flags { smoke: true }).await;
         assert!(app.status.is_some());
         assert_eq!(app.profiles.len(), 3, "mock seeds three synthetic profiles");
+        assert_eq!(
+            app.adapters.len(),
+            3,
+            "mock seeds three synthetic adapters (S7)"
+        );
 
-        let report = run_smoke(&mut app, 5, Duration::from_millis(10)).expect("smoke ok");
-        assert_eq!(report.ticks, 5);
-        assert_eq!(report.views_built, 5);
+        // One tick per screen: every view (incl. Adapters) gets built.
+        let report =
+            run_smoke(&mut app, Screen::ALL.len(), Duration::from_millis(10)).expect("smoke ok");
+        assert_eq!(report.ticks, Screen::ALL.len());
+        assert_eq!(report.views_built, Screen::ALL.len());
         assert!(app.status.is_some());
+    }
+
+    /// Adapters screen flow (S7): toggle → apply → rows re-sync to the
+    /// persisted selection; revert drops a dirty draft; refresh reloads.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn adapters_screen_toggle_apply_revert() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+
+        // Seed: mock-wifi selected, mock-ethernet not.
+        assert_eq!(app.adapters.len(), 3);
+        assert!(app.adapters[0].selected);
+        assert!(!app.adapters[1].selected);
+
+        // Toggle ethernet on (draft dirty, not persisted).
+        drop(app.update(Message::AdapterToggled(1)));
+        assert!(app.adapters[1].selected);
+        assert!(!app.adapters[1].view.selected, "draft only — not applied");
+
+        // Apply persists both (service call directly — the established
+        // test idiom; the update task only wraps it in Task::perform).
+        let ids = ["mock-wifi", "mock-ethernet"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        app.service.set_bonded_adapters(ids).await.expect("apply");
+        drop(app.update(Message::AdaptersSaved(Ok(()))));
+        // The saved-handler chains a reload; drive the service call the
+        // handler would perform and feed the result back.
+        let views = app.service.adapters().await;
+        drop(app.update(Message::AdaptersLoaded(views)));
+        assert!(app.adapters[0].selected && app.adapters[1].selected);
+        assert!(app.adapters[1].view.selected, "applied selection visible");
+        assert!(
+            app.adapters_status
+                .as_deref()
+                .unwrap_or("")
+                .contains("bonding across 2"),
+            "status line reports the applied selection"
+        );
+
+        // Revert drops an unsaved draft.
+        drop(app.update(Message::AdapterToggled(0)));
+        drop(app.update(Message::AdapterToggled(2)));
+        drop(app.update(Message::AdaptersReverted));
+        assert!(app.adapters[0].selected && !app.adapters[2].selected);
     }
 
     /// Live re-theme: dispatching settings messages re-derives the theme.

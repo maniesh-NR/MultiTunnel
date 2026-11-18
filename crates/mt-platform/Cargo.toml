@@ -35,6 +35,9 @@ optional = true
 
 [target."cfg(windows)".dependencies]
 winreg = "0.56"
+# Adapter enumeration (GetAdaptersAddresses). Version pinned to the one
+# already in the workspace lock (root crate) to avoid a second copy.
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 # Tests of the async `ensure()`/`latest_release()` paths need a runtime.

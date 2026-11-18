@@ -132,3 +132,35 @@ never broken; the product's front door was. v0.3.1 rules:
    bare: unit tests and `gui --smoke` never exercise empty-argv dispatch.
    LESSON: after changing a dispatch default, run the binary with no args
    on the host before shipping.
+
+## D16 — Adapter bonding via per-adapter engines + Xray `sendThrough` (S8, 2026-11-18)
+User report: "There is no menu to select the network adapters that are
+being bonded for the vless connection." Root cause: the merge aggregator,
+policies and probers existed, but `EngineLinkFactory` built exactly ONE
+unbound engine — bonding had no adapter surface at all. S8 rules:
+1. Enumeration lives in mt-platform (`adapters` module): Windows
+   `GetAdaptersAddresses` FFI (windows-sys, AF_INET, loopback excluded,
+   buffer-retry, 16 MiB cap, fail-open to an empty vec); non-Windows is a
+   pure-std /proc+/sys dev path (IPv4 attribution documented-limited).
+   `NetAdapter.id` = the stable machine id (Windows ANSI AdapterName GUID
+   / Linux ifname) — settings persist IDS, never display names.
+2. Binding model: ONE `ManagedEngine` per selected adapter, its Xray config
+   carrying `"sendThrough": <adapter IPv4>` (top-level outbound field;
+   Windows source-address binding selects the egress interface). Engine
+   tags embed the adapter name (`"profile [Wi-Fi]"`, deduplicated) so
+   config/log files never collide; each engine keeps its own ephemeral
+   loopback SOCKS port. Mux stays OFF — the aggregator spreads individual
+   TCP connections across the per-adapter links (net-merge model).
+3. Selection is id-validated (`set_bonded_adapters` rejects unknown ids),
+   persisted in `settings.json` (`SettingsView.bonded_adapters`,
+   `#[serde(default)]` so v0.3 files load), and applied on the NEXT
+   connect; a live session is restarted immediately on Apply. Unknown ids
+   or IPv4-less adapters at connect time are SKIPPED with a warning
+   (fail-open — an unplugged USB modem must not black-hole the tunnel).
+4. `set_settings` never writes `bonded_adapters` (the Adapters screen owns
+   that field; a stale GUI settings copy must not clobber a fresh
+   selection).
+5. Empty selection = v0.3 behavior (single unbound link, OS routing table
+   decides). GUI: new "Adapters" screen (checkbox rows + IPv4/up chips,
+   Apply/Revert/Refresh — the Routing-editor draft idiom); CLI:
+   `multitunnel adapters` prints the same view for headless diagnosis.

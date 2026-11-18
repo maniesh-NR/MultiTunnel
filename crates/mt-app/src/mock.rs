@@ -57,6 +57,9 @@ struct Inner {
     gen: u64,
     /// LCG state for fake jitter.
     rng: u64,
+    /// Synthetic adapters (S7) — ids the mock accepts in
+    /// `set_bonded_adapters`.
+    adapters: Vec<mt_service::AdapterView>,
 }
 
 /// The mock backend. Cheap to clone; holds the broadcast hub.
@@ -78,6 +81,7 @@ impl MockService {
             system_proxy: false,
             merge_policy: "failover".to_string(),
             autostart: false,
+            bonded_adapters: vec!["mock-wifi".to_string()],
         };
         let inner = Inner {
             state: ServiceState::Disconnected,
@@ -91,6 +95,7 @@ impl MockService {
             restarts: 0,
             gen: 0,
             rng: 0x853c_49e6_748f_ea9b,
+            adapters: seed_adapters(),
         };
         let svc = Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -220,6 +225,37 @@ fn seed_links(rng0: u64) -> Vec<LinkStatus> {
             quarantined: false,
             bytes_up: 0,
             bytes_down: 0,
+        },
+    ]
+}
+
+/// Synthetic adapters (S7): Wi-Fi + Ethernet up with IPv4s, a cellular
+/// dongle down without one — covers every Adapters-screen chip state.
+fn seed_adapters() -> Vec<mt_service::AdapterView> {
+    vec![
+        mt_service::AdapterView {
+            id: "mock-wifi".to_string(),
+            name: "Wi-Fi".to_string(),
+            description: "Mock Wireless-AC adapter".to_string(),
+            ipv4: vec!["192.168.1.42".to_string()],
+            up: true,
+            selected: true, // recomputed from settings on every adapters() call
+        },
+        mt_service::AdapterView {
+            id: "mock-ethernet".to_string(),
+            name: "Ethernet".to_string(),
+            description: "Mock Gigabit PCIe NIC".to_string(),
+            ipv4: vec!["10.0.0.5".to_string(), "169.254.9.9".to_string()],
+            up: true,
+            selected: false,
+        },
+        mt_service::AdapterView {
+            id: "mock-cellular".to_string(),
+            name: "Cellular".to_string(),
+            description: "Mock LTE dongle (unplugged)".to_string(),
+            ipv4: Vec::new(),
+            up: false,
+            selected: false,
         },
     ]
 }
@@ -488,6 +524,37 @@ impl MtService for MockService {
                 settings.theme_seed, settings.dark_mode
             ),
         );
+        Ok(())
+    }
+
+    async fn adapters(&self) -> Vec<mt_service::AdapterView> {
+        let inner = self.inner.lock().await;
+        inner
+            .adapters
+            .iter()
+            .map(|a| {
+                let mut a = a.clone();
+                a.selected = inner.settings.bonded_adapters.contains(&a.id);
+                a
+            })
+            .collect()
+    }
+
+    async fn set_bonded_adapters(&self, ids: Vec<String>) -> Result<(), String> {
+        let mut inner = self.inner.lock().await;
+        for id in &ids {
+            if !inner.adapters.iter().any(|a| &a.id == id) {
+                return Err(format!("unknown adapter {id:?} — refresh the adapter list"));
+            }
+        }
+        inner.settings.bonded_adapters = ids;
+        let n = inner.settings.bonded_adapters.len();
+        self.log("INFO", &format!("bonded adapters set ({n} selected)"));
+        // Fake reconnect so the GUI's status line behaves like production.
+        if matches!(inner.state, ServiceState::Connected) {
+            inner.gen += 1;
+            inner.restarts += 1;
+        }
         Ok(())
     }
 

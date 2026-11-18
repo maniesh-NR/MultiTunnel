@@ -360,6 +360,32 @@ pub fn switch(s: M3Scheme) -> impl Fn(&iced::Theme, toggler::Status) -> toggler:
     }
 }
 
+/// M3 checkbox (Adapters screen): unchecked = 2 dp `on_surface_variant`
+/// outline box on a transparent background; checked = `primary` box with
+/// an `on_primary` check icon (M3 spec shape corner ~2 dp).
+pub fn checkbox(
+    s: M3Scheme,
+) -> impl Fn(&iced::Theme, iced::widget::checkbox::Status) -> iced::widget::checkbox::Style {
+    move |_t, status| {
+        let is_checked = matches!(
+            status,
+            iced::widget::checkbox::Status::Active { is_checked: true }
+                | iced::widget::checkbox::Status::Hovered { is_checked: true }
+        );
+        let (bg, icon, border_color) = if is_checked {
+            (s.primary, s.on_primary, s.primary)
+        } else {
+            (s.surface, s.on_surface, s.on_surface_variant)
+        };
+        iced::widget::checkbox::Style {
+            background: Background::Color(col(bg)),
+            icon_color: col(icon),
+            border: border(4.0, border_color, if is_checked { 0.0 } else { 2.0 }),
+            text_color: Some(col(s.on_surface)),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
@@ -401,6 +427,7 @@ mod tests {
             system_proxy: true,
             merge_policy: "failover".into(),
             autostart: false,
+            bonded_adapters: Vec::new(),
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);

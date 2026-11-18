@@ -7,17 +7,21 @@
 //! sysproxy/elevate stay in the root crate this stage.
 //!
 //! Module map:
+//! * [`adapters`] — network-adapter enumeration (IPv4 for the GUI bond
+//!   picker / engine `sendThrough` binding).
 //! * [`dirs`] — config/cache/log/state dirs (hand-rolled, XDG + Windows).
 //! * [`engine`] — `DefaultEngineLocator` (`mt_engine::EngineLocator`),
 //!   `HttpFetch` (test-injectable HTTP), optional embedded engine zip.
 //! * [`autostart`] — launch-on-login (HKCU Run key / XDG autostart).
 //! * [`update`] — read-only "newer release available?" check.
 
+mod adapters;
 mod autostart;
 mod dirs;
 mod engine;
 mod update;
 
+pub use adapters::{enumerate_adapters, NetAdapter};
 pub use autostart::{
     autostart_disable, autostart_enable, autostart_is_enabled, desktop_entry, run_key_value,
 };
