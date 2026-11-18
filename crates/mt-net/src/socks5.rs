@@ -96,7 +96,7 @@ impl Socks5Outbound {
         let fut = async {
             let mut s = TcpStream::connect(self.addr)
                 .await
-                .map_err(|e| NetError::Socks(format!("cannot reach proxy {}: {e}", self.addr)))?;
+                .map_err(|e| NetError::ProxyUnreachable(self.addr, e))?;
             // Greeting: offer no-auth (00) only.
             s.write_all(&[VER, 0x01, NO_AUTH]).await?;
             let mut g = [0u8; 2];
@@ -519,13 +519,21 @@ mod tests {
 
     #[tokio::test]
     async fn client_surfaces_greeting_refusal() {
-        use tokio::io::AsyncWriteExt as _;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         // Stub proxy that immediately replies 05 FF and closes.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             if let Ok((mut s, _)) = listener.accept().await {
+                // Windows RST rule (CI 2026-11-17): close ONLY after the
+                // client's greeting was consumed — an unread receive
+                // buffer turns the close into an RST that races the reply.
+                let mut g = [0u8; 3];
+                let _ = s.read_exact(&mut g).await;
                 let _ = s.write_all(&[0x05, 0xFF]).await;
+                let _ = s.shutdown().await;
+                let mut sink = [0u8; 64];
+                let _ = s.read(&mut sink).await;
             }
         });
         let cli = Socks5Outbound::new(addr);
@@ -556,9 +564,17 @@ mod tests {
                 if s.write_all(&[0x05, 0x00]).await.is_err() {
                     return;
                 }
-                let mut req = [0u8; 14]; // domain ATYP, len 8, "dead.beef"...
+                // Full CONNECT request for "dead.beef" (9 bytes): head 4 +
+                // len 1 + 9 + port 2 = 16 bytes. The old 14-byte read left
+                // 2 bytes unread at close → Windows RST raced the reply
+                // (CI 2026-11-17).
+                let mut req = [0u8; 16];
                 let _ = s.read_exact(&mut req).await;
                 let _ = send_error_reply(&mut s, rep::CONNECTION_REFUSED).await;
+                // Graceful close: shutdown the write side, then drain.
+                let _ = s.shutdown().await;
+                let mut sink = [0u8; 64];
+                let _ = s.read(&mut sink).await;
             }
         });
         let cli = Socks5Outbound::new(addr);

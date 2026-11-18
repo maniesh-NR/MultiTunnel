@@ -90,6 +90,37 @@ const DEFAULT_PROBE_TARGET: TargetAddr = TargetAddr {
 const EVENT_BUFFER: usize = 1024;
 const PUMP_BUF: usize = 16 * 1024;
 const ACCEPT_RETRY: Duration = Duration::from_millis(50);
+/// How long [`graceful_close`] drains the peer's in-flight bytes before
+/// the final close (Windows RST prevention — see its docs).
+const ERROR_CLOSE_DRAIN: Duration = Duration::from_millis(250);
+
+/// Windows-safe close after an error response (CI incident 2026-11-17).
+///
+/// Dropping a socket that still holds UNREAD bytes in its receive buffer
+/// (e.g. the 431 path answering mid-upload, or the SOCKS reject paths that
+/// stop reading after the request head) makes Windows send an RST instead
+/// of a FIN — and the RST can DISCARD the error response the peer had not
+/// read yet (`WSAECONNRESET` races the pending read). The robust sequence:
+/// (1) `shutdown(Write)` flushes the queued response as a FIN, (2) a
+/// bounded drain consumes what the peer still had in flight, (3) the drop
+/// is then graceful on every platform. Best-effort by design — a peer that
+/// keeps streaming forever only loses the extra [`ERROR_CLOSE_DRAIN`].
+async fn graceful_close(stream: &mut TcpStream) {
+    use tokio::io::AsyncWriteExt as _;
+    let _ = stream.shutdown().await;
+    let mut buf = [0u8; PUMP_BUF];
+    let deadline = tokio::time::Instant::now() + ERROR_CLOSE_DRAIN;
+    loop {
+        match tokio::time::timeout_at(deadline, stream.read(&mut buf)).await {
+            // EOF or error: nothing left to drain.
+            Ok(Ok(0)) | Ok(Err(_)) => break,
+            // Deadline reached: give up (the FIN already delivered the
+            // response; only our close semantics were at stake).
+            Err(_) => break,
+            Ok(Ok(_)) => continue,
+        }
+    }
+}
 
 /// Byte counters + bound addresses + liveness shared across tasks.
 struct Shared {
@@ -365,6 +396,9 @@ impl ProxyServer {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::trace!(%peer, "socks5 handshake failed: {e}");
+                    // The handshake already answered on the wire (or the
+                    // peer vanished); close without the RST risk (Windows).
+                    graceful_close(&mut stream).await;
                     return;
                 }
             };
@@ -372,6 +406,7 @@ impl ProxyServer {
         if action == Action::Reject {
             tracing::debug!(%peer, target = %target, "reject rule hit (socks5)");
             let _ = socks5::send_error_reply(&mut stream, rep::NOT_ALLOWED).await;
+            graceful_close(&mut stream).await;
             return;
         }
         match self.establish(action, &target).await {
@@ -388,6 +423,7 @@ impl ProxyServer {
             }
             Err(rep_code) => {
                 let _ = socks5::send_error_reply(&mut stream, rep_code).await;
+                graceful_close(&mut stream).await;
             }
         }
     }
@@ -397,6 +433,9 @@ impl ProxyServer {
             Ok(p) => p,
             Err(e) => {
                 tracing::trace!(%peer, "http request failed: {e}");
+                // 431/400 (or a vanished peer): the response was already
+                // written by read_request; deliver it without the RST risk.
+                graceful_close(&mut stream).await;
                 return;
             }
         };
@@ -404,6 +443,7 @@ impl ProxyServer {
         if action == Action::Reject {
             tracing::debug!(%peer, target = %parsed.target, "reject rule hit (http)");
             let _ = http::write_simple(&mut stream, http::RESP_403).await;
+            graceful_close(&mut stream).await;
             return;
         }
         match self.establish(action, &parsed.target).await {
@@ -439,6 +479,7 @@ impl ProxyServer {
             }
             Err(_) => {
                 let _ = http::write_simple(&mut stream, http::RESP_502).await;
+                graceful_close(&mut stream).await;
             }
         }
     }

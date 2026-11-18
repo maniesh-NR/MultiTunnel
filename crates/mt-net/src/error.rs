@@ -11,11 +11,23 @@
 //! - One enum for the whole crate keeps `?` plumbing simple across the
 //!   socks5/http/router/merge layers.
 
+use std::net::SocketAddr;
+
 use thiserror::Error;
 
 /// Errors produced by the mt-net data plane.
 #[derive(Debug, Error)]
 pub enum NetError {
+    /// The proxy's own listen address could not be reached (TCP connect
+    /// failed — refused/timeout/unreachable). Nothing was sent upstream,
+    /// so callers may safely treat this as "the proxy endpoint is dead"
+    /// and, e.g., force a respawn of a managed engine (CI incident
+    /// 2026-11-17: the kernel can tear an engine's socket down before the
+    /// process is reaped, so a liveness check alone can return a stale
+    /// port).
+    #[error("cannot reach proxy {0}: {1}")]
+    ProxyUnreachable(SocketAddr, #[source] std::io::Error),
+
     /// SOCKS5 protocol-level failure (client or server side).
     #[error("socks5: {0}")]
     Socks(String),

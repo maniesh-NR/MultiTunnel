@@ -378,6 +378,27 @@ impl EngineInner {
         }
     }
 
+    /// Kill + SYNCHRONOUSLY REAP + clear the slot (forced-respawn path).
+    /// `kill_current` leaves the dying child in the slot for the waiter to
+    /// reap — but a just-killed child still answers `try_wait` with
+    /// "alive" for a moment, so an immediate `ensure_alive` would hand
+    /// back the same stale address. Reaping here closes that window
+    /// (bounded: the kill was already delivered). The address is cleared
+    /// too, so even a waiter race cannot resurrect it.
+    fn kill_and_clear(&self) {
+        let mut st = lock(&self.state);
+        st.manual_stop = true;
+        if let Some(mut c) = st.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        st.socks_addr = None;
+        #[cfg(windows)]
+        {
+            st.job = None;
+        }
+    }
+
     /// One respawn attempt: resolve the command, then try the full spawn
     /// up to twice with a FRESH port each time (bind-race retry).
     async fn spawn_cycle(&self) -> anyhow::Result<SocketAddr> {
@@ -862,15 +883,26 @@ impl Outbound for ManagedEngine {
         match Socks5Outbound::new(addr).connect(target).await {
             Ok(s) => Ok(s),
             Err(e) => {
-                // Tunnel failure with a live child propagates untouched;
-                // a dead child gets exactly one transparent respawn+retry.
-                if self.inner.child_alive() {
+                // Tunnel failure with a live child propagates untouched; a
+                // dead child gets exactly one transparent respawn+retry.
+                // A ProxyUnreachable ALWAYS forces the respawn: the engine's
+                // own port refused the connection, so nothing was sent
+                // upstream — and the kernel can tear an engine's socket down
+                // before the process is reaped (2026-11-17 CI race), which
+                // makes `child_alive()` a lying witness for that window. A
+                // hung engine with a dead listener is indistinguishable from
+                // that case, and both want the same medicine.
+                let port_dead = e
+                    .downcast_ref::<mt_net::NetError>()
+                    .is_some_and(|ne| matches!(ne, mt_net::NetError::ProxyUnreachable(_, _)));
+                if !port_dead && self.inner.child_alive() {
                     return Err(e);
                 }
                 tracing::warn!(
                     tag = self.inner.tag(),
-                    "child died mid-handshake; respawning"
+                    "engine port unreachable; forcing respawn"
                 );
+                self.inner.kill_and_clear();
                 let addr = self.ensure_alive().await?;
                 Socks5Outbound::new(addr).connect(target).await
             }
@@ -882,10 +914,17 @@ impl Outbound for ManagedEngine {
         match Socks5Outbound::new(addr).probe(target).await {
             Ok(d) => Ok(d),
             Err(e) => {
-                if self.inner.child_alive() {
+                let port_dead = e
+                    .downcast_ref::<mt_net::NetError>()
+                    .is_some_and(|ne| matches!(ne, mt_net::NetError::ProxyUnreachable(_, _)));
+                if !port_dead && self.inner.child_alive() {
                     return Err(e);
                 }
-                tracing::warn!(tag = self.inner.tag(), "child died mid-probe; respawning");
+                tracing::warn!(
+                    tag = self.inner.tag(),
+                    "engine port unreachable (probe); forcing respawn"
+                );
+                self.inner.kill_and_clear();
                 let addr = self.ensure_alive().await?;
                 Socks5Outbound::new(addr).probe(target).await
             }
