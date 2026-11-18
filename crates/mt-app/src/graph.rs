@@ -1,7 +1,16 @@
-//! Real-time bandwidth graph (D19): an iced canvas Program plotting the
-//! last `N` one-second throughput samples as two filled area series
-//! (down = primary, up = tertiary), Task-Manager style. The canvas is
-//! `Length::Fill`-sized, so it scales with the window.
+//! Real-time bandwidth graph (D19, fixed in D20): an iced canvas Program
+//! plotting the last `N` one-second throughput samples as two filled area
+//! series (down = primary, up = tertiary), Task-Manager style, with an
+//! in-canvas color legend. The canvas is `Length::Fill`-sized, so it scales
+//! with the window.
+//!
+//! COORDINATE CONTRACT (the D20 fix): iced draws a canvas through
+//! `renderer.with_translation(bounds.x, bounds.y)` — a `Program::draw` frame
+//! is in LOCAL space where (0,0) is the canvas' own top-left. The v0.5.0
+//! graph computed every point from `bounds.x`/`bounds.y`, double-offsetting
+//! the whole plot out of the visible card (the "graph does not load" bug).
+//! All helpers here now take the LOCAL rectangle (`Rectangle::new(ORIGIN,
+//! bounds.size())`) and the regression test pins that invariant.
 
 use iced::widget::canvas::{self, Canvas, Frame, Path, Text};
 use iced::{Color, Length, Point, Rectangle};
@@ -32,18 +41,29 @@ pub struct RateGraph {
     pub style: RateGraphStyle,
     /// Small text size for axis labels.
     pub font_size: f32,
+    /// Show the color legend (combined graph; off for per-adapter minis —
+    /// the colors are identical across graphs, one legend is enough).
+    pub legend: bool,
 }
 
 impl RateGraph {
-    /// Build the canvas widget at fill size.
+    /// Build the canvas widget at fill size (the Status screen's combined
+    /// graph — scales with the window).
     pub fn canvas(self) -> Canvas<Self, Message, iced::Theme, iced::Renderer> {
         Canvas::new(self).width(Length::Fill).height(Length::Fill)
+    }
+
+    /// Build a fixed-height mini canvas (per-adapter graph rows).
+    pub fn mini(self, height: f32) -> Canvas<Self, Message, iced::Theme, iced::Renderer> {
+        Canvas::new(self)
+            .width(Length::Fill)
+            .height(Length::Fixed(height))
     }
 }
 
 /// Map `(i, rate)` to a point inside `bounds`; the series is right-aligned
 /// (newest sample at the right edge) over the full sample window.
-/// (`Rectangle` is f32 — convert at the edges.)
+/// `bounds` is the LOCAL canvas rectangle (see the module doc).
 fn point(bounds: Rectangle, i: usize, n: usize, rate: f64, max: f64) -> Point {
     let n_slots = n.max(2) as f64;
     // Right edge = newest; spread over the full width.
@@ -74,6 +94,12 @@ pub fn nice_ceiling(max: f64) -> f64 {
     max
 }
 
+/// The local rectangle the program draws into (D20: everything below uses
+/// THIS, never the widget-space bounds origin).
+fn local_bounds(bounds: Rectangle) -> Rectangle {
+    Rectangle::new(Point::ORIGIN, bounds.size())
+}
+
 impl canvas::Program<Message> for RateGraph {
     type State = ();
 
@@ -86,6 +112,7 @@ impl canvas::Program<Message> for RateGraph {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        let b = local_bounds(bounds);
         let st = self.style;
         let n = self.samples.len();
 
@@ -99,11 +126,8 @@ impl canvas::Program<Message> for RateGraph {
 
         // Grid: 4 horizontal lines.
         for k in 0..4 {
-            let y = bounds.y + bounds.height * (k as f32 + 1.0) / 5.0;
-            let line = Path::line(
-                Point::new(bounds.x, y),
-                Point::new(bounds.x + bounds.width, y),
-            );
+            let y = b.y + b.height * (k as f32 + 1.0) / 5.0;
+            let line = Path::line(Point::new(b.x, y), Point::new(b.x + b.width, y));
             frame.stroke(
                 &line,
                 canvas::Stroke::default()
@@ -159,7 +183,6 @@ impl canvas::Program<Message> for RateGraph {
                 canvas::Stroke::default().with_color(stroke).with_width(1.5),
             );
         }
-        let b = bounds;
         let c = ceiling;
         draw_series(
             &mut frame,
@@ -180,10 +203,36 @@ impl canvas::Program<Message> for RateGraph {
             st.up_fill,
         );
 
+        // Legend (D20): a short color sample + label per series, top-left,
+        // under the ceiling label. One glance answers "which line is which".
+        if self.legend {
+            let fs = self.font_size;
+            let sample_w = 10.0;
+            let swatch_h = (fs * 0.55).max(3.0);
+            let y = b.y + 2.0 + fs + 6.0;
+            let mut x = b.x + 4.0;
+            for (color, label) in [(st.down_stroke, "down"), (st.up_stroke, "up")] {
+                frame.fill_rectangle(
+                    Point::new(x, y + (fs - swatch_h) / 2.0),
+                    iced::Size::new(sample_w, swatch_h),
+                    color,
+                );
+                frame.fill_text(Text {
+                    content: label.to_string(),
+                    position: Point::new(x + sample_w + 4.0, y),
+                    color: st.label,
+                    size: iced::Pixels(fs),
+                    ..Default::default()
+                });
+                // Advance: swatch + gap + text (~3.5 chars) + inter-entry gap.
+                x += sample_w + 4.0 + fs * 3.5 + 12.0;
+            }
+        }
+
         // Labels: ceiling top-left, current rates top-right, window bottom.
         frame.fill_text(Text {
             content: format_rate(ceiling),
-            position: Point::new(bounds.x + 4.0, bounds.y + 2.0),
+            position: Point::new(b.x + 4.0, b.y + 2.0),
             color: st.label,
             size: iced::Pixels(self.font_size),
             ..Default::default()
@@ -195,7 +244,7 @@ impl canvas::Program<Message> for RateGraph {
                     format_rate(*d as f64),
                     format_rate(*u as f64)
                 ),
-                position: Point::new(bounds.x + bounds.width - 4.0, bounds.y + 2.0),
+                position: Point::new(b.x + b.width - 4.0, b.y + 2.0),
                 color: st.label,
                 size: iced::Pixels(self.font_size),
                 horizontal_alignment: iced::alignment::Horizontal::Right,
@@ -204,10 +253,7 @@ impl canvas::Program<Message> for RateGraph {
         }
         frame.fill_text(Text {
             content: format!("last {n} s"),
-            position: Point::new(
-                bounds.x + 4.0,
-                bounds.y + bounds.height - self.font_size - 2.0,
-            ),
+            position: Point::new(b.x + 4.0, b.y + b.height - self.font_size - 2.0),
             color: st.label,
             size: iced::Pixels(self.font_size),
             ..Default::default()
@@ -269,6 +315,45 @@ mod tests {
         // Single-sample series must not divide by zero.
         let single = point(bounds, 0, 1, 10.0, 10.0);
         assert!((single.x - 300.0).abs() < 1e-6);
+    }
+
+    /// D20 regression: the v0.5.0 graph drew in WIDGET space (points from
+    /// `bounds.x`/`bounds.y`) while iced translates the frame by the bounds
+    /// origin — everything landed outside the card ("graph does not load").
+    /// `local_bounds` must strip the origin; every plotted point must stay
+    /// inside [0, width] × [0, height] for ANY widget placement.
+    #[test]
+    fn local_bounds_strips_widget_offset_regression() {
+        // Where iced actually places the status graph (right of the nav
+        // rail, below the state/exit cards).
+        let widget_bounds = Rectangle {
+            x: 170.0,
+            y: 190.0,
+            width: 300.0,
+            height: 100.0,
+        };
+        let b = local_bounds(widget_bounds);
+        assert_eq!(b.x, 0.0);
+        assert_eq!(b.y, 0.0);
+        assert_eq!(b.width, 300.0);
+        assert_eq!(b.height, 100.0);
+
+        let n = 4;
+        for i in 0..n {
+            for rate in [0.0, 50.0, 100.0] {
+                let p = point(b, i, n, rate, 100.0);
+                assert!(
+                    (0.0..=300.0).contains(&f64::from(p.x)),
+                    "x {} outside the local canvas",
+                    p.x
+                );
+                assert!(
+                    (0.0..=100.0).contains(&f64::from(p.y)),
+                    "y {} outside the local canvas",
+                    p.y
+                );
+            }
+        }
     }
 
     #[test]

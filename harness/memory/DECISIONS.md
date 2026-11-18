@@ -207,3 +207,47 @@ NOT a hidden MultiTunnel hop).
    = set_active + automatic reconnect.
 3. Status screen leaves the global scrollable (fixed state card + graph
    Fill + links scrollable) so the graph can scale with the window.
+
+## D20 — v0.5.1: visibility fixes driven by the first real two-adapter run (S9.1, 2026-11-18)
+
+User report on v0.5.0 with Ethernet+Wi-Fi ticked: (1) all traffic rode
+Ethernet only; (2) the Status graph never appeared; (3) wanted one
+combined color-coded graph + per-interface graphs under an arrow.
+
+1. GRAPH COORDINATES: iced 0.13's Canvas draws through
+   `renderer.with_translation(bounds.x, bounds.y)` — a Program's frame is
+   in LOCAL space. v0.5.0's RateGraph computed every point from
+   `bounds.x/y`, double-offsetting the plot outside the card (invisible,
+   "graph does not load"). Fix: draw into `Rectangle::new(ORIGIN,
+   bounds.size())`; regression test pins points inside the local rect for
+   a realistically-offset widget rect. Unit tests never caught it because
+   they used origin bounds. LESSON: a canvas program's helpers should
+   never see widget-space coordinates at all.
+2. MERGE POLICY DEFAULT: v0.5.0 shipped `merge_policy = "failover"`, and
+   Failover always picks the FIRST healthy link — with Ethernet enumerated
+   first, Wi-Fi stayed idle until Ethernet died. Users read that as broken
+   bonding (it is failover semantics). v0.5.1: default round-robin
+   (connections alternate), unknown-string fallback also round-robin, and
+   a `settings_version` field (default 0 = v0.5.0 file) migrates the STOCK
+   failover value to round-robin on load (best-effort persist). An
+   explicit failover on a version>=1 file is respected verbatim — the
+   migration is once, ever.
+3. CARRIER VISIBILITY: ensure_carriers now returns a CarrierReport
+   {live, lines} — one human line per link ("live" / "down (reason)") —
+   and connect_flow emits them as ServiceEvent::LogLine so the GUI log
+   shows per-carrier verdicts; <all-live emits a WARN with the share
+   semantics. Skipped bonded adapters (absent / no IPv4 at connect) also
+   LogLine (were tracing-only). Dead carriers were INVISIBLE in v0.5.0 —
+   the exact conditions that produced "only Ethernet".
+4. PER-INTERFACE GRAPHS: the Adapters tab rows get an arrow (▸/▾ text
+   button — no icon font in a zero-dep build) expanding a mini RateGraph
+   (110 px fixed, same two color-coded series as the combined graph; the
+   legend lives only on the Status graph). Data: the GUI samples each
+   StatusSnapshot (1 s) — links/carriers report CUMULATIVE wire bytes
+   under engine tags `"<profile> [<adapter>]"`; `link_matches_adapter`
+   matches the bracketed adapter name (rsplit on " [", accepts the `#n`
+   dedup suffix, unbound links match nothing), deltas become bytes/s
+   samples per adapter id (saturating on counter resets, vanished links
+   dropped from the delta base, zero samples appended to unbonded rows —
+   a flat line is the honest "this NIC carries nothing" signal).
+   Combined graph gained an in-canvas legend (color swatch + down/up).

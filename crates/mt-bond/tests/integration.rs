@@ -149,7 +149,8 @@ async fn echo_roundtrip_1mib_across_two_carriers() {
     let live = bond
         .ensure_carriers(Duration::from_secs(5))
         .await
-        .expect("carriers established");
+        .expect("carriers established")
+        .live;
     assert_eq!(live, 2, "both fake links must become carriers");
 
     // Send 1 MiB and echo it back through the bond.
@@ -388,7 +389,8 @@ async fn one_dead_link_still_yields_a_working_bond() {
     let live = bond
         .ensure_carriers(Duration::from_secs(5))
         .await
-        .expect("one live carrier is enough");
+        .expect("one live carrier is enough")
+        .live;
     assert_eq!(live, 1);
 
     let mut stream = bond.connect(&tcp_target(echo)).await.expect("connect");

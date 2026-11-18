@@ -229,7 +229,7 @@ pub fn status(app: &App) -> Element<'_> {
     .padding(20)
     .width(Length::Fill);
 
-    // --- bandwidth graph (D19 §1) ------------------------------------------
+    // --- bandwidth graph (D19 §1, D20 fix + legend) ------------------------
     let graph = RateGraph {
         samples: app.rate_history.iter().copied().collect(),
         style: RateGraphStyle {
@@ -241,6 +241,7 @@ pub fn status(app: &App) -> Element<'_> {
             label: t3::col(s.on_surface_variant),
         },
         font_size: ts.label_s.size,
+        legend: true,
     }
     .canvas();
 
@@ -857,9 +858,12 @@ pub fn adapters(app: &App) -> Element<'_> {
             .color(s.on_surface),
         text(
             "Check the network adapters the tunnel should bond across. Each checked \
-             adapter gets its own engine bound to that adapter (sendThrough), and new \
-             connections are spread across them by the merge policy (Settings). No \
-             selection = a single link and Windows picks the route.",
+             adapter gets its own engine bound to that adapter (sendThrough). New \
+             connections spread round-robin across them (Settings → merge policy); \
+             bonding mode \"stream\" (Settings → Advanced) splits every connection's \
+             BYTES across them and needs mt-merge-server on the tunnel server. \
+             Expand a row (▸) for that adapter's live traffic graph. No selection \
+             = a single link and Windows picks the route.",
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant),
@@ -876,11 +880,20 @@ pub fn adapters(app: &App) -> Element<'_> {
     }
     for (i, r) in app.adapters.iter().enumerate() {
         let v = &r.view;
-        let mut line = row![checkbox(v.name.clone(), r.selected)
-            .size(ts.body_m.size)
-            .spacing(8)
-            .on_toggle(move |_| Message::AdapterToggled(i))
-            .style(t3::checkbox(s))]
+        let arrow = if r.expanded { "▾" } else { "▸" };
+        let mut line = row![
+            // D20: expand/collapse the per-interface graph (a plain text
+            // button — no icon font in the zero-dep build).
+            button(text(arrow.to_string()).size(ts.body_m.size))
+                .padding(Padding::new(2.0).left(6.0).right(6.0))
+                .style(t3::text_button(s))
+                .on_press(Message::AdapterExpanded(i)),
+            checkbox(v.name.clone(), r.selected)
+                .size(ts.body_m.size)
+                .spacing(8)
+                .on_toggle(move |_| Message::AdapterToggled(i))
+                .style(t3::checkbox(s)),
+        ]
         .spacing(8)
         .align_y(iced::Alignment::Center);
 
@@ -915,8 +928,49 @@ pub fn adapters(app: &App) -> Element<'_> {
             chip("down", app, s.error_container, s.on_error_container)
         });
 
+        // D20: the adapter row + its expandable per-interface graph live in
+        // ONE card so the graph reads as part of the row.
+        let mut card_col = column![line].spacing(8);
+        if r.expanded {
+            let samples: Vec<crate::graph::Sample> = app
+                .adapter_rates
+                .get(&v.id)
+                .map(|series| series.iter().copied().collect())
+                .unwrap_or_default();
+            let carries_traffic = samples.iter().any(|(u, d)| *u > 0 || *d > 0);
+            let mini = RateGraph {
+                samples,
+                style: RateGraphStyle {
+                    down_stroke: t3::col(s.primary),
+                    down_fill: translucent(t3::col(s.primary), 0.25),
+                    up_stroke: t3::col(s.tertiary),
+                    up_fill: translucent(t3::col(s.tertiary), 0.25),
+                    grid: translucent(t3::col(s.on_surface_variant), 0.30),
+                    label: t3::col(s.on_surface_variant),
+                },
+                font_size: ts.label_s.size,
+                legend: false, // the Status graph owns the legend
+            }
+            .mini(110.0);
+            let hint = if !app.is_connected() {
+                "connect to see this adapter's tunnel traffic"
+            } else if !r.selected {
+                "not bonded — tick the adapter to route tunnel traffic through it"
+            } else if !carries_traffic {
+                "bonded but idle — no tunnel bytes in the last 2 minutes"
+            } else {
+                "tunnel traffic through this adapter (↓ down / ↑ up, same colors \
+                 as the Status graph)"
+            };
+            card_col = card_col.push(
+                container(mini)
+                    .padding(Padding::new(4.0).left(28.0).right(4.0).bottom(4.0))
+                    .style(t3::card(s, s.surface_container)),
+            );
+            card_col = card_col.push(text(hint).size(ts.label_s.size).color(s.on_surface_variant));
+        }
         rows = rows.push(
-            container(line)
+            container(card_col)
                 .padding(14)
                 .style(t3::card(s, s.surface_container_low))
                 .width(Length::Fill),
@@ -1017,6 +1071,16 @@ pub fn settings(app: &App) -> Element<'_> {
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center),
+        text(
+            "round-robin (default): new connections alternate across every ticked \
+             adapter — both NICs carry traffic. failover: everything rides the \
+             first healthy adapter (the second stays idle until it dies). \
+             lowest-latency: each connection picks the lowest-RTT adapter. \
+             For byte-level splitting of a SINGLE connection use bonding mode \
+             \"stream\" (Advanced).",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
     ]
     .spacing(10);
 

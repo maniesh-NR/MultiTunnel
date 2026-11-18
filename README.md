@@ -39,7 +39,7 @@ whole path is about ten minutes.
 │    ├─ ProxyServer    (mt-net)            │    VLESS +     │  xray (systemd, User=nobody)       │
 │    │    SOCKS :10808 / HTTP :10809       │    REALITY     │    - listens on 0.0.0.0:8443       │
 │    │    Router: private CIDRs → direct   │ ═════════════▶ │    - REALITY borrows the TLS cert   │
-│    │    merge: failover / lowest-latency │    TCP :8443   │      of the gateway already on     │
+│    │    merge: round-robin (default)     │    TCP :8443   │      of the gateway already on     │
 │    ├─ ManagedEngine  (mt-engine)         │                │      127.0.0.1:443 (serverNames)   │
 │    │    one Xray child per link,         │                │    │    as its camouflage            │
 │    │    kill-on-close job, respawn       │                │    ▼ freedom outbound              │
@@ -56,7 +56,7 @@ contracts in `harness/CONTRACTS-S6.md`):
 | Crate | Role |
 |---|---|
 | `mt-links` | share-link parsing (`vless://` strict REALITY-only), profile store, subscriptions, v0.2 migration |
-| `mt-net` | the data plane: SOCKS5 + HTTP inbounds, routing table, link bonding (failover / lowest latency), quarantine |
+| `mt-net` | the data plane: SOCKS5 + HTTP inbounds, routing table, link bonding (round-robin default / failover / lowest-latency), quarantine |
 | `mt-engine` | supervised Xray child processes: respawn with backoff, kill-on-drop + kill-on-close job objects |
 | `mt-m3` | Material You design tokens with real HCT dynamic color (material-colors) |
 | `mt-platform` | engine locator/self-download (SHA256SUMS-verified), autostart, platform dirs |
@@ -69,7 +69,8 @@ because MultiTunnel has set the WinINET system proxy to `127.0.0.1:10809`.
 The router sends private/LAN CIDRs direct and everything else through the
 VLESS+REALITY outbound; because mux is off, every proxied connection is its
 own TCP stream, so a multi-link setup can spread connections across
-uplinks (connection-level bonding, failover or lowest-latency). On the VM,
+uplinks (connection-level bonding, round-robin by default — failover and
+lowest-latency selectable). On the VM,
 xray terminates REALITY on port 8443 — an unauthenticated handshake is
 proxied to the real gateway, which is what makes the port look like an
 ordinary HTTPS endpoint — and exits through a plain `freedom` outbound.
@@ -168,8 +169,10 @@ stream granularity:
   log line when the daemon is unreachable — never a black hole.
 
 The Status tab verifies the whole path live: one row per carrier (RTT,
-wire bytes), a Task-Manager-style bandwidth graph scaled to the window,
-and the Exit identity card (see below).
+wire bytes), a Task-Manager-style bandwidth graph scaled to the window
+with a color-coded legend (down = primary, up = tertiary), per-adapter
+traffic graphs behind the arrow on every Adapters-tab row, and the Exit
+identity card (see below).
 
 ## Exit identity (v0.5) — no hidden hops, verifiable in one click
 

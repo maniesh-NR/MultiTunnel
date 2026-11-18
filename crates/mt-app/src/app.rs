@@ -112,6 +112,8 @@ pub struct RuleRow {
 pub struct AdapterRow {
     pub view: mt_service::AdapterView,
     pub selected: bool,
+    /// D20: per-interface graph expanded (arrow toggle).
+    pub expanded: bool,
 }
 
 /// The parsed preview shown under the "add by paste" field.
@@ -284,6 +286,8 @@ pub enum Message {
     AdaptersLoaded(Vec<mt_service::AdapterView>),
     /// An adapter checkbox flipped (draft state, index into `adapters`).
     AdapterToggled(usize),
+    /// D20: an adapter's per-interface graph expanded/collapsed.
+    AdapterExpanded(usize),
     /// Push the drafted selection to the service.
     AdaptersApply,
     /// set_bonded_adapters finished.
@@ -373,6 +377,14 @@ pub struct App {
     /// Bandwidth graph samples: (up_bps, down_bps) per second, newest last
     /// (S9 / D19). Cleared on connect/disconnect.
     pub rate_history: VecDeque<(u64, u64)>,
+    /// D20: per-ADAPTER rate samples (same shape as [`Self::rate_history`]),
+    /// keyed by adapter id — one series per Adapters-screen row, driving
+    /// the expandable per-interface graphs.
+    pub adapter_rates: HashMap<String, VecDeque<(u64, u64)>>,
+    /// D20: last seen CUMULATIVE (up, down) per link name, the delta base
+    /// for [`Self::adapter_rates`] (links report lifetime byte counters;
+    /// the graph needs bytes/second).
+    pub link_last_bytes: HashMap<String, (u64, u64)>,
     /// Exit probe result for the Status screen (None = never run).
     pub exit: Option<Result<ExitInfo, String>>,
     /// An exit probe is in flight.
@@ -424,6 +436,8 @@ impl App {
             logs: VecDeque::new(),
             log_filter: LogFilter::All,
             rate_history: VecDeque::new(),
+            adapter_rates: HashMap::new(),
+            link_last_bytes: HashMap::new(),
             exit: None,
             exit_probing: false,
         }
@@ -470,6 +484,7 @@ impl App {
             .into_iter()
             .map(|view| AdapterRow {
                 selected: view.selected,
+                expanded: false,
                 view,
             })
             .collect();
@@ -518,6 +533,62 @@ impl App {
     fn load_adapters(&self) -> iced::Task<Message> {
         let svc = Arc::clone(&self.service);
         iced::Task::perform(async move { svc.adapters().await }, Message::AdaptersLoaded)
+    }
+
+    /// D20: one per-interface rate sample from a fresh status snapshot.
+    ///
+    /// Links (per-connection mode) and bond carriers (stream mode) both
+    /// report CUMULATIVE wire byte counters named `"<profile> [<adapter>]"`
+    /// (the engine tag; the unbound single link has no bracket). For every
+    /// adapter row we match its links, take the 1 s DELTA of the counters,
+    /// and append `(up_bps, down_bps)` to that adapter's series. A counter
+    /// reset (reconnect inside the same Connected state, engine respawn)
+    /// yields a saturated zero delta for one sample — the graph dips, as it
+    /// should.
+    ///
+    /// Sampling rides the 1 s `StatusLoaded` cadence (the same clock the
+    /// combined graph uses), so "bps" here is "bytes since the previous
+    /// snapshot" — Task-Manager-accurate for a 1 s poll.
+    pub fn sample_adapter_rates(&mut self, snap: &StatusSnapshot) {
+        // New per-adapter sample accumulation.
+        let mut deltas: HashMap<String, (u64, u64)> = HashMap::new();
+        for link in &snap.links {
+            let cur = (link.bytes_up, link.bytes_down);
+            let prev = self
+                .link_last_bytes
+                .insert(link.name.clone(), cur)
+                .unwrap_or(cur); // first sight → delta 0 (no fake spike)
+            let (du, dd) = (cur.0.saturating_sub(prev.0), cur.1.saturating_sub(prev.1));
+            // Map the link to every adapter row whose name it carries.
+            let mut matched = false;
+            for row in &self.adapters {
+                if link_matches_adapter(&link.name, &row.view.name) {
+                    let e = deltas.entry(row.view.id.clone()).or_default();
+                    e.0 = e.0.saturating_add(du);
+                    e.1 = e.1.saturating_add(dd);
+                    matched = true;
+                }
+            }
+            if !matched {
+                // Unbound single link (no adapter selected): it feeds the
+                // combined graph via Throughput; no per-adapter row owns it.
+                tracing::debug!(link = %link.name, "link maps to no adapter row");
+            }
+        }
+        // Drop link entries that vanished (reconnect with fewer links) so
+        // stale names never poison a later delta base.
+        self.link_last_bytes
+            .retain(|name, _| snap.links.iter().any(|l| &l.name == name));
+        // Append one sample to EVERY adapter series (zeros included — a
+        // flat line is the honest signal for "this NIC carries nothing").
+        for row in &self.adapters {
+            let series = self.adapter_rates.entry(row.view.id.clone()).or_default();
+            let sample = deltas.get(&row.view.id).copied().unwrap_or((0, 0));
+            series.push_back(sample);
+            while series.len() > RATE_HISTORY_LEN {
+                series.pop_front();
+            }
+        }
     }
 
     /// One numeric advanced field: parse (empty = 0), apply to the draft,
@@ -603,6 +674,8 @@ impl App {
                     ) {
                         // New session (or none): fresh graph, stale probe gone.
                         self.rate_history.clear();
+                        self.adapter_rates.clear();
+                        self.link_last_bytes.clear();
                         self.exit = None;
                     }
                     return self.refresh_status();
@@ -665,7 +738,10 @@ impl App {
                     );
                 }
             }
-            Message::StatusLoaded(s) => self.status = Some(s),
+            Message::StatusLoaded(s) => {
+                self.sample_adapter_rates(&s);
+                self.status = Some(s);
+            }
             Message::ProfilesLoaded(p) => self.profiles = p,
             Message::PasteChanged(t) => {
                 self.paste = t;
@@ -873,11 +949,13 @@ impl App {
             Message::AdaptersLoaded(views) => {
                 // Fresh enumeration: the draft resets to the persisted
                 // selection (an unsaved draft is discarded — same contract
-                // as the Routing screen's reload).
+                // as the Routing screen's reload). Expansion state follows
+                // the rows (a vanished adapter's graph goes with it).
                 self.adapters = views
                     .into_iter()
                     .map(|view| AdapterRow {
                         selected: view.selected,
+                        expanded: false,
                         view,
                     })
                     .collect();
@@ -887,6 +965,11 @@ impl App {
                     row.selected = !row.selected;
                 }
                 self.adapters_status = None;
+            }
+            Message::AdapterExpanded(idx) => {
+                if let Some(row) = self.adapters.get_mut(idx) {
+                    row.expanded = !row.expanded;
+                }
             }
             Message::AdaptersApply => {
                 let svc = Arc::clone(&self.service);
@@ -1093,6 +1176,30 @@ pub fn parse_seed(s: &str) -> Option<u32> {
     }
 }
 
+/// D20: does the status link `link_name` belong to the adapter named
+/// `adapter_name`?
+///
+/// Engine tags (both per-connection links and stream carriers) are
+/// `"<profile-tag> [<adapter-name>]"`, where the bracketed part carries a
+/// ` #n` suffix when two bonded adapters share a friendly name
+/// (`engine_specs_for` dedup). The matcher accepts both shapes. The
+/// unbound single link (no brackets) matches nothing — no adapter row owns
+/// it. Matching is by the LAST ` [` so a profile tag containing brackets
+/// cannot smuggle a match.
+pub fn link_matches_adapter(link_name: &str, adapter_name: &str) -> bool {
+    let Some((_, rest)) = link_name.rsplit_once(" [") else {
+        return false;
+    };
+    let Some(bracketed) = rest.strip_suffix(']') else {
+        return false;
+    };
+    let adapter_name = adapter_name.trim();
+    if adapter_name.is_empty() {
+        return false;
+    }
+    bracketed == adapter_name || bracketed.starts_with(&format!("{adapter_name} #"))
+}
+
 /// Launches the GUI with the given service backend (the root crate calls
 /// this with its `RealService`; the `mt-app` binary passes a `MockService`).
 pub fn run_app(service: Arc<dyn MtService>, flags: Flags) -> Result<(), crate::Error> {
@@ -1169,6 +1276,131 @@ mod tests {
         );
         assert_eq!(parse_seed("-1"), None);
         assert_eq!(parse_seed("nope"), None);
+    }
+
+    /// D20: engine-tag → adapter matching (the per-interface graph's data
+    /// router). Covers the plain shape, the dedup `#n` shape, the unbound
+    /// link, name-prefix traps and bracket-in-tag traps.
+    #[test]
+    fn link_matches_adapter_shapes() {
+        // Plain per-adapter link / carrier name.
+        assert!(link_matches_adapter("gcp-vm [Wi-Fi]", "Wi-Fi"));
+        assert!(link_matches_adapter("gcp-vm [Ethernet]", "Ethernet"));
+        // Dedup suffix when two adapters share a friendly name.
+        assert!(link_matches_adapter("gcp-vm [Ethernet #2]", "Ethernet"));
+        // A DIFFERENT adapter must not match (no prefix smuggling:
+        // "Ethernet 2" is not "Ethernet #2").
+        assert!(!link_matches_adapter("gcp-vm [Ethernet 2]", "Ethernet"));
+        assert!(!link_matches_adapter("gcp-vm [Wi-Fi Direct]", "Wi-Fi"));
+        assert!(!link_matches_adapter("gcp-vm [Ethernet]", "Wi-Fi"));
+        // The unbound single link (no adapter selected) owns no row.
+        assert!(!link_matches_adapter("gcp-vm", "gcp-vm"));
+        assert!(!link_matches_adapter("gcp-vm", "Ethernet"));
+        // Brackets inside the PROFILE tag must not fake a match: the LAST
+        // " [" is the adapter part.
+        assert!(link_matches_adapter("weird [tag] [Ethernet]", "Ethernet"));
+        assert!(!link_matches_adapter("weird [tag] [Ethernet]", "tag]"));
+        // Empty adapter names never match.
+        assert!(!link_matches_adapter("gcp-vm []", ""));
+        assert!(!link_matches_adapter("gcp-vm [x]", "  "));
+        // Unterminated bracket (defensive) matches nothing.
+        assert!(!link_matches_adapter("gcp-vm [Ethernet", "Ethernet"));
+    }
+
+    /// D20: per-interface rate sampling — cumulative counters in, one
+    /// (up, down) bytes/second sample per adapter row out; counter resets
+    /// and vanished links degrade to a zero sample instead of a spike.
+    #[cfg(feature = "mock")]
+    #[test]
+    fn adapter_rate_sampling_deltas_and_resets() {
+        let mut app = App::new(Arc::new(crate::mock::MockService::new()), Flags::default());
+        app.adapters = vec![
+            AdapterRow {
+                view: mt_service::AdapterView {
+                    id: "eth-id".into(),
+                    name: "Ethernet".into(),
+                    description: String::new(),
+                    ipv4: vec!["192.168.1.5".into()],
+                    up: true,
+                    selected: true,
+                },
+                selected: true,
+                expanded: false,
+            },
+            AdapterRow {
+                view: mt_service::AdapterView {
+                    id: "wifi-id".into(),
+                    name: "Wi-Fi".into(),
+                    description: String::new(),
+                    ipv4: vec!["192.168.1.6".into()],
+                    up: true,
+                    selected: true,
+                },
+                selected: true,
+                expanded: false,
+            },
+        ];
+
+        let snap = |eth: (u64, u64), wifi: (u64, u64)| StatusSnapshot {
+            state: mt_service::ServiceState::Connected,
+            active_profile: Some("gcp-vm".into()),
+            up_since: None,
+            restarts: 0,
+            links: vec![
+                mk_link("gcp-vm [Ethernet]", eth),
+                mk_link("gcp-vm [Wi-Fi]", wifi),
+            ],
+        };
+        fn mk_link(name: &str, bytes: (u64, u64)) -> mt_service::LinkStatus {
+            mt_service::LinkStatus {
+                name: name.into(),
+                ok: true,
+                latency_ms: None,
+                ewma_ms: None,
+                quarantined: false,
+                bytes_up: bytes.0,
+                bytes_down: bytes.1,
+            }
+        }
+
+        // t0: first sight → zero sample (no fake spike).
+        app.sample_adapter_rates(&snap((1000, 5000), (200, 900)));
+        assert_eq!(
+            app.adapter_rates["eth-id"].back(),
+            Some(&(0, 0)),
+            "first sample is zero"
+        );
+        // t1: +1 s counters → the delta is the rate.
+        app.sample_adapter_rates(&snap((4000, 9000), (1200, 1900)));
+        assert_eq!(app.adapter_rates["eth-id"].back(), Some(&(3000, 4000)));
+        assert_eq!(app.adapter_rates["wifi-id"].back(), Some(&(1000, 1000)));
+        // t2: counter RESET (engine respawn) saturates to zero, not u64 wrap.
+        app.sample_adapter_rates(&snap((10, 10), (1300, 2900)));
+        assert_eq!(app.adapter_rates["eth-id"].back(), Some(&(0, 0)));
+        assert_eq!(app.adapter_rates["wifi-id"].back(), Some(&(100, 1000)));
+        // t3: WiFi link GONE (adapter unticked + reconnect) → base cleared,
+        // the surviving link keeps sampling; the vanished row goes flat-zero.
+        let snap_eth_only = |eth: (u64, u64)| StatusSnapshot {
+            state: mt_service::ServiceState::Connected,
+            active_profile: Some("gcp-vm".into()),
+            up_since: None,
+            restarts: 0,
+            links: vec![mk_link("gcp-vm [Ethernet]", eth)],
+        };
+        app.sample_adapter_rates(&snap_eth_only((5000, 12000)));
+        assert_eq!(
+            app.link_last_bytes.len(),
+            1,
+            "vanished link dropped from the delta base"
+        );
+        assert_eq!(app.adapter_rates["eth-id"].back(), Some(&(4990, 11990)));
+        assert_eq!(app.adapter_rates["wifi-id"].back(), Some(&(0, 0)));
+        // Series length is bounded by the graph window.
+        for i in 0u64..(RATE_HISTORY_LEN as u64 + 20) {
+            app.sample_adapter_rates(&snap_eth_only((5000 + i, 12000 + i)));
+        }
+        assert!(app.adapter_rates["eth-id"].len() <= RATE_HISTORY_LEN);
+        assert!(app.adapter_rates["wifi-id"].len() <= RATE_HISTORY_LEN);
     }
 
     /// Rule editor model: add, edit, remove, dirty detection.

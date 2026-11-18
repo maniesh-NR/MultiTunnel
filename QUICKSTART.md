@@ -101,9 +101,18 @@ from a terminal) is the first stop for clues.
   the active profile with one click — or with the server dropdown on the
   Status tab (switching while connected reconnects automatically).
   Latency tests run per profile from the Servers screen.
-- The data plane bonds multiple links in-process (failover, round-robin or
-  lowest-latency merge policy in Settings). The legacy external net-merge
-  tool is no longer needed; see the appendix if you used it with v0.2.
+- The data plane bonds multiple links in-process (merge policy in
+  Settings: **round-robin by default** — new connections alternate across
+  every ticked adapter, so both NICs carry traffic; `failover` keeps
+  everything on the first healthy adapter; `lowest-latency` picks the
+  lowest-RTT adapter per connection). The legacy external net-merge tool
+  is no longer needed; see the appendix if you used it with v0.2.
+- Every adapter row on the Adapters tab has an arrow (▸) that expands a
+  live per-interface traffic graph — the same two color-coded lines as the
+  Status graph (down = primary, up = tertiary), so you can SEE which NIC
+  carries what. Upgrading from v0.5.0? The stock merge policy migrates to
+  round-robin automatically (Settings shows it; pick `failover` there if
+  you really want the old behavior).
 
 ## Step 5 (optional) — stream bonding: one connection, split across adapters
 
@@ -123,7 +132,9 @@ again. Reverse traffic is split the same way back.
 3. Adapters tab: tick the adapters to bond, Apply, connect.
 
 The Status tab then shows one row per bonded adapter (carrier) with live
-RTT and byte counters. If the daemon is not reachable, MultiTunnel logs
+RTT and byte counters, and the log names each carrier's verdict at connect
+(`INFO  carrier <name>: live` / `WARN … down (<reason>)`) — a dead adapter
+is never silent. If the daemon is not reachable, MultiTunnel logs
 `stream bonding unavailable` and falls back to per-connection spreading —
 the tunnel never goes down because of a daemon problem. A carrier that
 dies mid-stream (Wi-Fi drop) is replayed on the surviving carriers: no
@@ -142,9 +153,10 @@ exit IP, its country/city/ISP, and a verdict.
   something else (typically a VPN on the VM, e.g. ProtonVPN — see the
   appendix below). If the exit ISP is not what you expect, check the VM.
 
-The bandwidth graph above it plots the last two minutes of up/down
-throughput, one sample per second, and scales with the window (Task
-Manager style).
+The bandwidth graph above it plots the last two minutes of combined
+inbound/outbound throughput, one sample per second, with a color-coded
+legend (down = primary, up = tertiary) and current rates at the top
+right; it scales with the window (Task Manager style).
 
 ## Appendix — the legacy v0.2 path (config.json + tray)
 

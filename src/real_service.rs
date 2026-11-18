@@ -439,17 +439,20 @@ fn transport_name(t: &Transport) -> &'static str {
     }
 }
 
-/// Lenient `merge_policy` string → policy (unknown values fall back to
-/// `Failover` with a warning; the GUI sends the canonical lowercase names,
-/// which are also mt-net's own serde names).
+/// Lenient `merge_policy` string → policy. Unknown values fall back to
+/// `RoundRobin` with a warning — the D20 default (a failover default made
+/// a second ticked adapter silently idle, which reads as "bonding is
+/// broken"; round-robin gives every ticked adapter traffic). The GUI
+/// sends the canonical lowercase names, which are also mt-net's own serde
+/// names.
 pub fn merge_policy_from_str(s: &str) -> MergePolicy {
     match s {
         "roundrobin" => MergePolicy::RoundRobin,
         "lowestlatency" => MergePolicy::LowestLatency,
         "failover" => MergePolicy::Failover,
         other => {
-            tracing::warn!("unknown merge policy {other:?}; using failover");
-            MergePolicy::Failover
+            tracing::warn!("unknown merge policy {other:?}; using round-robin");
+            MergePolicy::RoundRobin
         }
     }
 }
@@ -508,6 +511,10 @@ pub(crate) struct SettingsFile {
     pub socks_port: u16,
     pub http_port: u16,
     pub probe_target: String,
+    /// Schema version for stock-default migrations. Absent (v0.5.0 and
+    /// older) deserializes as 0 and is migrated on load.
+    #[serde(default)]
+    pub settings_version: u32,
 }
 
 impl Default for SettingsFile {
@@ -518,7 +525,10 @@ impl Default for SettingsFile {
                 theme_seed: 0x6750A4,
                 dark_mode: false,
                 system_proxy: false,
-                merge_policy: "failover".to_string(),
+                // D20: round-robin spreads new connections across every
+                // ticked adapter; the v0.5.0 "failover" default left the
+                // second adapter idle (misread as a bonding bug).
+                merge_policy: "round-robin".to_string(),
                 autostart: false,
                 bonded_adapters: Vec::new(),
                 bond_mode: "per-connection".to_string(),
@@ -538,9 +548,13 @@ impl Default for SettingsFile {
             socks_port: DEFAULT_SOCKS_PORT,
             http_port: DEFAULT_HTTP_PORT,
             probe_target: DEFAULT_PROBE_TARGET.to_string(),
+            settings_version: SETTINGS_VERSION,
         }
     }
 }
+
+/// Current settings schema version (D20 = 1: stock merge-policy migration).
+const SETTINGS_VERSION: u32 = 1;
 
 impl SettingsFile {
     fn load(path: &Path) -> Self {
@@ -559,6 +573,25 @@ impl SettingsFile {
         file.settings.http_port = file.http_port;
         if !file.probe_target.trim().is_empty() {
             file.settings.probe_target = file.probe_target.clone();
+        }
+        // D20 migration (v0.5.0 → v0.5.1): v0.5.0 wrote the then-stock
+        // "failover" merge policy, which sends EVERY connection down the
+        // first healthy adapter — a second ticked adapter stayed idle and
+        // users read that as broken bonding. Migrate the STOCK value to
+        // the new default (round-robin); an explicit re-choice of
+        // failover persists version >= 1 and is respected verbatim.
+        let migrated = file.settings_version < SETTINGS_VERSION;
+        if migrated {
+            if file.settings_version < 1 && file.settings.merge_policy == "failover" {
+                file.settings.merge_policy = "round-robin".to_string();
+                tracing::info!("settings migration: stock merge policy failover → round-robin");
+            }
+            file.settings_version = SETTINGS_VERSION;
+            // Best-effort persist so the Settings screen shows the
+            // migrated value even before the next explicit save.
+            if let Err(e) = file.save(path) {
+                tracing::warn!("could not persist settings migration: {e}");
+            }
         }
         file
     }
@@ -818,25 +851,30 @@ impl RealService {
             return;
         };
 
-        let links = match self
-            .core
-            .factory
-            .build(
-                &profile,
-                &resolve_bonded(
-                    &settings.settings.bonded_adapters,
-                    &mt_platform::enumerate_adapters(),
-                ),
-            )
-            .await
-        {
+        let bonded = resolve_bonded(
+            &settings.settings.bonded_adapters,
+            &mt_platform::enumerate_adapters(),
+        );
+        // D20 visibility: a ticked adapter that resolve_bonded SKIPPED
+        // (absent at connect time, or no IPv4) was silent tracing-only —
+        // the user ticks two adapters, gets one link, and reads the idle
+        // second NIC as broken bonding. Say it in the GUI log instead.
+        for id in &settings.settings.bonded_adapters {
+            if !bonded.iter().any(|a| &a.id == id) {
+                self.core.emit(ServiceEvent::LogLine(format!(
+                    "WARN  bonded adapter {id:?} skipped (not present or no IPv4) — \
+                     check the Adapters tab"
+                )));
+            }
+        }
+        let links = match self.core.factory.build(&profile, &bonded).await {
             Ok(l) if !l.is_empty() => l,
             Ok(_) => {
                 Self::fail_connect(&self.core, "link factory produced no links".into()).await;
                 return;
             }
             Err(e) => {
-                Self::fail_connect(&self.core, format!("{}", e)).await;
+                Self::fail_connect(&self.core, format!("{e}")).await;
                 return;
             }
         };
@@ -875,17 +913,36 @@ impl RealService {
                 // originals stay usable for the per-connection fallback.
                 let candidate = BondOutbound::new(links.clone(), merge_target);
                 match candidate.ensure_carriers(CONNECT_PROBE_BUDGET).await {
-                    Ok(live) => {
-                        self.core.emit(ServiceEvent::LogLine(format!(
-                            "stream bonding active — {live} carrier(s) to the merge daemon"
-                        )));
+                    Ok(report) => {
+                        // D20: per-carrier verdicts in the GUI log — a dead
+                        // carrier (e.g. a WiFi engine dial failure) must be
+                        // VISIBLE, not just a tracing line in a file.
+                        for line in &report.lines {
+                            self.core
+                                .emit(ServiceEvent::LogLine(format!("INFO  carrier {line}")));
+                        }
+                        if report.live < links.len() {
+                            self.core.emit(ServiceEvent::LogLine(format!(
+                                "WARN  stream bonding active with {}/{} carriers — bytes \
+                                 ride the live adapter(s); the dead one keeps respawning",
+                                report.live,
+                                links.len()
+                            )));
+                        } else {
+                            self.core.emit(ServiceEvent::LogLine(format!(
+                                "INFO  stream bonding active — {} carriers, bytes striped \
+                                 round-robin across them",
+                                report.live
+                            )));
+                        }
                         bond = Some(Arc::clone(&candidate));
                         vec![candidate as Arc<dyn Outbound>]
                     }
                     Err(e) => {
                         // Never black-hole (D17 §5): per-connection mode.
                         self.core.emit(ServiceEvent::LogLine(format!(
-                            "stream bonding unavailable ({e}) — per-connection spreading instead"
+                            "WARN  stream bonding unavailable ({e}) — per-connection \
+                             spreading instead; is mt-merge-server running on the server?"
                         )));
                         links
                     }
@@ -1843,6 +1900,9 @@ mod tests {
     }
 
     /// settings.json with ephemeral local ports and a loopback probe target.
+    /// `settings_version` is CURRENT so the fixture's explicit "failover"
+    /// is respected verbatim (the D20 migration only touches version-0
+    /// files — exactly the v0.5.0 stock default case).
     fn write_settings(paths: &ServicePaths, echo_port: u16, system_proxy: bool) {
         let file = SettingsFile {
             settings: SettingsView {
@@ -1865,6 +1925,7 @@ mod tests {
             socks_port: 0,
             http_port: 0,
             probe_target: format!("127.0.0.1:{echo_port}"),
+            settings_version: SETTINGS_VERSION,
         };
         std::fs::create_dir_all(&paths.config_dir).expect("config dir");
         file.save(&paths.settings_file()).expect("save settings");
@@ -2350,6 +2411,76 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(resolve_bonded(&dup, &adapters).len(), 1);
         assert!(resolve_bonded(&[], &adapters).is_empty());
+    }
+
+    /// D20: a v0.5.0 settings.json (no `settings_version`, the then-stock
+    /// "failover") migrates to round-robin on load and persists version 1;
+    /// an EXPLICIT failover on a current file is respected verbatim.
+    #[test]
+    fn settings_migration_failover_to_round_robin() {
+        let paths = scratch("migrate");
+        std::fs::create_dir_all(&paths.config_dir).expect("config dir");
+        let path = paths.settings_file();
+
+        // (a) v0.5.0-shaped file: no settings_version, stock failover.
+        // (All v0.5.0-required fields present, as a real v0.5.0 write.)
+        let v050_json = concat!(
+            r#"{"settings":{"theme_seed":4273518,"dark_mode":false,"system_proxy":false,"#,
+            r#""merge_policy":"failover","autostart":false,"bonded_adapters":[],"#,
+            r#""bond_mode":"per-connection","merge_port":7443},"rules":[]}"#
+        );
+        std::fs::write(&path, v050_json).expect("write v0.5.0 file");
+        let loaded = SettingsFile::load(&path);
+        assert_eq!(
+            loaded.settings.merge_policy, "round-robin",
+            "stock failover migrates to round-robin"
+        );
+        assert_eq!(loaded.settings_version, SETTINGS_VERSION);
+        // The migration persists (a second load is a no-op with the same
+        // value — explicit failover from NOW ON is respected).
+        let persisted = std::fs::read_to_string(&path).expect("migration persisted");
+        assert!(persisted.contains("\"round-robin\""));
+        assert!(persisted.contains(&format!("\"settings_version\": {SETTINGS_VERSION}")));
+        let reloaded = SettingsFile::load(&path);
+        assert_eq!(reloaded.settings.merge_policy, "round-robin");
+
+        // (b) CURRENT file with an explicit failover: never touched.
+        let mut file = SettingsFile::default();
+        file.settings.merge_policy = "failover".to_string();
+        file.settings_version = SETTINGS_VERSION;
+        file.save(&path).expect("save explicit failover");
+        let loaded = SettingsFile::load(&path);
+        assert_eq!(
+            loaded.settings.merge_policy, "failover",
+            "explicit failover on a current file is respected"
+        );
+
+        // (c) Fresh default (no file at all) is round-robin.
+        std::fs::remove_file(&path).expect("remove settings");
+        let fresh = SettingsFile::load(&path);
+        assert_eq!(fresh.settings.merge_policy, "round-robin");
+        assert_eq!(fresh.settings_version, SETTINGS_VERSION);
+    }
+
+    /// D20: the unknown-policy fallback is round-robin (the new stock).
+    #[test]
+    fn unknown_merge_policy_falls_back_to_round_robin() {
+        assert!(matches!(
+            merge_policy_from_str("garbage"),
+            MergePolicy::RoundRobin
+        ));
+        assert!(matches!(
+            merge_policy_from_str("failover"),
+            MergePolicy::Failover
+        ));
+        assert!(matches!(
+            merge_policy_from_str("roundrobin"),
+            MergePolicy::RoundRobin
+        ));
+        assert!(matches!(
+            merge_policy_from_str("lowestlatency"),
+            MergePolicy::LowestLatency
+        ));
     }
 
     #[test]

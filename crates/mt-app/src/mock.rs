@@ -79,7 +79,9 @@ impl MockService {
             theme_seed: 0x6750A4,
             dark_mode: false,
             system_proxy: false,
-            merge_policy: "failover".to_string(),
+            // D20: mirror the service default (round-robin — failover left
+            // the second ticked adapter idle; see real_service D20).
+            merge_policy: "round-robin".to_string(),
             autostart: false,
             bonded_adapters: vec!["mock-wifi".to_string()],
             bond_mode: "per-connection".to_string(),

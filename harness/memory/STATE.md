@@ -1,34 +1,34 @@
-# STATE — rewritten at the end of every stage. Last update: S9 (stream bonding, v0.5.0)
+# STATE — rewritten at the end of every stage. Last update: S9.1 (D20 visibility fixes, v0.5.1)
 
 ## Current position
-- Stage: S9 CLOSED — stream bonding (true per-stream split + server-side
-  merge), Status-tab live dashboard (bandwidth graph, server picker, exit
-  identity probe) and Advanced settings (v2rayN/net-merge parity) shipped
-  as v0.5.0. All gates green: 356 tests / 0 failed, fmt clean, clippy
-  host + windows-gnu -D warnings clean, zigbuild x86_64-pc-windows-gnu
-  release PE32+ x4 (console, tray, gui, mt-merge-server.exe), linux
-  mt-merge-server ELF verified listening, `gui --smoke` 6/6 on the real
-  backend.
-- Shipped surface: crates/mt-bond (D17 protocol: 24-byte framing,
-  per-session reorder, cumulative-ACK replay-on-carrier-death, PING/PONG
-  keepalives; client BondOutbound as a single mt-net Outbound; daemon in
-  server/setup-merge-daemon.sh); bond_mode setting with NEVER-BLACK-HOLE
-  fallback; exit probe (D18) answering the user's Singapore-exit question
-  in-product; Status rows = carriers in stream mode; engine loglevel,
-  ports, allow-LAN, probe/exit targets in Advanced settings.
+- Stage: S9.1 CLOSED — v0.5.1 hotfix on the first real two-adapter run
+  report: (a) Status graph drew in widget space (iced canvas frames are
+  LOCAL; every point was double-offset out of the card — "graph does not
+  load"), fixed + regression test; (b) merge policy default failover →
+  round-robin (failover left every connection on the FIRST adapter — read
+  as broken bonding) with a settings_version=1 stock-value migration
+  (explicit failover respected from v1 files); (c) stream-bond connect now
+  logs per-carrier verdicts (CarrierReport) + skipped-adapter WARNs;
+  (d) Adapters tab rows expand (▸) into per-interface mini graphs (1 s
+  deltas of cumulative link/carrier wire bytes, engine-tag → adapter
+  matcher), combined Status graph got a color-coded legend. All gates
+  green: 371 tests / 0 failed, fmt clean, clippy host + windows-gnu -D
+  warnings clean, zigbuild x86_64-pc-windows-gnu release PE32+ x4, linux
+  mt-merge-server ELF, gui --smoke 6/6 real backend.
+- Protocol/daemon UNCHANGED from v0.5.0 (D17 framing intact — the VM's
+  v0.5.0 mt-merge-server needs no upgrade; v0.5.1 binaries interop).
 
 ## Next actions
-1. Watch the v0.5.0 release run (windows zip + linux daemon assets) and
-   verify the assets (PE32+ x2 in zip, 2 linux ELFs).
-2. USER VERIFICATION on real Windows + the GCP VM: run
-   `sudo ./server/setup-merge-daemon.sh` on the VM, pick "stream" mode,
-   tick two adapters, confirm (a) Status shows two carrier rows, (b) a
-   big download keeps flowing when one adapter is disabled, (c) exit
-   probe explains the Singapore IP (expected: Host Universal Pty Ltd =
-   the VM's VPN egress, NOT a hidden hop).
-3. Backlog: weighted carrier scheduling by RTT/throughput (D17 §4 future),
-   subscription auto-update, vmess validation, profiles.json locking,
-   engine log rotation, listener max_conns (carried from v0.3.1).
+1. USER VERIFICATION of v0.5.1: install the zip, connect with both
+   adapters ticked — expect round-robin connection spreading by default
+   (both NICs carry traffic), the Status graph rendering with legend, and
+   ▸-expandable per-adapter graphs. In stream mode the log must name each
+   carrier live/down — if Wi-Fi still carries nothing, the log line now
+   says WHY (dial failure / skipped / daemon down).
+2. Watch the v0.5.1 release run (tag push) — verify assets like v0.5.0.
+3. Backlog unchanged: weighted carrier scheduling (D17 §4), subscription
+   auto-update, vmess validation, profiles.json locking, engine log
+   rotation, listener max_conns.
 4. S7 (native REALITY core) still parked.
 
 ## Blockers / open items

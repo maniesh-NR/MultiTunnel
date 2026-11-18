@@ -25,6 +25,20 @@ use crate::frame::CloseReason;
 /// on first run, the engine download — mirrors CONNECT_PROBE_BUDGET).
 pub const CARRIER_ESTABLISH_BUDGET: Duration = Duration::from_secs(15);
 
+/// Outcome of one carrier establishment pass (D20): the live count PLUS a
+/// human line per link ("live" or the dial failure) so the service can
+/// surface dead carriers in the GUI log instead of only `tracing` (the
+/// v0.5.0 "both adapters ticked, traffic only on Ethernet" report was
+/// undiagnosable from the GUI: the dead carrier was invisible).
+#[derive(Debug, Clone)]
+pub struct CarrierReport {
+    /// Live carriers after this pass.
+    pub live: usize,
+    /// One human line per link, in link order: `"<name>: live"` or
+    /// `"<name>: down (<error>)"`.
+    pub lines: Vec<String>,
+}
+
 /// The client bond: carriers over the given links, lazily established.
 pub struct BondOutbound {
     endpoint: Arc<Endpoint>,
@@ -69,15 +83,21 @@ impl BondOutbound {
     /// concurrent callers serialize (the second re-checks and returns).
     /// Every link keeps its slot index (carrier idx == link idx) so the
     /// respawn path maps a dead slot back to its own link.
-    pub async fn ensure_carriers(&self, budget: Duration) -> anyhow::Result<usize> {
+    pub async fn ensure_carriers(&self, budget: Duration) -> anyhow::Result<CarrierReport> {
         if self.established.load(Ordering::Relaxed) && self.endpoint.live_carriers() > 0 {
-            return Ok(self.endpoint.live_carriers());
+            return Ok(CarrierReport {
+                live: self.endpoint.live_carriers(),
+                lines: self.link_names_live_lines(),
+            });
         }
         let _guard = self.establish_lock.lock().await;
         // Re-check after acquiring (another caller may have established).
         if self.endpoint.live_carriers() > 0 {
             self.established.store(true, Ordering::Relaxed);
-            return Ok(self.endpoint.live_carriers());
+            return Ok(CarrierReport {
+                live: self.endpoint.live_carriers(),
+                lines: self.link_names_live_lines(),
+            });
         }
         if self.links.is_empty() {
             anyhow::bail!("bond has no links to build carriers from");
@@ -113,25 +133,33 @@ impl BondOutbound {
             .await
             .map_err(|_| anyhow::anyhow!("carrier establishment timed out"))?;
         let mut live = 0usize;
+        let mut lines = Vec::with_capacity(results.len());
         for (idx, result) in results.into_iter().enumerate() {
             match result {
                 Some((name, Ok(stream))) => {
                     if self
                         .endpoint
-                        .attach_carrier_at(stream, name, idx)
+                        .attach_carrier_at(stream, name.clone(), idx)
                         .await
                         .is_ok()
                     {
                         live += 1;
+                        lines.push(format!("{name}: live"));
+                    } else {
+                        lines.push(format!("{name}: down (carrier handshake failed)"));
                     }
                 }
                 Some((name, Err(e))) => {
                     // A dead adapter must not kill the bond — log and let
                     // the respawn path keep trying that slot.
                     tracing::warn!(carrier = %name, error = %e, "bond carrier dial failed");
+                    lines.push(format!("{name}: down ({e})"));
                 }
                 None => {
                     tracing::warn!(carrier = idx, "bond carrier dial produced no result");
+                    lines.push(format!(
+                        "carrier slot {idx}: down (dial produced no result)"
+                    ));
                 }
             }
         }
@@ -145,7 +173,22 @@ impl BondOutbound {
         if !self.sweeper_spawned.swap(true, Ordering::Relaxed) {
             tokio::spawn(Arc::clone(&self.endpoint).sweeper_task());
         }
-        Ok(live)
+        Ok(CarrierReport { live, lines })
+    }
+
+    /// Per-link live/down lines from the CURRENT carrier table (used when
+    /// `ensure_carriers` short-circuits on an established bond).
+    fn link_names_live_lines(&self) -> Vec<String> {
+        let snap = self.endpoint.carrier_snapshot();
+        self.links
+            .iter()
+            .enumerate()
+            .map(|(idx, link)| match snap.iter().find(|c| c.idx == idx) {
+                Some(c) if c.alive => format!("{}: live", link.name()),
+                Some(_) => format!("{}: down", link.name()),
+                None => format!("{}: down (never established)", link.name()),
+            })
+            .collect()
     }
 
     /// Per-carrier status rows (Status screen).
