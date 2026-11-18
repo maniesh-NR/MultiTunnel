@@ -1,14 +1,15 @@
 //! `multitunnel` — console binary.
 //!
 //! Commands:
-//!   (none)/tray   start the tray app (Windows; implemented stage S3)
-//!   connect       connect headless, run until Ctrl+C (stage S2)
-//!   import        fill config.json's server block from a vless:// link
-//!   generate      write the generated Xray client config and exit
-//!   doctor        environment check (stage S2)
-//!   profiles      multi-server profile store CLI (S6, mt-links store)
-//!   gui           launch the Material You GUI on the real backend (S6)
-//!   version       print version
+//!   (none)       launch the Material You GUI (v0.3.1 default)
+//!   connect      connect headless, run until Ctrl+C (stage S2)
+//!   import       fill config.json's server block from a vless:// link
+//!   generate     write the generated Xray client config and exit
+//!   doctor       environment check (stage S2)
+//!   profiles     multi-server profile store CLI (S6, mt-links store)
+//!   gui          launch the Material You GUI on the real backend (S6)
+//!   tray         pointer only: the tray app is the separate multitunnel-tray.exe
+//!   version      print version
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -19,6 +20,11 @@ use multitunnel::{config::Config, xrayconf};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
+    // v0.3.1: a GUI-default app must never die invisibly — panics get a
+    // MessageBox whenever no durable console would carry them (Windows).
+    #[cfg(windows)]
+    install_panic_dialog_hook();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (cfg_path, cmd_args) = match split_args(&args) {
         Ok(v) => v,
@@ -27,7 +33,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let cmd = cmd_args.first().map(String::as_str).unwrap_or("tray");
+    let cmd = command_from(&cmd_args);
 
     let result = match cmd {
         "version" => {
@@ -49,7 +55,7 @@ fn main() -> ExitCode {
         "doctor" => cmd_doctor(cfg_path),
         "connect" => cmd_connect(cfg_path),
         "profiles" => cmd_profiles(&cmd_args[1..]),
-        "gui" => cmd_gui(&cmd_args[1..]),
+        "gui" => cmd_gui(gui_args(&cmd_args)),
         "tray" => Err(multitunnel::Error(
             "the tray UI ships as the separate multitunnel-tray.exe binary".into(),
         )),
@@ -69,6 +75,30 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The subcommand to run: the first positional argument, or `gui` when the
+/// binary was launched bare.
+///
+/// v0.3.1: double-clicking `multitunnel.exe` must open the all-in-one GUI.
+/// v0.3.0 defaulted to the `tray` command, which only printed a pointer to
+/// the separate `multitunnel-tray.exe` and exited — an Explorer launch
+/// flashed a console for a split second and died, which a user reasonably
+/// read as "the exe does nothing". Guarded by
+/// `bare_launch_defaults_to_gui`.
+fn command_from(cmd_args: &[String]) -> &str {
+    cmd_args.first().map(String::as_str).unwrap_or("gui")
+}
+
+/// The arguments forwarded to the `gui` command: everything after a
+/// literal `gui`, or nothing when the GUI is the bare-launch default.
+///
+/// v0.3.1: `&cmd_args[1..]` panicked on the bare launch (empty slice — the
+/// v0.3.0 default `tray` arm never sliced, so the `gui` arm had a hidden
+/// empty-args precondition that the new default broke). Guarded by
+/// `gui_args_never_panic`.
+fn gui_args(cmd_args: &[String]) -> &[String] {
+    cmd_args.get(1..).unwrap_or(&[])
 }
 
 fn default_config_path() -> PathBuf {
@@ -561,7 +591,7 @@ fn usage() {
     println!("  (-config <path>, --config <path>) or be attached with an equals");
     println!("  sign (-config=<path>, --config=<path>).\n");
     println!("Commands:");
-    println!("  (none)     print this usage (the tray app is the separate multitunnel-tray.exe)");
+    println!("  (none)     launch the all-in-one Material You GUI (default)");
     println!("  connect    connect headless, run until Ctrl+C");
     println!("  import     fill config.json's server block from a vless:// link");
     println!("  profiles   manage the multi-server profile store (list/add/use/remove/export)");
@@ -588,7 +618,148 @@ fn cmd_profiles(args: &[String]) -> Result<(), multitunnel::Error> {
 
 // ---- gui (S6: all-in-one GUI on the real service) --------------------------
 
-/// Launch the mt-app Material You GUI against [`multitunnel::RealService`].
+/// Where the GUI process stands relative to a console (Windows launch
+/// modes) — decided once, before the window opens.
+///
+/// v0.3.1: a console-subsystem binary launched from Explorer gets a console
+/// of its own that nothing else uses. The GUI window is the real interface,
+/// so that console is detached (its window disappears); a terminal launch
+/// keeps the console shared and visible so `multitunnel gui` stays
+/// observable and stderr keeps working as the error channel.
+#[cfg(windows)]
+enum ConsoleMode {
+    /// Explorer-style launch: the console was ours alone and has been
+    /// detached — nothing is visible, so a failure must surface as a dialog.
+    Detached,
+    /// A terminal (or another CLI parent) shares the console — leave it
+    /// attached; stderr stays the error channel.
+    Shared,
+    /// No console was allocated at all — a failure must surface as a dialog.
+    Absent,
+}
+
+/// Classify — and, for the Explorer case, detach — the process console
+/// before the GUI starts. See [`ConsoleMode`].
+#[cfg(windows)]
+fn console_mode() -> ConsoleMode {
+    use windows_sys::Win32::System::Console::{
+        FreeConsole, GetConsoleProcessList, GetConsoleWindow,
+    };
+
+    // SAFETY: console queries/mutation scoped to this process; the process
+    // list is a stack buffer of the documented size passed with its length.
+    unsafe {
+        let hwnd = GetConsoleWindow();
+        if hwnd.is_null() {
+            return ConsoleMode::Absent;
+        }
+        let mut processes = [0u32; 16];
+        // 0 = call failure; > buffer = "needs more room". Both are treated
+        // as "not alone" so we never detach a console we might share.
+        let count = GetConsoleProcessList(processes.as_mut_ptr(), processes.len() as u32);
+        if count == 1 {
+            // Sole owner: the console exists only for us (Explorer launch,
+            // autostart Run key, `start multitunnel`). Free it — the conhost
+            // window goes away entirely instead of lingering behind the GUI.
+            FreeConsole();
+            ConsoleMode::Detached
+        } else {
+            ConsoleMode::Shared
+        }
+    }
+}
+
+/// Last-resort error surface for GUI launches without a usable console
+/// (v0.3.1 exists because a silent exit read as "the exe does nothing"):
+/// a MessageBox is the one channel that works with no console attached.
+#[cfg(windows)]
+fn alert_error(message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+
+    let text: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
+    let caption: Vec<u16> = "MultiTunnel"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // SAFETY: both strings are NUL-terminated UTF-16; the dialog is
+    // self-contained and its return value (the button clicked) is unused.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+/// Install the never-die-invisibly panic hook (v0.3.1): on Windows, a
+/// panic in a process whose console is missing or sole-owned would print
+/// to a console that flashes shut — the dialog is the durable channel.
+#[cfg(windows)]
+fn install_panic_dialog_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let message = format!(
+            "MultiTunnel hit an unexpected error and must close:\n\n{info}\n\n\
+             Please report this at\n\
+             https://github.com/maniesh-NR/MultiTunnel/issues"
+        );
+        // stderr first — the full report whenever a console survives us.
+        eprintln!("{message}");
+        if flash_death_likely() {
+            alert_error(&message);
+        }
+    }));
+}
+
+/// True when this process has no console or is its sole user: on exit the
+/// console window would vanish instantly (double-click launch), taking the
+/// stderr panic report with it.
+#[cfg(windows)]
+fn flash_death_likely() -> bool {
+    use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
+
+    // SAFETY: read-only console queries; stack buffer passed with its length.
+    unsafe {
+        if GetConsoleWindow().is_null() {
+            return true;
+        }
+        let mut processes = [0u32; 16];
+        let count = GetConsoleProcessList(processes.as_mut_ptr(), processes.len() as u32);
+        count <= 1
+    }
+}
+
+/// Launch the Material You GUI on the real service, wrapped in the v0.3.1
+/// console policy (see [`ConsoleMode`]): Explorer launches detach their
+/// orphan console before the window opens, terminal launches keep it, and
+/// any launch failure without a usable console is shown as a MessageBox so
+/// the process can never again die invisibly. The body lives in
+/// [`cmd_gui_inner`].
+// On non-Windows the cfg blocks below vanish and only `let result = …;
+// result` remains — exactly the `let_and_return` pattern, allowed for the
+// sake of the Windows-only sandwich around it.
+#[cfg_attr(not(windows), allow(clippy::let_and_return))]
+fn cmd_gui(args: &[String]) -> Result<(), multitunnel::Error> {
+    #[cfg(windows)]
+    let console = console_mode();
+    let result = cmd_gui_inner(args);
+    #[cfg(windows)]
+    if let Err(e) = &result {
+        if !matches!(console, ConsoleMode::Shared) {
+            alert_error(&format!(
+                "The MultiTunnel GUI failed to start:\n\n{}\n\n\
+                 Run `multitunnel gui` from a terminal to see the full error.",
+                e.0
+            ));
+        }
+    }
+    result
+}
+
+/// The GUI command body (runtime pick + exit hooks), kept separate from the
+/// [`cmd_gui`] console/error-surface wrapper.
 ///
 /// Runtime pick (documented): iced 0.13's `tokio` executor creates and owns
 /// its own tokio runtime internally (see iced_futures' tokio backend), so the
@@ -602,7 +773,7 @@ fn cmd_profiles(args: &[String]) -> Result<(), multitunnel::Error> {
 /// Headless hosts: `run_app` fails at iced window creation on machines
 /// without a display; that surfaces as a clean `gui: ...` error exit —
 /// accepted for v0.3 (use `--smoke` for CI/headless runs).
-fn cmd_gui(args: &[String]) -> Result<(), multitunnel::Error> {
+fn cmd_gui_inner(args: &[String]) -> Result<(), multitunnel::Error> {
     let flags = mt_app::Flags::from_args(args.iter());
     let service: std::sync::Arc<dyn mt_service::MtService> =
         std::sync::Arc::new(multitunnel::RealService::new());
@@ -735,6 +906,36 @@ mod tests {
             .expect("two flags parse");
         assert_eq!(cfg.as_deref(), Some(std::path::Path::new("b.json")));
         assert_eq!(rest, ["doctor"]);
+    }
+
+    // ---- v0.3.1 default command (double-click must open the GUI) ----------
+
+    #[test]
+    fn bare_launch_defaults_to_gui() {
+        // v0.3.0 defaulted to `tray`, which only errored and exited — an
+        // Explorer double-click looked like "no launch activity".
+        assert_eq!(command_from(&args(&[])), "gui");
+        assert_eq!(command_from(&args(&["gui"])), "gui");
+        assert_eq!(command_from(&args(&["connect"])), "connect");
+        assert_eq!(command_from(&args(&["tray"])), "tray");
+    }
+
+    #[test]
+    fn gui_args_never_panic() {
+        // The bare launch (empty argv) forwards no flags — `&cmd_args[1..]`
+        // panicked there until v0.3.1 (gui_args doc).
+        assert!(gui_args(&args(&[])).is_empty());
+        assert!(gui_args(&args(&["gui"])).is_empty());
+        assert_eq!(gui_args(&args(&["gui", "--smoke"])), ["--smoke"]);
+        // The real pipeline: `-config=` is split off by split_args BEFORE
+        // dispatch, so gui_args never sees it.
+        let (_, cmd_args) =
+            split_args(&args(&["-config=/x/c.json", "gui", "--smoke"])).expect("config parses");
+        assert_eq!(
+            gui_args(&cmd_args),
+            ["--smoke"],
+            "config flags are split off before the command"
+        );
     }
 
     // ---- write_private delegation (S2-REV-C P2-6) --------------------------

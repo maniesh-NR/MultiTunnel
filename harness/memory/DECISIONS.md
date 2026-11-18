@@ -104,3 +104,31 @@ ports/paths/behavior survive and relative paths are not re-rooted by a
 resolve() round-trip. Writes go through write_private (fsutil atomic,
 S5). Missing config → template first, then patch. (Feature built on a
 stale-tree session and salvaged onto the frontier after the 7th rollback.)
+
+## D15 — Bare launch = GUI; a GUI app never dies invisibly (2026-11-18)
+User report on the v0.3.0 release: "multitunnel.exe does not show a GUI
+when opened. There does not appear to be any launch activity." Root cause:
+the no-args default was the `tray` command, which only printed a pointer to
+the separate multitunnel-tray.exe and exited 1 — a console-subsystem
+double-click flashes a console for a fraction of a second. The build was
+never broken; the product's front door was. v0.3.1 rules:
+1. Bare launch defaults to `gui` (`command_from`, regression-tested).
+2. Windows console policy (`console_mode`): a console-subsystem GUI launch
+   detaches its console via FreeConsole ONLY when the process is the sole
+   console user (GetConsoleProcessList == 1 — Explorer double-click,
+   autostart Run key, `start`); a terminal launch shares the console and
+   keeps it. Call failures conservatively read as "shared" — never detach a
+   console we might share. Side effect: the parked C-P2-10 autostart
+   concern is largely resolved (autostarted console exe now opens the GUI
+   with no lingering console).
+3. Never-die-invisibly: GUI launch errors surface as a MessageBoxW when no
+   shared console exists (`alert_error`), and a panic hook
+   (`install_panic_dialog_hook`) shows panics the same way in flash-death
+   processes. stderr remains the primary channel whenever a console
+   survives the process.
+4. `gui_args()`: the `gui` dispatch arm must accept an EMPTY argv tail —
+   `&cmd_args[1..]` panicked on the bare launch (a hidden precondition the
+   v0.3.0 `tray` default masked). Caught only by running the host binary
+   bare: unit tests and `gui --smoke` never exercise empty-argv dispatch.
+   LESSON: after changing a dispatch default, run the binary with no args
+   on the host before shipping.

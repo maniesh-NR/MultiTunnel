@@ -51,13 +51,18 @@ Sanity check on the VM: `systemctl status xray` should show active (running).
 
 ## Step 2 — start the app
 
-From the MultiTunnel folder (an elevated terminal is recommended — the
-system-proxy writes want administrator rights; expect the SmartScreen
-"unknown publisher" warning for the unsigned binary):
+Double-click `multitunnel.exe`. Since v0.3.1 the bare launch IS the app: the
+Material You window opens, and the throwaway console Windows allocates for a
+double-clicked console binary is freed automatically (a console may flash for
+a split second first — cosmetic). Prefer a terminal? `multitunnel gui` does
+the same and keeps the console for log output; no administrator rights are
+needed for the usual per-user system-proxy writes (expect the SmartScreen
+"unknown publisher" warning for the unsigned binary either way).
 
-```
-multitunnel gui
-```
+> v0.3.0 note: in the first release the bare launch defaulted to a `tray`
+> pointer that printed one line and exited — a double-click looked like
+> "nothing happens". v0.3.1 made the GUI the default, and any start failure
+> without a usable console now shows a MessageBox instead of dying silently.
 
 **SMOKE TEST — this is the first time the GUI binary runs on real Windows.**
 The development sandbox is Linux; the window has been cross-compiled and

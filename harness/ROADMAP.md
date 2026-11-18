@@ -166,6 +166,15 @@ style (parallel expert agents, one crate each). Full per-expert contracts in
 > races, body-size caps, engine log rotation, profiles.json locking, vmess
 > pbk/sid validation, listener max_conns.
 
+> **v0.3.1 HOTFIX (post-S6, 2026-11-18)**: the first real-Windows user run
+> reported "multitunnel.exe does not show a GUI when opened" — the v0.3.0
+> no-args default was the `tray` pointer error, so a double-click flashed a
+> console and exited. Fixed per D15: bare launch = GUI, Explorer/autostart
+> launches free their orphan console, GUI errors/panics surface as a
+> MessageBox when no console can carry them, and the empty-argv `gui` slice
+> panic found while verifying was fixed (gui_args). 323 tests, all gates
+> green, tagged v0.3.1 (see LEDGER 05:33–05:40Z).
+
 ## S7 — Native REALITY core (parked)
 
 Pure-Rust VLESS+REALITY+vision client (hand-rolled TLS 1.3 with Chrome

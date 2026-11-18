@@ -145,8 +145,11 @@ config; the script never prints it and it never leaves the VM.
 
 ## The v0.3 way: GUI + profiles (recommended)
 
-1. `multitunnel gui` opens the Material You window (theme seed is
-   configurable; dark mode included).
+1. Double-click `multitunnel.exe` — since v0.3.1 the bare launch IS the
+   GUI (the orphan console a double-click allocates is freed automatically;
+   `multitunnel gui` from a terminal does the same and keeps the console).
+   The Material You window opens (theme seed is configurable; dark mode
+   included).
 2. Paste a `vless://` share link on the Servers screen — a preview shows
    protocol/endpoint before you add it. Or use the CLI:
    `multitunnel profiles add "vless://…"` then `multitunnel profiles use <tag>`.
@@ -216,18 +219,22 @@ config location (legacy commands only; the GUI path uses `settings.json`).
 ```
 Usage: multitunnel [command] [-config <path>]
 
-  (none)     print this usage (the tray app is the separate multitunnel-tray.exe)
+  (none)     launch the all-in-one Material You GUI (default — v0.3.1)
   gui        launch the all-in-one Material You GUI (--smoke: headless CI run)
   profiles   manage the multi-server profile store (list/add/use/remove/export)
   import     fill config.json's server block from a vless:// link
   connect    connect headless (legacy v0.2 path), run until Ctrl+C
   generate   write the generated Xray client config and exit
   doctor     check environment (binaries, config, ports)
+  tray       pointer only: the tray app is the separate multitunnel-tray.exe
   version    print version
 ```
 
-- `multitunnel gui` — the all-in-one app (see above). Closing the window or
-  Ctrl+C disconnects and restores the system proxy.
+- Double-click / `multitunnel gui` — the all-in-one app (see above). Closing
+  the window or Ctrl+C disconnects and restores the system proxy. A GUI
+  launch from Explorer detaches its throwaway console, and a start failure
+  without a usable console is reported in a MessageBox — the app can no
+  longer die invisibly.
 - `multitunnel profiles list` — protocol/address/port/tag per profile,
   active marked; never prints credentials. `profiles add <share-link>`
   (previews, then upserts), `profiles use <tag-or-id>`, `profiles remove
