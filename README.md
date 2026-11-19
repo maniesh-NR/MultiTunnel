@@ -187,6 +187,64 @@ exit IP with geo/ISP plus a verdict against the active profile's server:
   VPN provider's ASN instead, that is the VM's default route, not an
   added hop.
 
+## Exclusions & routing import (v0.6) — v2rayN-style bypass lists
+
+The Routing tab is a full ordered rule table (first match wins, actions
+proxy / direct / reject — enforced in-process by the mt-net router, no
+engine round-trip). Since v0.6 it can also **import exclusions from a
+file** so selected traffic bypasses the tunnel and connects directly:
+
+- **plain list** — one domain / IP / CIDR per line; `#` comments
+  (full-line or inline). `example.com` becomes a `domainSuffix` rule
+  (matches the domain and all subdomains), `10.20.0.0/16` an `ipCidr`
+  rule, a bare IP becomes a `/32` (or `/128`) host route. Every entry
+  imports as `direct`.
+- **v2rayN routing JSON** — `{"routing":{"rules":[...]}}` (also a bare
+  `{"rules":[...]}` or `[...]`): `domain:`/`full:`/plain domains and
+  IP/CIDR arrays map onto our rules, keeping each rule's outbound
+  (`direct`/`freedom` -> direct, `proxy` -> proxy, `block`/`blackhole` ->
+  reject).
+- `geosite:`/`geoip:`/`regexp:` entries are skipped with a per-entry
+  reason (no geo databases in a zero-dependency build); `geoip:private`
+  is already enforced by the engine.
+
+Imports join the DRAFT (Apply activates them; Revert discards), and the
+same import is available headless: `multitunnel routing import
+<file>` (plus `multitunnel routing list`). A live session picks new
+rules up on the next reconnect.
+
+## Scheduling & bonding modes (v0.6) — beyond round-robin
+
+The merge policy picks which bonded adapter carries each NEW connection
+(Advanced tab):
+
+- `round-robin` (default) — connections alternate across every ticked
+  adapter; both NICs carry traffic.
+- `lowest-latency` — each connection takes the adapter with the best
+  smoothed (EWMA) RTT, so the faster link naturally takes more
+  connections than a blind alternation. (v0.6 also fixes the policy
+  parser: the GUI's hyphenated names were silently falling back to
+  round-robin before.)
+- `failover` — everything rides the first healthy adapter; the second
+  stays idle until it dies.
+
+To use **both adapters for a single connection at the same time**, set
+bonding mode to `stream` (Advanced): the bytes of every connection are
+split across all ticked adapters and re-merged by `mt-merge-server` on
+the tunnel server — see "Stream bonding (v0.5)" above.
+
+## Rendering fixes (v0.6)
+
+v0.5.1 shipped three rendering defects, all root-caused and fixed via
+surgical patches to the terminal iced 0.13 releases (vendored under
+`vendor/`, see `vendor/*/README-MULTITUNNEL.md`): the Status/Adapters
+graphs did not paint on incremental frames (canvas damage was computed
+in the wrong coordinate space), canvas labels could render displaced
+("out of frame"), and "Check exit IP" could abort the process with
+`user-provided comparison function does not correctly implement a total
+order` (NaN damage rectangles + a non-total sort comparator in
+`iced_graphics::damage::group`).
+
 ## The v0.3 way: GUI + profiles (recommended)
 
 1. Double-click `multitunnel.exe` — since v0.3.1 the bare launch IS the
@@ -266,6 +324,8 @@ Usage: multitunnel [command] [-config <path>]
   (none)     launch the all-in-one Material You GUI (default — v0.3.1)
   gui        launch the all-in-one Material You GUI (--smoke: headless CI run)
   profiles   manage the multi-server profile store (list/add/use/remove/export)
+  routing    routing rules: list | import <file> (v2rayN-style exclusions, v0.6)
+  adapters   list network adapters and the bonded selection
   import     fill config.json's server block from a vless:// link
   connect    connect headless (legacy v0.2 path), run until Ctrl+C
   generate   write the generated Xray client config and exit

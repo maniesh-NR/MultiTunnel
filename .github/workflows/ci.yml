@@ -18,6 +18,8 @@ jobs:
       # no custom paths).
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # S10: regression tests living inside the vendored iced patches.
+      - run: cargo test -p iced_graphics -p iced_tiny_skia --lib
       # S6-REV-B P2-5: the GUI headless smoke run (view construction, theme
       # derivation, update loop) — wired as promised by CONTRACTS-S6; ubuntu
       # only (the leg is display-free by design).

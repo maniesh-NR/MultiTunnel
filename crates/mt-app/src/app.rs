@@ -260,6 +260,12 @@ pub enum Message {
     RulesSaved(Result<(), String>),
     /// Discard unsaved rule edits.
     RulesReverted,
+    /// S10: the exclusions-import file path field changed.
+    RulesImportPathChanged(String),
+    /// S10: import exclusions from the file at [`App::rules_import_path`].
+    RulesImport,
+    /// S10: the import finished (parsed rules, or an I/O / parse error).
+    RulesImported(Result<mt_service::ExclusionImport, String>),
     /// Loaded settings (canonical copy).
     SettingsLoaded(SettingsView),
     /// A seed swatch was pressed.
@@ -315,7 +321,7 @@ pub enum Message {
 }
 
 /// Valid routing rule kinds (matches the mt-net router matcher).
-pub const RULE_KINDS: [&str; 4] = ["domain-suffix", "domain-keyword", "ip-cidr", "any"];
+pub const RULE_KINDS: [&str; 4] = ["domainSuffix", "domainKeyword", "ipCidr", "any"];
 /// Valid routing rule actions (matches the mt-net router actions).
 pub const RULE_ACTIONS: [&str; 3] = ["proxy", "direct", "reject"];
 /// Valid merge policies (matches the mt-net aggregator).
@@ -358,6 +364,8 @@ pub struct App {
     pub rules_saved: Vec<RuleRow>,
     /// Routing editor status line.
     pub rules_status: Option<String>,
+    /// S10: path of the exclusions file to import (Routing screen).
+    pub rules_import_path: String,
     /// Adapters screen rows (service view + draft selection).
     pub adapters: Vec<AdapterRow>,
     /// Adapters screen status line.
@@ -427,6 +435,7 @@ impl App {
             rules: Vec::new(),
             rules_saved: Vec::new(),
             rules_status: None,
+            rules_import_path: String::new(),
             adapters: Vec::new(),
             adapters_status: None,
             settings,
@@ -897,6 +906,45 @@ impl App {
                 self.rules = self.rules_saved.clone();
                 self.rules_status = None;
             }
+            Message::RulesImportPathChanged(t) => {
+                self.rules_import_path = t;
+            }
+            Message::RulesImport => {
+                let path = self.rules_import_path.trim().to_string();
+                if path.is_empty() {
+                    self.rules_status = Some("enter a file path first".to_string());
+                    return iced::Task::none();
+                }
+                return iced::Task::perform(
+                    async move {
+                        let text = tokio::fs::read_to_string(&path)
+                            .await
+                            .map_err(|e| format!("cannot read {path:?}: {e}"))?;
+                        Ok::<_, String>(mt_service::parse_exclusion_list(&text))
+                    },
+                    Message::RulesImported,
+                );
+            }
+            Message::RulesImported(res) => match res {
+                Ok(imp) => {
+                    for (entry, reason) in &imp.skipped {
+                        util::push_log(
+                            &mut self.logs,
+                            format!("WARN  routing import: skipped {entry:?} — {reason}"),
+                        );
+                    }
+                    self.rules.extend(imp.rules.iter().map(|r| RuleRow {
+                        kind: r.kind.clone(),
+                        value: r.value.clone(),
+                        action: r.action.clone(),
+                    }));
+                    self.rules_status =
+                        Some(format!("{} — press Apply to activate", imp.summary()));
+                }
+                Err(e) => {
+                    self.rules_status = Some(format!("import failed: {e}"));
+                }
+            },
             Message::SettingsLoaded(s) => {
                 self.settings = s.clone();
                 self.seed_text = s.theme_seed.to_string();
@@ -1407,7 +1455,7 @@ mod tests {
     #[test]
     fn rule_editor_add_edit_remove() {
         let saved = vec![RuleRow {
-            kind: "domain-suffix".into(),
+            kind: "domainSuffix".into(),
             value: "example.org".into(),
             action: "proxy".into(),
         }];

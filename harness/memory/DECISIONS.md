@@ -251,3 +251,49 @@ combined color-coded graph + per-interface graphs under an arrow.
    dropped from the delta base, zero samples appended to unbonded rows —
    a flat line is the honest "this NIC carries nothing" signal).
    Combined graph gained an in-canvas legend (color swatch + down/up).
+
+## D21 — S10: rendering fixes as vendored iced patches + exclusions import
+
+User report: graphs occasionally out of frame / not loading; exclusions
+import like v2rayN; better-than-round-robin scheduling; "Check exit IP"
+panics on a non-total comparator.
+
+1. VENDORED ICED PATCHES over an iced upgrade: iced_graphics and
+   iced_tiny_skia are at their TERMINAL 0.13.0 releases (no 0.13.x patch
+   line exists), and 0.14/1.0 is a breaking migration. The three defects
+   (local-vs-absolute clip space in damage + render mask; INFINITY marker
+   bounds on canvas text → NaN damage; non-total sort comparator) are
+   fixed as minimal vendored patches under vendor/ with
+   [patch.crates-io], inline comments, per-patch READMEs and regression
+   tests inside the vendored crates (`cargo test -p iced_graphics -p
+   iced_tiny_skia`). LESSON: before upgrading iced wholesale, diff the
+   canvas/damage paths — these fixes must be re-based or dropped
+   deliberately when the dependency moves.
+2. CANVAS TEXT BOUNDS are now MEASURED (one no-wrap cosmic-text layout
+   per label per frame, ~µs) instead of INFINITY markers. The anchor
+   stays the alignment position and the size is the measured line — both
+   consumers (visible_bounds for damage, draw_cached for rendering)
+   apply the same alignment arithmetic to the same rectangle. A first
+   attempt that reused the frame clip as conservative bounds BROKE the
+   draw anchor (draw_cached re-anchors via `..bounds`), pushing the
+   right-aligned rate label to the window edge — caught by the Xvfb rig
+   and fixed by measuring instead.
+3. EXCLUSIONS SEMANTICS: every plain-list entry imports as action
+   `direct`; v2rayN JSON keeps its own outbound tags where they map
+   (direct/freedom, proxy, block/blackhole). `full:` domains WIDEN to
+   domainSuffix (no exact matcher exists; widening is the safe direction
+   for a bypass list) — documented in the UI hint, README and parser
+   docs. geosite:/geoip:/regexp: skip with per-entry reasons (zero-dep
+   build carries no geo databases). Imports join the GUI DRAFT (Apply
+   activates); the CLI variant (`routing import`) persists immediately —
+   power users read diffs, GUI users get an undo.
+4. GUI/backend vocabulary unified on the REAL service's camelCase rule
+   kinds ("domainSuffix"/"domainKeyword"/"ipCidr"/"any") — the kebab-case
+   pick-list had made every real-backend save fail and loaded rules
+   render blank kinds since v0.5.0 (invisible in smoke tests because
+   MockService is permissive). Same class of bug: hyphenated merge-policy
+   names now parse; "lowest-latency" had silently meant round-robin.
+5. SCHEDULING: no new policy — lowest-latency (EWMA) already existed in
+   mt-net; the work was making it reachable and explaining the trade.
+   "Both connections at once" = stream bonding (needs mt-merge-server on
+   the VM, D17/D18); the Advanced card now says exactly that.

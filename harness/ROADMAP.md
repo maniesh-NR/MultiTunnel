@@ -259,6 +259,33 @@ PE/ELF verified; gui --smoke 6/6; docs refreshed; v0.5.0 tagged + released.
 > (client CLOSE(Eof) = write-close; daemon CLOSE = final) so a lost tail
 > is impossible. v0.5.0 tagged + released.
 
+## S10 — Rendering fixes (vendored iced) + exclusions import + scheduling reachability (v0.6.0) `[x]`
+
+User report 2026-11-19: (a) graphs occasionally show up but out of frame;
+(b) import exclusions from file like v2rayN (direct bypass); (c) something
+more efficient than round-robin / both connections simultaneously;
+(d) "Check exit IP" panics (non-total comparator).
+
+- REPRO RIG: scripts/gui_drive.py — Xvfb + XTEST + ffmpeg screenshots +
+  VLM/pixel verification; reproduced all three rendering defects
+  deterministically (see LEDGER 2026-11-19, DECISIONS D21).
+- Vendored iced patches (vendor/ + [patch.crates-io], tests inside):
+  damage total_cmp; group-clip coordinate space in damage + render mask +
+  cached damage; honest MEASURED canvas-text bounds (kills the NaN class).
+- Exclusions: mt-service::parse_exclusion_list (plain list + v2rayN JSON),
+  Routing-tab import card (draft + Apply), CLI `routing list|import`;
+  camelCase rule-kind unification (Routing editor was broken against the
+  real backend since v0.5.0); hyphenated merge-policy names parse
+  (lowest-latency had silently been round-robin).
+- Docs: README (exclusions / scheduling / rendering-fix sections, CLI),
+  QUICKSTART Step 7, THIRD_PARTY_NOTICES vendored-iced section.
+- Gates: fmt clean; clippy host + windows-gnu (zig shims) -D warnings
+  clean; 371 tests 0 failed (368 workspace + 3 vendored); zigbuild release
+  PE32+ x4; gui --smoke exit 0; Xvfb end-to-end: graph paints without
+  resize, import flow verified, no panic.
+- Acceptance: tag v0.6.0; release.yml publishes windows zip + linux
+  daemons; assets verified by download + unzip.
+
 ## S7 — Native REALITY core (parked)
 
 Pure-Rust VLESS+REALITY+vision client (hand-rolled TLS 1.3 with Chrome

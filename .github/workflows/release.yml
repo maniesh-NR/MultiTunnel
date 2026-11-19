@@ -23,7 +23,10 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # S2-REV-B P1-1: a v* tag must never ship an untested build — tag
       # pushes bypass ci.yml, so the suite runs here before the build.
+      # S10: the vendored iced patches (vendor/) carry their own regression
+      # tests — run them alongside the workspace suite.
       - run: cargo test --workspace
+      - run: cargo test -p iced_graphics -p iced_tiny_skia --lib
       - run: cargo build --release
       - name: Package
         shell: pwsh

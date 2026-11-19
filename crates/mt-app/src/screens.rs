@@ -731,6 +731,45 @@ pub fn routing(app: &App) -> Element<'_> {
     .align_y(iced::Alignment::Center);
 
     let mut rows = column![toolbar].spacing(8);
+
+    // --- S10: exclusions import (v2rayN parity) -----------------------------
+    let import_row = row![
+        text("import exclusions")
+            .size(ts.body_m.size)
+            .color(s.on_surface_variant)
+            .width(Length::Fixed(150.0)),
+        text_input(
+            "file path — .txt domain list or v2rayN routing .json",
+            &app.rules_import_path,
+        )
+        .on_input(Message::RulesImportPathChanged)
+        .padding(8)
+        .style(t3::text_field(s))
+        .width(Length::Fill),
+        m3_button(
+            "Import",
+            !app.rules_import_path.trim().is_empty(),
+            ButtonKind::Tonal,
+            Message::RulesImport,
+            app
+        ),
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
+    let import_hint = text(
+        "one domain / IP / CIDR per line (# comments) — or a v2rayN routing-rules \
+         JSON; entries join the DRAFT as direct rules, skipped lines land in the \
+         log; press Apply to activate",
+    )
+    .size(ts.body_s.size)
+    .color(s.on_surface_variant);
+    let import_card = container(column![import_row, import_hint].spacing(6))
+        .padding(12)
+        .style(t3::card(s, s.surface_container))
+        .width(Length::Fill);
+
+    rows = rows.push(import_card);
+
     if app.rules.is_empty() {
         rows = rows.push(
             text("no rules — everything falls through to the default action")
@@ -1075,9 +1114,11 @@ pub fn settings(app: &App) -> Element<'_> {
             "round-robin (default): new connections alternate across every ticked \
              adapter — both NICs carry traffic. failover: everything rides the \
              first healthy adapter (the second stays idle until it dies). \
-             lowest-latency: each connection picks the lowest-RTT adapter. \
-             For byte-level splitting of a SINGLE connection use bonding mode \
-             \"stream\" (Advanced).",
+             lowest-latency: each connection picks the adapter with the best \
+             smoothed (EWMA) RTT — the faster link naturally takes more \
+             connections than a blind alternation. To use BOTH adapters for a \
+             SINGLE connection at the same time, set bonding mode \"stream\" \
+             in Advanced.",
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant),
@@ -1145,6 +1186,17 @@ pub fn settings(app: &App) -> Element<'_> {
         port_field(s, &ts, "HTTP port (0 = ephemeral)", app.settings.http_port, Message::HttpPortChanged),
         port_field(s, &ts, "server merge port (stream mode)", app.settings.merge_port, Message::MergePortChanged),
         bond_mode_row,
+        text(
+            "per-connection (default): each TCP connection rides ONE adapter, \
+             connections are spread by the merge policy. stream: the BYTES of \
+             every connection are split across ALL ticked adapters at once and \
+             re-merged by mt-merge-server on the tunnel server — one download \
+             uses both NICs simultaneously; needs the merge daemon (setup \
+             script in the release zip, port below) and falls back to \
+             per-connection with a log line when it is unreachable.",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
         log_level_row,
         toggler(app.settings.allow_lan)
             .label("allow LAN clients (bind 0.0.0.0 — exposes the proxy)")

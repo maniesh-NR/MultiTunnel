@@ -158,6 +158,36 @@ inbound/outbound throughput, one sample per second, with a color-coded
 legend (down = primary, up = tertiary) and current rates at the top
 right; it scales with the window (Task Manager style).
 
+## Step 7 (optional) — exclusions: let selected traffic bypass the tunnel
+
+The Routing tab is the rule table (first match wins, actions proxy /
+direct / reject). To import a bypass list like in v2rayN:
+
+1. Put your exclusions in a text file — one domain, IP or CIDR per line,
+   `#` comments allowed:
+
+       # corporate + local stuff rides the direct connection
+       example.com
+       .corp.example.org
+       10.20.0.0/16
+       192.168.50.7
+
+   A v2rayN routing-rules JSON (`{"routing":{"rules":[...]}}`) works too.
+
+2. Routing tab -> "import exclusions" -> type the file path -> Import.
+   The entries join the draft as `direct` rules; press **Apply**.
+
+3. Matched traffic now connects directly (no tunnel); everything else
+   keeps riding the bonded tunnel. A live session picks the rules up on
+   the next reconnect. CLI equivalent:
+   `multitunnel routing import C:\path\to\list.txt`.
+
+Which adapter carries which connection is the merge policy's job
+(Settings -> Network): `round-robin` (default) alternates, and
+`lowest-latency` sends each connection over the link with the best
+smoothed RTT. To split ONE connection across both adapters at the same
+time, use bonding mode `stream` (Step 5).
+
 ## Appendix — the legacy v0.2 path (config.json + tray)
 
 The v0.2 commands still work and are documented in the README. The short

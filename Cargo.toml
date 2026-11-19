@@ -1,6 +1,6 @@
 [package]
 name = "multitunnel"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "Windows supervisor that combines an Xray VLESS+REALITY tunnel with net-merge multi-link bonding"
@@ -57,3 +57,18 @@ mock-gui = ["mt-app/mock"]
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Console", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Networking_WinInet"] }
 winreg = "0.56.0"
+
+# --- S10: vendored iced fixes (tiny, surgical; see vendor/*/README-MULTITUNNEL.md) ---
+# 1. iced_graphics damage::group sorted with a NaN-unsafe comparator — any
+#    INFINITE/NaN damage rectangle (center() = NaN) crashed the app with
+#    "user-provided comparison function does not correctly implement a total
+#    order" (v0.5.1 "Check exit IP" crash, reproduced in-sandbox).
+# 2. iced_tiny_skia reported canvas damage/clips in LOCAL space against
+#    ABSOLUTE bounds — every canvas not at the window origin produced zero
+#    damage and was masked to the origin on partial redraws (the v0.5.1
+#    "graphs don't load / out of frame" bug).
+# Upstream 0.13.0 is the terminal release of the 0.13 line for these
+# crates, so the fixes are carried as a path patch.
+[patch.crates-io]
+iced_graphics = { path = "vendor/iced_graphics" }
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }

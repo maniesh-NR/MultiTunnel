@@ -193,17 +193,17 @@ fn seed_profiles() -> Vec<mt_links::Profile> {
 fn seed_rules() -> Vec<RuleView> {
     vec![
         RuleView {
-            kind: "domain-suffix".to_string(),
+            kind: "domainSuffix".to_string(),
             value: "corp.example.org".to_string(),
             action: "direct".to_string(),
         },
         RuleView {
-            kind: "domain-keyword".to_string(),
+            kind: "domainKeyword".to_string(),
             value: "ads".to_string(),
             action: "reject".to_string(),
         },
         RuleView {
-            kind: "ip-cidr".to_string(),
+            kind: "ipCidr".to_string(),
             value: "192.0.2.0/24".to_string(),
             action: "proxy".to_string(),
         },
@@ -288,7 +288,7 @@ fn view_of(p: &mt_links::Profile, active_id: &Option<String>) -> ProfileView {
 }
 
 fn valid_rule(r: &RuleView) -> Result<(), String> {
-    const KINDS: [&str; 4] = ["domain-suffix", "domain-keyword", "ip-cidr", "any"];
+    const KINDS: [&str; 4] = ["domainSuffix", "domainKeyword", "ipCidr", "any"];
     const ACTIONS: [&str; 3] = ["proxy", "direct", "reject"];
     if !KINDS.contains(&r.kind.as_str()) {
         return Err(format!("unknown rule kind \"{}\"", r.kind));
@@ -706,7 +706,7 @@ mod tests {
             .is_err());
         assert!(svc
             .set_routing_rules(vec![RuleView {
-                kind: "domain-suffix".to_string(),
+                kind: "domainSuffix".to_string(),
                 value: String::new(),
                 action: "proxy".to_string(),
             }])

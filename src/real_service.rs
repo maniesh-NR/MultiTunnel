@@ -443,12 +443,14 @@ fn transport_name(t: &Transport) -> &'static str {
 /// `RoundRobin` with a warning — the D20 default (a failover default made
 /// a second ticked adapter silently idle, which reads as "bonding is
 /// broken"; round-robin gives every ticked adapter traffic). The GUI
-/// sends the canonical lowercase names, which are also mt-net's own serde
-/// names.
+/// sends the canonical lowercase hyphenated names (its pick-list), which
+/// are accepted verbatim; the un-hyphenated mt-net serde names are
+/// accepted too. (S10: before this fix "lowest-latency" — the GUI's own
+/// string — fell into the fallback and silently behaved as round-robin.)
 pub fn merge_policy_from_str(s: &str) -> MergePolicy {
     match s {
-        "roundrobin" => MergePolicy::RoundRobin,
-        "lowestlatency" => MergePolicy::LowestLatency,
+        "roundrobin" | "round-robin" => MergePolicy::RoundRobin,
+        "lowestlatency" | "lowest-latency" => MergePolicy::LowestLatency,
         "failover" => MergePolicy::Failover,
         other => {
             tracing::warn!("unknown merge policy {other:?}; using round-robin");
@@ -2479,6 +2481,22 @@ mod tests {
         ));
         assert!(matches!(
             merge_policy_from_str("lowestlatency"),
+            MergePolicy::LowestLatency
+        ));
+    }
+
+    /// S10 regression: the GUI's pick-list sends the HYPHENATED names —
+    /// before this fix "lowest-latency" (and "round-robin") fell into the
+    /// unknown-value fallback, so the lowest-latency policy silently
+    /// behaved as round-robin.
+    #[test]
+    fn hyphenated_merge_policy_names_parse() {
+        assert!(matches!(
+            merge_policy_from_str("round-robin"),
+            MergePolicy::RoundRobin
+        ));
+        assert!(matches!(
+            merge_policy_from_str("lowest-latency"),
             MergePolicy::LowestLatency
         ));
     }

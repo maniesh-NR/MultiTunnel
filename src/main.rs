@@ -59,6 +59,7 @@ fn main() -> ExitCode {
         "connect" => cmd_connect(cfg_path),
         "profiles" => cmd_profiles(&cmd_args[1..]),
         "adapters" => cmd_adapters(),
+        "routing" => cmd_routing(&cmd_args[1..]),
         "gui" => cmd_gui(gui_args(&cmd_args)),
         "tray" => Err(multitunnel::Error(
             "the tray UI ships as the separate multitunnel-tray.exe binary".into(),
@@ -600,6 +601,7 @@ fn usage() {
     println!("  import     fill config.json's server block from a vless:// link");
     println!("  profiles   manage the multi-server profile store (list/add/use/remove/export)");
     println!("  adapters   list network adapters and the bonded selection (GUI Adapters screen)");
+    println!("  routing    routing rules: list | import <file> (v2rayN-style exclusions)");
     println!("  gui        launch the all-in-one Material You GUI");
     println!("  generate   write the generated Xray client config and exit");
     println!("  doctor     check environment (binaries, config, ports)");
@@ -878,6 +880,86 @@ fn cmd_gui_inner(args: &[String]) -> Result<(), multitunnel::Error> {
     };
 
     gui_result
+}
+
+// ---- routing (S10: exclusions import, v2rayN parity) ----------------------
+
+/// `multitunnel routing` — `list` prints the ordered rule table;
+/// `import <file>` parses a plain domain/IP list or a v2rayN routing-rules
+/// JSON and APPENDS the parsed rules to settings.json (the GUI's Routing
+/// screen imports into a draft instead; the CLI writes immediately — it
+/// is the power-user path). A live session picks the new table up on the
+/// next reconnect, exactly like a GUI Apply.
+fn cmd_routing(args: &[String]) -> Result<(), multitunnel::Error> {
+    match args.first().map(String::as_str) {
+        Some("list") => cmd_routing_list(),
+        Some("import") => {
+            let path = args.get(1).ok_or_else(|| {
+                multitunnel::Error("usage: multitunnel routing import <file>".into())
+            })?;
+            cmd_routing_import(path)
+        }
+        _ => {
+            eprintln!("usage: multitunnel routing list | routing import <file>");
+            Err(multitunnel::Error(String::new()))
+        }
+    }
+}
+
+fn cmd_routing_list() -> Result<(), multitunnel::Error> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| multitunnel::Error(format!("routing: runtime: {e}")))?;
+    let svc = multitunnel::RealService::new();
+    rt.block_on(async move {
+        let rules = svc.routing_rules().await;
+        println!("routing rules ({}), first match wins:", rules.len());
+        if rules.is_empty() {
+            println!("  none — everything takes the default action (proxy)");
+        }
+        for (i, r) in rules.iter().enumerate() {
+            println!(
+                "  {:>3}. {:<14} {:<34} {}",
+                i + 1,
+                r.kind,
+                r.value,
+                r.action
+            );
+        }
+    });
+    Ok(())
+}
+
+fn cmd_routing_import(path: &str) -> Result<(), multitunnel::Error> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| multitunnel::Error(format!("cannot read {path:?}: {e}")))?;
+    let parsed = mt_service::parse_exclusion_list(&text);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| multitunnel::Error(format!("routing: runtime: {e}")))?;
+    let svc = multitunnel::RealService::new();
+    rt.block_on(async move {
+        let mut rules = svc.routing_rules().await;
+        let before = rules.len();
+        rules.extend(parsed.rules.iter().cloned());
+        svc.set_routing_rules(rules)
+            .await
+            .map_err(|e| multitunnel::Error(format!("saving rules failed: {e}")))?;
+        println!("{}", parsed.summary());
+        println!(
+            "  {} → {} rules in settings.json (was {before})",
+            path,
+            before + parsed.rules.len()
+        );
+        for (entry, reason) in &parsed.skipped {
+            println!("  skipped: {entry} — {reason}");
+        }
+        println!("a live session picks the new rules up on the next reconnect");
+        Ok(())
+    })
 }
 
 #[cfg(test)]

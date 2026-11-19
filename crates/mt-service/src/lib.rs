@@ -229,3 +229,408 @@ pub struct ExitInfo {
     /// server VM's default route).
     pub direct_exit: bool,
 }
+
+// ---------------------------------------------------------------------------
+// S10: exclusions import (v2rayN parity)
+// ---------------------------------------------------------------------------
+
+/// Outcome of parsing an exclusions file (Routing screen → "Import from
+/// file"). Pure — file I/O is the caller's business.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExclusionImport {
+    /// Parsed rules in file order. A plain list maps every entry to
+    /// `action = "direct"` (that is what "exclude from the tunnel" means);
+    /// a v2rayN routing JSON keeps each rule's own outbound
+    /// (direct/freedom → "direct", proxy → "proxy", block/blackhole →
+    /// "reject").
+    pub rules: Vec<RuleView>,
+    /// Entries that could not be mapped, each with a human reason.
+    /// Never fatal: the import proceeds with everything it understood.
+    pub skipped: Vec<(String, String)>,
+    /// Human name of the detected format.
+    pub format: &'static str,
+}
+
+impl ExclusionImport {
+    /// One-line summary for the Routing screen status field.
+    pub fn summary(&self) -> String {
+        let mut s = format!(
+            "imported {} rule{} from {}",
+            self.rules.len(),
+            if self.rules.len() == 1 { "" } else { "s" },
+            self.format
+        );
+        if !self.skipped.is_empty() {
+            s.push_str(&format!(
+                ", skipped {} (see tooltips / logs)",
+                self.skipped.len()
+            ));
+        }
+        s
+    }
+}
+
+/// Parse an exclusions file: either a plain text list (one domain / IP /
+/// CIDR per line, `#`/`//`/`;` comments, every entry becomes a DIRECT
+/// rule) or a v2rayN/Xray routing-rules JSON (`{"routing":{"rules":[..]}}`,
+/// a bare `{"rules":[..]}`, or a bare `[..]` array — entries keep their
+/// outbound tags where they map to ours).
+///
+/// Mapping notes (documented, honest):
+/// - `example.com` (or `.example.com`) → domainSuffix — matches the domain
+///   itself AND all subdomains (label-boundary semantics).
+/// - `full:example.com` in JSON → domainSuffix (WIDENED to subdomains; we
+///   have no exact-match matcher and widening is the safe direction for
+///   an exclusion list).
+/// - a bare IP → `ip/32` (v4) or `ip/128` (v6).
+/// - `geosite:x`, `geoip:x`, `regexp:x` are NOT supported (no geo
+///   databases in a zero-dependency build) — they are skipped with a
+///   reason. `geoip:private` is unnecessary: private ranges are already
+///   routed direct by the engine.
+pub fn parse_exclusion_list(text: &str) -> ExclusionImport {
+    let trimmed = text.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        parse_v2rayn_routing_json(text)
+    } else {
+        parse_plain_list(text)
+    }
+}
+
+fn parse_plain_list(text: &str) -> ExclusionImport {
+    let mut rules = Vec::new();
+    let mut skipped = Vec::new();
+
+    for raw in text.lines() {
+        // Full-line AND inline comments: '#' never occurs in a domain,
+        // IP or CIDR, so a plain split is unambiguous.
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() || line.starts_with("//") || line.starts_with(';') {
+            continue;
+        }
+        match classify_entry(line) {
+            Ok((kind, value)) => rules.push(RuleView {
+                kind: kind.to_string(),
+                value,
+                action: "direct".to_string(),
+            }),
+            Err(reason) => skipped.push((line.to_string(), reason)),
+        }
+    }
+
+    ExclusionImport {
+        rules,
+        skipped,
+        format: "plain list",
+    }
+}
+
+/// Classify one plain-list entry into a (kind, value) rule pair.
+fn classify_entry(entry: &str) -> Result<(&'static str, String), String> {
+    // CIDR / bare IP?
+    if entry.contains('/') || entry.parse::<std::net::IpAddr>().is_ok() {
+        return classify_ip(entry);
+    }
+    // Known unsupported prefixes (v2rayN list styles).
+    let lower = entry.to_ascii_lowercase();
+    for prefix in ["geosite:", "geoip:", "regexp:"] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let _ = rest;
+            return Err(format!(
+                "{prefix} entries need geo/regex databases — not supported in the zero-dependency build"
+            ));
+        }
+    }
+    // Domain (leading '.' = explicit suffix form).
+    let domain = entry.trim_start_matches('.');
+    if is_plausible_domain(domain) {
+        return Ok(("domainSuffix", domain.to_ascii_lowercase()));
+    }
+    Err("not a domain, IP or CIDR".to_string())
+}
+
+/// Validate + normalize an IP / CIDR entry.
+fn classify_ip(entry: &str) -> Result<(&'static str, String), String> {
+    if let Some((ip, prefix)) = entry.split_once('/') {
+        let ip: std::net::IpAddr = ip
+            .parse()
+            .map_err(|_| format!("'{entry}' is not a valid IP/CIDR"))?;
+        let prefix: u8 = prefix
+            .parse()
+            .map_err(|_| format!("'{entry}' has a non-numeric prefix length"))?;
+        let max = match ip {
+            std::net::IpAddr::V4(_) => 32,
+            std::net::IpAddr::V6(_) => 128,
+        };
+        if prefix > max {
+            return Err(format!("'{entry}': prefix /{prefix} exceeds /{max}"));
+        }
+        return Ok(("ipCidr", entry.to_string()));
+    }
+    // Bare IP → host route.
+    let ip: std::net::IpAddr = entry
+        .parse()
+        .map_err(|_| format!("'{entry}' is not a valid IP"))?;
+    let cidr = match ip {
+        std::net::IpAddr::V4(_) => format!("{ip}/32"),
+        std::net::IpAddr::V6(_) => format!("{ip}/128"),
+    };
+    Ok(("ipCidr", cidr))
+}
+
+/// Conservative domain plausibility: non-empty, no spaces, no path/query
+/// separators, at least one dot (bare TLDs like "localhost" are not
+/// routing-relevant) and only ASCII host characters.
+fn is_plausible_domain(s: &str) -> bool {
+    !s.is_empty()
+        && s.contains('.')
+        && !s.contains(' ')
+        && !s.contains('/')
+        && !s.contains(':')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
+fn parse_v2rayn_routing_json(text: &str) -> ExclusionImport {
+    let mut rules: Vec<RuleView> = Vec::new();
+    let mut skipped: Vec<(String, String)> = Vec::new();
+
+    let value: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => {
+            return ExclusionImport {
+                rules,
+                skipped: vec![("<whole file>".to_string(), format!("invalid JSON: {e}"))],
+                format: "v2rayN routing JSON",
+            }
+        }
+    };
+
+    // Accept {"routing":{"rules":[..]}}, {"rules":[..]} and a bare [..].
+    let array = value
+        .get("routing")
+        .and_then(|r| r.get("rules"))
+        .or_else(|| value.get("rules"))
+        .and_then(|r| r.as_array())
+        .cloned()
+        .or_else(|| value.as_array().cloned());
+
+    let Some(array) = array else {
+        return ExclusionImport {
+            rules,
+            skipped: vec![(
+                "<whole file>".to_string(),
+                "JSON has no routing.rules array".to_string(),
+            )],
+            format: "v2rayN routing JSON",
+        };
+    };
+
+    for rule in &array {
+        // outboundTag → our action vocabulary. v2rayN stock tags:
+        // direct/freedom → direct, proxy → proxy, block/blackhole → reject.
+        let tag = rule
+            .get("outboundTag")
+            .and_then(|t| t.as_str())
+            .unwrap_or("direct");
+        let action = match tag.to_ascii_lowercase().as_str() {
+            "direct" | "freedom" => "direct",
+            "proxy" => "proxy",
+            "block" | "blackhole" => "reject",
+            other => {
+                skipped.push((
+                    rule.to_string(),
+                    format!("outboundTag '{other}' has no MultiTunnel equivalent"),
+                ));
+                continue;
+            }
+        };
+
+        let mut rule_added = false;
+        // domain: [ "domain:x", "full:x", "geosite:x", "x" ]
+        if let Some(domains) = rule.get("domain").and_then(|d| d.as_array()) {
+            for d in domains {
+                let Some(d) = d.as_str() else {
+                    skipped.push((d.to_string(), "non-string domain entry".to_string()));
+                    continue;
+                };
+                let lower = d.to_ascii_lowercase();
+                let (suffix, widened) = if let Some(rest) = lower.strip_prefix("domain:") {
+                    (rest, false)
+                } else if let Some(rest) = lower.strip_prefix("full:") {
+                    (rest, true) // widened to subdomains — documented
+                } else if lower.starts_with("geosite:") || lower.starts_with("regexp:") {
+                    skipped.push((
+                        d.to_string(),
+                        format!("'{d}': geo/regex matchers are not supported"),
+                    ));
+                    continue;
+                } else {
+                    (lower.as_str(), false)
+                };
+                if !is_plausible_domain(suffix) {
+                    skipped.push((d.to_string(), "not a plausible domain".to_string()));
+                    continue;
+                }
+                let _ = widened; // summary-level note only; semantics documented
+                rules.push(RuleView {
+                    kind: "domainSuffix".to_string(),
+                    value: suffix.to_string(),
+                    action: action.to_string(),
+                });
+                rule_added = true;
+            }
+        }
+        // ip: [ "1.2.3.4", "10.0.0.0/8", "geoip:cn" ]
+        if let Some(ips) = rule.get("ip").and_then(|i| i.as_array()) {
+            for ip in ips {
+                let Some(ip) = ip.as_str() else {
+                    skipped.push((ip.to_string(), "non-string ip entry".to_string()));
+                    continue;
+                };
+                if ip.to_ascii_lowercase().starts_with("geoip:") {
+                    if ip.eq_ignore_ascii_case("geoip:private") {
+                        // Already enforced by the engine; importing it would
+                        // be redundant, not wrong — skip with the reason.
+                        skipped.push((
+                            ip.to_string(),
+                            "geoip:private is already routed direct by the engine".to_string(),
+                        ));
+                    } else {
+                        skipped.push((
+                            ip.to_string(),
+                            "geoip entries need geo databases — not supported".to_string(),
+                        ));
+                    }
+                    continue;
+                }
+                match classify_ip(ip) {
+                    Ok((kind, value)) => {
+                        rules.push(RuleView {
+                            kind: kind.to_string(),
+                            value,
+                            action: action.to_string(),
+                        });
+                        rule_added = true;
+                    }
+                    Err(reason) => skipped.push((ip.to_string(), reason)),
+                }
+            }
+        }
+
+        if !rule_added {
+            skipped.push((
+                rule.to_string(),
+                "rule carried no mappable domain/ip entries".to_string(),
+            ));
+        }
+    }
+
+    ExclusionImport {
+        rules,
+        skipped,
+        format: "v2rayN routing JSON",
+    }
+}
+
+#[cfg(test)]
+mod exclusion_tests {
+    use super::*;
+
+    #[test]
+    fn plain_list_domains_ips_and_comments() {
+        let text = "# my exclusions\n\
+                    example.com\n\
+                    .bank.example.org   # leading dot = suffix form\n\
+                    192.168.50.7\n\
+                    10.20.0.0/16\n\
+                    ;; semicolon comment\n\
+                    geosite:cn\n";
+        let out = parse_exclusion_list(text);
+        assert_eq!(out.format, "plain list");
+        assert_eq!(out.rules.len(), 4);
+        assert_eq!(
+            out.rules[0],
+            RuleView {
+                kind: "domainSuffix".into(),
+                value: "example.com".into(),
+                action: "direct".into()
+            }
+        );
+        assert_eq!(out.rules[1].value, "bank.example.org");
+        assert_eq!(
+            out.rules[2],
+            RuleView {
+                kind: "ipCidr".into(),
+                value: "192.168.50.7/32".into(),
+                action: "direct".into()
+            }
+        );
+        assert_eq!(out.rules[3].value, "10.20.0.0/16");
+        assert_eq!(out.skipped.len(), 1);
+        assert!(out.skipped[0].0.contains("geosite:cn"));
+    }
+
+    #[test]
+    fn plain_list_ipv6_and_garbage() {
+        let out = parse_exclusion_list("fd00::1\nnot a domain!!\n2001:db8::/32\n");
+        assert_eq!(out.rules.len(), 2);
+        assert_eq!(out.rules[0].value, "fd00::1/128");
+        assert_eq!(out.rules[1].value, "2001:db8::/32");
+        assert_eq!(out.skipped.len(), 1);
+        assert!(out.skipped[0].1.contains("not a domain"));
+    }
+
+    #[test]
+    fn plain_list_rejects_bad_cidr_prefix() {
+        let out = parse_exclusion_list("10.0.0.0/40\n");
+        assert!(out.rules.is_empty());
+        assert!(out.skipped[0].1.contains("exceeds /32"));
+    }
+
+    #[test]
+    fn v2rayn_routing_json_full_shape() {
+        let text = r#"{
+            "routing": {
+                "rules": [
+                    { "type": "field", "domain": ["domain:example.com", "full:exact.org", "geosite:cn"], "outboundTag": "direct" },
+                    { "type": "field", "ip": ["geoip:private", "geoip:cn", "192.0.2.0/24"], "outboundTag": "direct" },
+                    { "type": "field", "domain": ["ads.example.net"], "outboundTag": "block" },
+                    { "type": "field", "domain": ["proxy.example.net"], "outboundTag": "proxy" },
+                    { "type": "field", "domain": ["weird.example.net"], "outboundTag": "my-own-tag" }
+                ]
+            }
+        }"#;
+        let out = parse_exclusion_list(text);
+        assert_eq!(out.format, "v2rayN routing JSON");
+        assert_eq!(out.rules.len(), 5);
+        assert_eq!(out.rules[0].value, "example.com");
+        assert_eq!(out.rules[1].value, "exact.org");
+        assert_eq!(out.rules[2].kind, "ipCidr");
+        assert_eq!(out.rules[2].value, "192.0.2.0/24");
+        assert_eq!(out.rules[3].action, "reject");
+        assert_eq!(out.rules[4].action, "proxy");
+        // geosite:cn, geoip:private, geoip:cn, unknown outboundTag rule.
+        assert_eq!(out.skipped.len(), 4);
+        assert!(out.summary().contains("imported 5 rules"));
+    }
+
+    #[test]
+    fn v2rayn_bare_rules_array_and_invalid_json() {
+        let out = parse_exclusion_list(r#"[{"domain":["a.com"],"outboundTag":"direct"}]"#);
+        assert_eq!(out.rules.len(), 1);
+        assert_eq!(out.rules[0].value, "a.com");
+
+        let bad = parse_exclusion_list("{not json");
+        assert!(bad.rules.is_empty());
+        assert!(bad.skipped[0].1.contains("invalid JSON"));
+    }
+
+    #[test]
+    fn summary_counts() {
+        let out = parse_exclusion_list("a.com\nb.net\ngoop:x\n");
+        assert!(out
+            .summary()
+            .starts_with("imported 2 rules from plain list"));
+        assert!(out.summary().contains("skipped 1"));
+    }
+}

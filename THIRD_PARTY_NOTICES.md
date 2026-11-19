@@ -309,6 +309,18 @@ links in-process (mt-net) and does not require net-merge at all; the
 legacy `multitunnel connect` command still launches a user-installed
 net-merge if the v0.2 config asks for it.
 
+## Vendored iced patches (v0.6)
+
+`iced_graphics` and `iced_tiny_skia` (both upstream 0.13.0, MIT, same
+license as the rest of the iced stack already listed above) are vendored
+under `vendor/` with small bug-fix patches carried via
+`[patch.crates-io]` — upstream 0.13.0 is the terminal release of the
+0.13 line, so the fixes cannot be picked up from a registry update.
+Each patch is documented inline (`MultiTunnel patch (S10)` comments) and
+in `vendor/*/README-MULTITUNNEL.md`: a total-order-safe damage sort, and
+coordinate-space corrections for canvas damage/clips plus honest canvas
+text bounds. No upstream license or notice text was modified.
+
 ---
 
 This file is part of every release zip (see .github/workflows/release.yml).

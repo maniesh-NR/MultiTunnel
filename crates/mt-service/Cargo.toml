@@ -10,3 +10,5 @@ description = "MultiTunnel UI service contract (types + trait shared by GUI and 
 tokio = { version = "1", features = ["sync"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
+# S10: parse_exclusion_list (v2rayN routing-rules JSON import).
+serde_json = "1"

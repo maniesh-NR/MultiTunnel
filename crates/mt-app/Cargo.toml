@@ -19,7 +19,7 @@ features = ["tokio", "tiny-skia", "canvas"]
 mt-m3 = { path = "../mt-m3", features = ["iced"] }
 mt-service = { path = "../mt-service" }
 mt-links = { path = "../mt-links" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 async-trait = "0.1"
 tracing = "0.1"
 thiserror = "2"
