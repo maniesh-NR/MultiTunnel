@@ -1,58 +1,49 @@
-# STATE — rewritten at the end of every stage. Last update: S12 (balanced+priority scheduling + adapter priority order, v0.7.0, rebased onto v0.6.2)
+# STATE — rewritten at the end of every stage. Last update: S13 (Status tab: one connection frame + one page scrollable, v0.7.1)
 
 ## Current position
-- Stage: S12 CLOSED — v0.7.0 on the user's report "with 3+ adapters most
-  traffic rides one adapter, the second less, the third rarely any; want
-  even spreading AND a fill-in-order mode with a user-settable adapter
-  order + UI refinement". Two new merge policies (DECISIONS D23):
-  `balanced` (new stock default — live byte-load spreading with a
-  per-connection reserve; kills the one-fat-flow-hogs-one-NIC shape) and
-  `priority` (user order, fill #1 until its measured bandwidth saturates
-  — a ramp/plateau detector, not a naive threshold — then spill to #2…;
-  recovers when load drops). Stream-bond frame scheduling is
-  policy-aware too (least writer backpressure / queue high-water), and
-  the Adapters tab is the ordering UI (selected rows first with #n chips
-  + ↑/↓; the saved bonded_adapters ORDER is the priority).
-- S11 (remote session, v0.6.2) fixed STREAM BONDING: Xray 26.x freedom
-  default-policy blackholes loopback merge targets → the setup script
-  now writes a narrow finalRules allow; client carriers are VERIFIED
-  with a PING/PONG round trip before becoming schedulable (usable());
-  tests/e2e_real_xray.rs is the real-Xray E2E rig (MT_E2E_XRAY=1).
-  S12 was rebased onto it — pick_carrier is policy-aware AND
-  verified-only. THE USER'S VM may still need `sudo bash
-  server/setup-xray-reality.sh` (idempotent finalRules patch) for
-  stream mode to work.
-- Gates (re-run post-rebase): fmt clean; clippy host + windows-gnu -D
-  warnings clean; 396+ workspace tests / 0 failed (381 on the v0.6.2
-  base + the S12 scheduling/ordering tests); vendored iced 6/0; gui
-  --smoke exit 0; Xvfb rig pixel-verified the chips, the ↓ swap (chip
-  x-centers 283↔305), the 5-row policy menu and the Status chips.
-- Protocol/daemon UNCHANGED (D17 framing intact; no VM daemon upgrade).
+- Stage: S13 CLOSED — v0.7.1 on the user's report "the Status
+  scrollbars only scroll the adapter list; the wheel should scroll
+  everything below the connection frame; wide gap between the connect
+  toggle and server dropdown; the graph should use that free space".
+  D24: ONE fixed connection frame (state text + toggler + picker
+  stacked in a 296px left column, STATUS_FRAME_LEFT_WIDTH; combined
+  graph in a fixed-240px panel — STATUS_GRAPH_HEIGHT, D22 rule intact —
+  Fill-filling the remaining frame width) + ONE page scrollable below
+  it owning exit card + Links/Adapters card. Mock seeds EIGHT adapters
+  (3-NIC bond + Bluetooth/vEthernet-WSL/Tailscale/Loopback/VirtualBox);
+  the richer seed exposed a stale test idiom (apply used all row ids;
+  real handler filters to selected — fixed to mirror production).
+- Rig-verified (Xvfb+XTEST, pixel-cluster): frame anchors byte-stable
+  across scrolls at sf=1.0 AND sf=1.5; all 8 adapter rows render in
+  priority order, last row visible at max scroll; expansion, exit-probe
+  verdict card, resize round-trip all work; 0 panics. Row-ID LESSON:
+  identify by x-cluster widths (gap>12) — chips + AA grays contaminate
+  raw extents; link rows are DARK text, purple bands = adapter names.
+- Gates: fmt clean; clippy host + windows-gnu -D warnings clean; 398
+  workspace tests / 0 failed; vendored iced 6/0; gui --smoke exit 0;
+  zigbuild PE32+ x4 + linux ELF; release 44574748448 SUCCESS, CI
+  44574711227 ALL GREEN; assets verified by download (zip 6,003,079 B,
+  PE32+ x2, docs carry v0.7.1 wording; mt-merge-server ELFs x2).
+  Staged in ../download/: multitunnel-v0.7.1-windows-x64.zip (the
+  VERIFIED CI zip) + mt-merge-server-v0.7.1-x86_64-unknown-linux-gnu.
 
 ## Next actions
-1. USER VERIFICATION of v0.7.0: Settings shows merge policy "balanced"
-   (upgraded files migrate from round-robin automatically); watch the
-   Status per-adapter graphs spread more evenly under load; pick
-   "priority" and reorder adapters on the Adapters tab (↑/↓) to fill
-   #1 first; in stream mode the policy drives frame spreading too. If
-   stream bonding still fails: re-run server/setup-xray-reality.sh on
-   the VM (finalRules) and server/setup-merge-daemon.sh.
-2. Watch the v0.7.0 release run (tag push) — verify assets like
-   v0.6.x. Local zip + linux daemon staged in ../download/ (NOTE: they
-   were built BEFORE the rebase — rebuild + restage if any size differs
-   from the released asset).
+1. USER VERIFICATION of v0.7.1: wheel scrolls everything below the
+   connection frame; graph fills the frame; long adapter lists fully
+   reachable; expansion + exit probe unchanged.
+2. If stream bonding still fails on the VM: sudo bash
+   server/setup-xray-reality.sh (idempotent finalRules patch) and
+   server/setup-merge-daemon.sh.
 3. Backlog: subscription auto-update, vmess validation, profiles.json
    locking, engine log rotation, listener max_conns, upstream iced
    migration, S7 native REALITY core (parked).
 
 ## Blockers / open items
 - None blocking. Watch item: disk headroom (release zigbuild needs ~5G;
-  /tmp/mt-target/debug was cleaned before the release build; the rig
-  rebuilds it). After a sandbox recycle the whole toolchain needs
-  reinstalling (recipe below) — budget ~10 minutes — AND the clone may
-  be a STALE snapshot: fetch origin/main FIRST and rebase before
-  building on last session's tree (this stage's push was rejected for
-  exactly that reason).
+  /tmp/mt-target/debug was cleaned before this release build and the
+  rig rebuilt it). After a sandbox recycle the toolchain needs
+  reinstalling (recipe below) AND the clone may be STALE: fetch
+  origin/main FIRST and rebase before building.
 
 ## Environment map (sandbox, rebuilt this stage)
 - Repo: /home/z/my-project/MultiTunnel — branch main, remote
