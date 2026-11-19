@@ -39,7 +39,7 @@ whole path is about ten minutes.
 │    ├─ ProxyServer    (mt-net)            │    VLESS +     │  xray (systemd, User=nobody)       │
 │    │    SOCKS :10808 / HTTP :10809       │    REALITY     │    - listens on 0.0.0.0:8443       │
 │    │    Router: private CIDRs → direct   │ ═════════════▶ │    - REALITY borrows the TLS cert   │
-│    │    merge: round-robin (default)     │    TCP :8443   │      of the gateway already on     │
+│    │    merge: balanced (default)        │    TCP :8443   │      of the gateway already on     │
 │    ├─ ManagedEngine  (mt-engine)         │                │      127.0.0.1:443 (serverNames)   │
 │    │    one Xray child per link,         │                │    │    as its camouflage            │
 │    │    kill-on-close job, respawn       │                │    ▼ freedom outbound              │
@@ -56,7 +56,7 @@ contracts in `harness/CONTRACTS-S6.md`):
 | Crate | Role |
 |---|---|
 | `mt-links` | share-link parsing (`vless://` strict REALITY-only), profile store, subscriptions, v0.2 migration |
-| `mt-net` | the data plane: SOCKS5 + HTTP inbounds, routing table, link bonding (round-robin default / failover / lowest-latency), quarantine |
+| `mt-net` | the data plane: SOCKS5 + HTTP inbounds, routing table, link bonding (balanced default / round-robin / priority / failover / lowest-latency), quarantine, live per-link load tracking |
 | `mt-engine` | supervised Xray child processes: respawn with backoff, kill-on-drop + kill-on-close job objects |
 | `mt-m3` | Material You design tokens with real HCT dynamic color (material-colors) |
 | `mt-platform` | engine locator/self-download (SHA256SUMS-verified), autostart, platform dirs |
@@ -69,8 +69,8 @@ because MultiTunnel has set the WinINET system proxy to `127.0.0.1:10809`.
 The router sends private/LAN CIDRs direct and everything else through the
 VLESS+REALITY outbound; because mux is off, every proxied connection is its
 own TCP stream, so a multi-link setup can spread connections across
-uplinks (connection-level bonding, round-robin by default — failover and
-lowest-latency selectable). On the VM,
+uplinks (connection-level bonding, balanced by default — round-robin,
+priority, failover and lowest-latency selectable). On the VM,
 xray terminates REALITY on port 8443 — an unauthenticated handshake is
 proxied to the real gateway, which is what makes the port look like an
 ordinary HTTPS endpoint — and exits through a plain `freedom` outbound.
@@ -156,9 +156,10 @@ stream granularity:
   whose target is the merge daemon on the server (`127.0.0.1:<merge
   port>`, reached through the tunnel). No new ports are exposed.
 - `mt-bond` frames the streams (24-byte headers: HELLO/OPEN/DATA/CLOSE/
-  ACK/PING/PONG), stripes DATA frames round-robin across carriers,
-  reorders per session, and replays unacked frames on a carrier that
-  dies — a Wi-Fi drop mid-download costs zero bytes. Cumulative ACKs
+  ACK/PING/PONG), spreads DATA frames across carriers under the merge
+  policy (balanced = least writer backpressure, priority = user adapter
+  order), reorders per session, and replays unacked frames on a carrier
+  that dies — a Wi-Fi drop mid-download costs zero bytes. Cumulative ACKs
   bound the replay window; TCP-native backpressure provides flow control.
 - `mt-merge-server` (the daemon, installed by
   `server/setup-merge-daemon.sh`) accepts the carriers, re-merges each
@@ -215,22 +216,39 @@ same import is available headless: `multitunnel routing import
 <file>` (plus `multitunnel routing list`). A live session picks new
 rules up on the next reconnect.
 
-## Scheduling & bonding modes (v0.6) — beyond round-robin
+## Scheduling & bonding modes (v0.7) — even spreading and adapter priority
 
 The merge policy picks which bonded adapter carries each NEW connection
-(Advanced tab):
+(Settings → Network), and — in stream mode — how every connection's BYTES
+are striped across the carriers:
 
-- `round-robin` (default) — connections alternate across every ticked
-  adapter; both NICs carry traffic.
+- `balanced` (default, v0.7) — each new connection goes to the adapter
+  carrying the least traffic RIGHT NOW (a 1 s byte-rate estimate plus a
+  small per-connection reserve). A fat download stops hogging one NIC and
+  the spread evens out by BYTES, not by connection count. With three or
+  more adapters this is the fix for "one adapter carries almost
+  everything, the last one rarely sees traffic".
+- `round-robin` — connections alternate across every ticked adapter;
+  even by connection count, not by bytes (one big flow still dominates
+  its adapter).
+- `priority` (v0.7) — adapters fill in the priority order you set on the
+  Adapters tab (↑/↓, or tick to append): adapter #1 takes everything
+  until its measured bandwidth saturates (a ramp/plateau detector on its
+  live rate), then the overflow spills to #2, and so on. When #1's load
+  drops, it takes the traffic back automatically.
 - `lowest-latency` — each connection takes the adapter with the best
-  smoothed (EWMA) RTT, so the faster link naturally takes more
-  connections than a blind alternation. (v0.6 also fixes the policy
-  parser: the GUI's hyphenated names were silently falling back to
-  round-robin before.)
-- `failover` — everything rides the first healthy adapter; the second
-  stays idle until it dies.
+  smoothed (EWMA) RTT.
+- `failover` — everything rides the first healthy adapter; the others
+  stay idle until it dies.
 
-To use **both adapters for a single connection at the same time**, set
+In stream bonding mode the same policy drives the frame scheduler:
+`balanced` sends each frame down the carrier with the least writer
+backpressure (fast NICs naturally take more), `priority` fills carriers
+in the Adapters-tab order until one backs up. Upgrading from v0.6.x? The
+stock `round-robin` setting migrates to `balanced` once; an explicit
+re-choice of `round-robin` persists.
+
+To use **every adapter for a single connection at the same time**, set
 bonding mode to `stream` (Advanced): the bytes of every connection are
 split across all ticked adapters and re-merged by `mt-merge-server` on
 the tunnel server — see "Stream bonding (v0.5)" above.

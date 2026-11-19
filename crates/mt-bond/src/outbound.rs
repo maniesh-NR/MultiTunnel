@@ -51,10 +51,25 @@ pub struct BondOutbound {
 }
 
 impl BondOutbound {
-    /// New bond over `links` (one per bonded adapter). `merge_target` is
-    /// the daemon address AS SEEN BY THE SERVER (e.g. 127.0.0.1:7443) —
-    /// carriers dial it THROUGH each link's tunnel.
+    /// New bond over `links` (one per bonded adapter) with the stock
+    /// round-robin carrier scheduling. `merge_target` is the daemon
+    /// address AS SEEN BY THE SERVER (e.g. 127.0.0.1:7443) — carriers
+    /// dial it THROUGH each link's tunnel.
     pub fn new(links: Vec<Arc<dyn Outbound>>, merge_target: TargetAddr) -> Arc<Self> {
+        Self::with_policy(links, merge_target, mt_net::MergePolicy::RoundRobin)
+    }
+
+    /// S11: new bond with an explicit carrier-scheduling policy — the
+    /// user's merge policy mapped onto frame spreading: `Balanced` sends
+    /// each frame down the carrier with the least writer backpressure
+    /// (capacity-proportional even spreading), `Priority` fills carriers
+    /// in the user's adapter order until one backs up (see
+    /// [`crate::endpoint::PRIORITY_QUEUE_HIGH_WATER`]).
+    pub fn with_policy(
+        links: Vec<Arc<dyn Outbound>>,
+        merge_target: TargetAddr,
+        policy: mt_net::MergePolicy,
+    ) -> Arc<Self> {
         // Bond id: time+pid hash — unique across reconnects (the daemon
         // groups carriers by it; a reconnect must form a NEW bond).
         let bond_id = {
@@ -68,7 +83,8 @@ impl BondOutbound {
                 .wrapping_add(pid.rotate_left(32));
             (h >> 32) as u32 ^ (h as u32)
         };
-        let endpoint = Endpoint::client(bond_id, links.clone(), merge_target.clone());
+        let endpoint =
+            Endpoint::client_with_policy(bond_id, links.clone(), merge_target.clone(), policy);
         Arc::new(Self {
             endpoint,
             links,

@@ -294,6 +294,10 @@ pub enum Message {
     AdapterToggled(usize),
     /// D20: an adapter's per-interface graph expanded/collapsed.
     AdapterExpanded(usize),
+    /// S11: move a SELECTED adapter row within the priority order
+    /// (index into `adapters`, delta −1/±1; ignored at the block edges
+    /// and for unselected rows).
+    AdapterMoved(usize, i32),
     /// Push the drafted selection to the service.
     AdaptersApply,
     /// set_bonded_adapters finished.
@@ -324,8 +328,15 @@ pub enum Message {
 pub const RULE_KINDS: [&str; 4] = ["domainSuffix", "domainKeyword", "ipCidr", "any"];
 /// Valid routing rule actions (matches the mt-net router actions).
 pub const RULE_ACTIONS: [&str; 3] = ["proxy", "direct", "reject"];
-/// Valid merge policies (matches the mt-net aggregator).
-pub const MERGE_POLICIES: [&str; 3] = ["failover", "round-robin", "lowest-latency"];
+/// Valid merge policies (matches the mt-net aggregator + the real
+/// service's parser; the first entry is the stock default).
+pub const MERGE_POLICIES: [&str; 5] = [
+    "balanced",
+    "round-robin",
+    "priority",
+    "failover",
+    "lowest-latency",
+];
 /// Valid bond modes (S9): whole-connection spreading vs stream bonding.
 pub const BOND_MODES: [&str; 2] = ["per-connection", "stream"];
 /// Valid log levels (engine + service).
@@ -949,6 +960,12 @@ impl App {
                 self.settings = s.clone();
                 self.seed_text = s.theme_seed.to_string();
                 self.theme.rederive(s.theme_seed, s.dark_mode);
+                // S11: the saved bonded order may have arrived after the
+                // adapter rows (the init batch is concurrent) — re-sort
+                // UNLESS a draft is in progress (never reshuffle edits).
+                if !self.adapters_dirty() && !self.adapters.is_empty() {
+                    sort_adapter_rows(&mut self.adapters, &s.bonded_adapters);
+                }
             }
             Message::SeedSwatch(seed) => {
                 self.settings.theme_seed = seed;
@@ -999,7 +1016,9 @@ impl App {
                 // selection (an unsaved draft is discarded — same contract
                 // as the Routing screen's reload). Expansion state follows
                 // the rows (a vanished adapter's graph goes with it).
-                self.adapters = views
+                // S11: rows land in PRIORITY order — selected adapters
+                // first, in the saved bonded-adapter order, then the rest.
+                let mut rows: Vec<AdapterRow> = views
                     .into_iter()
                     .map(|view| AdapterRow {
                         selected: view.selected,
@@ -1007,10 +1026,19 @@ impl App {
                         view,
                     })
                     .collect();
+                sort_adapter_rows(&mut rows, &self.settings.bonded_adapters);
+                self.adapters = rows;
             }
             Message::AdapterToggled(idx) => {
-                if let Some(row) = self.adapters.get_mut(idx) {
+                // S11 invariant: the list always reads selected-block-first
+                // (the block IS the priority order). Ticking ON appends at
+                // the END of the block (new adapter = lowest priority);
+                // ticking OFF drops it to the head of the unselected rest.
+                if idx < self.adapters.len() {
+                    let mut row = self.adapters.remove(idx);
                     row.selected = !row.selected;
+                    let insert_at = self.adapters.iter().filter(|r| r.selected).count();
+                    self.adapters.insert(insert_at, row);
                 }
                 self.adapters_status = None;
             }
@@ -1018,6 +1046,29 @@ impl App {
                 if let Some(row) = self.adapters.get_mut(idx) {
                     row.expanded = !row.expanded;
                 }
+            }
+            Message::AdapterMoved(idx, delta) => {
+                // Swap with the previous/next SELECTED row — moving is a
+                // priority-order operation, so unselected rows in between
+                // are skipped, not displaced.
+                let Some(row) = self.adapters.get(idx) else {
+                    return iced::Task::none();
+                };
+                if !row.selected {
+                    return iced::Task::none();
+                }
+                if delta < 0 {
+                    if let Some(prev) = self.adapters[..idx].iter().rposition(|r| r.selected) {
+                        self.adapters.swap(idx, prev);
+                    }
+                } else if let Some(next) = self.adapters[idx + 1..]
+                    .iter()
+                    .position(|r| r.selected)
+                    .map(|i| i + idx + 1)
+                {
+                    self.adapters.swap(idx, next);
+                }
+                self.adapters_status = None;
             }
             Message::AdaptersApply => {
                 let svc = Arc::clone(&self.service);
@@ -1042,21 +1093,27 @@ impl App {
                                 .to_string()
                         } else {
                             format!(
-                                "applied — bonding across {n} adapter(s); a live session was restarted"
+                                "applied — bonding across {n} adapter(s) in this priority \
+                                 order; a live session was restarted"
                             )
                         });
                     }
                     Err(e) => self.adapters_status = Some(format!("apply failed: {e}")),
                 }
-                // Re-sync rows (the service re-derived `selected`);
-                // also refresh status so the link list reflects the new
-                // link set after the reconnect.
-                return self.load_adapters().chain(self.refresh_status());
+                // Re-sync: SETTINGS first (the saved bonded order is the
+                // sort key), then the rows (the service re-derived
+                // `selected`), then status so the link list reflects the
+                // new link set after the reconnect.
+                return self
+                    .load_settings()
+                    .chain(self.load_adapters())
+                    .chain(self.refresh_status());
             }
             Message::AdaptersReverted => {
                 for row in &mut self.adapters {
                     row.selected = row.view.selected;
                 }
+                sort_adapter_rows(&mut self.adapters, &self.settings.bonded_adapters);
                 self.adapters_status = None;
             }
             Message::AdaptersRefresh => {
@@ -1204,6 +1261,38 @@ impl App {
             Some(ServiceState::Connected)
         )
     }
+
+    /// S11: is the Adapters draft different from what is persisted?
+    /// Dirty = the selected SET differs OR the selected ORDER differs
+    /// from `settings.bonded_adapters` (restricted to adapters present in
+    /// the current enumeration — a vanished id cannot be re-ordered).
+    pub fn adapters_dirty(&self) -> bool {
+        let draft: Vec<String> = self
+            .adapters
+            .iter()
+            .filter(|r| r.selected)
+            .map(|r| r.view.id.clone())
+            .collect();
+        let saved: Vec<String> = self
+            .settings
+            .bonded_adapters
+            .iter()
+            .filter(|id| self.adapters.iter().any(|r| &r.view.id == *id))
+            .cloned()
+            .collect();
+        draft != saved
+    }
+
+    /// S11: the priority position (1-based) of adapter `id` in the SAVED
+    /// bonded order — `None` when the adapter is not bonded. Drives the
+    /// position chips on the Adapters and Status screens.
+    pub fn priority_position_of(&self, id: &str) -> Option<usize> {
+        self.settings
+            .bonded_adapters
+            .iter()
+            .position(|saved| saved == id)
+            .map(|p| p + 1)
+    }
 }
 
 /// Stable subscription ids (iced deduplicates by id per render).
@@ -1246,6 +1335,28 @@ pub fn link_matches_adapter(link_name: &str, adapter_name: &str) -> bool {
         return false;
     }
     bracketed == adapter_name || bracketed.starts_with(&format!("{adapter_name} #"))
+}
+
+/// S11: sort adapter rows into DISPLAY order — SELECTED rows first, in
+/// the saved bonded-adapter (priority) order, then the unselected rows in
+/// enumeration order. Pure + stable (unselected rows keep their relative
+/// order; a selected id missing from `saved_order` — a fresh draft tick —
+/// sorts last within the selected block, matching the toggle's
+/// append-at-end invariant).
+pub fn sort_adapter_rows(rows: &mut [AdapterRow], saved_order: &[String]) {
+    rows.sort_by_key(|row| {
+        if row.selected {
+            (
+                0,
+                saved_order
+                    .iter()
+                    .position(|id| id == &row.view.id)
+                    .unwrap_or(usize::MAX),
+            )
+        } else {
+            (1, 0)
+        }
+    });
 }
 
 /// Launches the GUI with the given service backend (the root crate calls
@@ -1515,52 +1626,126 @@ mod tests {
         assert!(app.status.is_some());
     }
 
-    /// Adapters screen flow (S7): toggle → apply → rows re-sync to the
-    /// persisted selection; revert drops a dirty draft; refresh reloads.
+    /// Adapters screen flow (S7 + S11): toggle → priority REORDER → apply
+    /// → rows re-sync to the persisted selection AND order; revert drops a
+    /// dirty draft (selection and order).
     #[cfg(feature = "mock")]
     #[tokio::test]
-    async fn adapters_screen_toggle_apply_revert() {
+    async fn adapters_screen_toggle_move_apply_revert() {
         let service = Arc::new(crate::mock::MockService::new());
         let mut app = App::init_async(service, Flags::default()).await;
 
-        // Seed (D22): mock-wifi AND mock-ethernet bonded (the demo setup),
-        // cellular not.
+        // Seed (D23): all THREE adapters bonded, saved order
+        // wifi → ethernet → cellular (the mock demo setup).
         assert_eq!(app.adapters.len(), 3);
-        assert!(app.adapters[0].selected);
-        assert!(app.adapters[1].selected);
+        let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        assert_eq!(ids, vec!["mock-wifi", "mock-ethernet", "mock-cellular"]);
+        assert!(app.adapters.iter().all(|r| r.selected));
+        assert!(!app.adapters_dirty(), "fresh load matches the saved order");
+        assert_eq!(app.priority_position_of("mock-ethernet"), Some(2));
+        assert_eq!(app.priority_position_of("mock-cellular"), Some(3));
+        assert_eq!(app.priority_position_of("nope"), None);
+
+        // Untick cellular (draft dirty, not persisted): it drops out of the
+        // selected block but keeps its row position here (it was last).
+        drop(app.update(Message::AdapterToggled(2)));
         assert!(!app.adapters[2].selected);
+        assert!(app.adapters[2].view.selected, "draft only — not applied");
+        assert!(app.adapters_dirty());
 
-        // Toggle ethernet off (draft dirty, not persisted).
+        // Re-tick cellular: it must APPEND at the END of the selected
+        // block (a re-admitted adapter gets the lowest priority).
+        drop(app.update(Message::AdapterToggled(2)));
+        assert!(app.adapters[2].selected);
+        assert!(!app.adapters_dirty(), "back to the saved set and order");
+
+        // Untick ethernet: its row leaves the block (index moves!).
         drop(app.update(Message::AdapterToggled(1)));
-        assert!(!app.adapters[1].selected);
-        assert!(app.adapters[1].view.selected, "draft only — not applied");
+        let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["mock-wifi", "mock-cellular", "mock-ethernet"],
+            "unselected row sinks below the selected block"
+        );
+        // Re-tick ethernet (now index 2): appends at the END of the block.
+        drop(app.update(Message::AdapterToggled(2)));
+        let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["mock-wifi", "mock-cellular", "mock-ethernet"],
+            "re-ticked adapter lands at the lowest priority"
+        );
+        assert!(app.adapters_dirty(), "order differs from the saved one");
 
-        // Apply persists the narrower bond (service call directly — the
+        // REORDER: move Wi-Fi (index 0) DOWN — swaps with cellular.
+        drop(app.update(Message::AdapterMoved(0, 1)));
+        let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        assert_eq!(ids, vec!["mock-cellular", "mock-wifi", "mock-ethernet"]);
+        // Edge moves are no-ops (Wi-Fi is at the top of the block).
+        drop(app.update(Message::AdapterMoved(0, -1)));
+        let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        assert_eq!(ids, vec!["mock-cellular", "mock-wifi", "mock-ethernet"]);
+
+        // Apply persists the new order (service call directly — the
         // established test idiom; the update task only wraps it in
-        // Task::perform).
-        let ids = ["mock-wifi"].iter().map(|s| s.to_string()).collect();
-        app.service.set_bonded_adapters(ids).await.expect("apply");
+        // Task::perform). The saved-handler chains settings + adapters +
+        // status reloads; drive those service calls and feed the results
+        // back in the same order.
+        let draft: Vec<String> = app.adapters.iter().map(|r| r.view.id.clone()).collect();
+        app.service.set_bonded_adapters(draft).await.expect("apply");
         drop(app.update(Message::AdaptersSaved(Ok(()))));
-        // The saved-handler chains a reload; drive the service call the
-        // handler would perform and feed the result back.
+        let settings = app.service.settings().await;
+        drop(app.update(Message::SettingsLoaded(settings)));
         let views = app.service.adapters().await;
         drop(app.update(Message::AdaptersLoaded(views)));
-        assert!(app.adapters[0].selected);
-        assert!(!app.adapters[1].selected);
-        assert!(!app.adapters[1].view.selected, "applied selection visible");
-        assert!(
-            app.adapters_status
-                .as_deref()
-                .unwrap_or("")
-                .contains("bonding across 1"),
-            "status line reports the applied selection"
+        let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["mock-cellular", "mock-wifi", "mock-ethernet"],
+            "applied order survives the reload"
         );
+        assert!(!app.adapters_dirty());
+        assert_eq!(app.priority_position_of("mock-cellular"), Some(1));
+        assert!(app
+            .adapters_status
+            .as_deref()
+            .unwrap_or("")
+            .contains("priority"));
 
-        // Revert drops an unsaved draft.
-        drop(app.update(Message::AdapterToggled(0)));
-        drop(app.update(Message::AdapterToggled(2)));
+        // Revert drops an unsaved draft (selection AND order).
+        drop(app.update(Message::AdapterToggled(2))); // untick ethernet
+        drop(app.update(Message::AdapterMoved(0, 1))); // cellular below wifi
         drop(app.update(Message::AdaptersReverted));
-        assert!(app.adapters[0].selected && !app.adapters[2].selected);
+        let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["mock-cellular", "mock-wifi", "mock-ethernet"],
+            "revert restores the saved selection and order"
+        );
+        assert!(app.adapters.iter().all(|r| r.selected));
+    }
+
+    /// S11: `sort_adapter_rows` (the load/revert ordering primitive).
+    #[cfg(feature = "mock")]
+    #[test]
+    fn sort_adapter_rows_selected_first_in_saved_order() {
+        let views = crate::mock::seed_adapters_public();
+        let saved = vec!["mock-cellular".to_string(), "mock-wifi".to_string()];
+        let mut rows: Vec<AdapterRow> = views
+            .into_iter()
+            .map(|view| AdapterRow {
+                selected: saved.contains(&view.id),
+                expanded: false,
+                view,
+            })
+            .collect();
+        sort_adapter_rows(&mut rows, &saved);
+        let ids: Vec<&str> = rows.iter().map(|r| r.view.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["mock-cellular", "mock-wifi", "mock-ethernet"],
+            "selected block first in SAVED order, rest in enumeration order"
+        );
     }
 
     /// Live re-theme: dispatching settings messages re-derives the theme.

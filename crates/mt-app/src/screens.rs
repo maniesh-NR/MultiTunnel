@@ -537,6 +537,15 @@ fn status_adapter_row<'a>(app: &'a App, i: usize, r: &'a crate::app::AdapterRow)
     } else {
         chip("down", app, s.error_container, s.on_error_container)
     });
+    // S11: the adapter's saved priority position (bonded adapters only).
+    if let Some(p) = app.priority_position_of(&v.id) {
+        line = line.push(chip(
+            format!("#{p}"),
+            app,
+            s.primary_container,
+            s.on_primary_container,
+        ));
+    }
     if !r.selected {
         line = line.push(chip(
             "not bonded",
@@ -1005,8 +1014,9 @@ pub fn adapters(app: &App) -> Element<'_> {
     let s = app.theme.scheme;
     let ts = app.theme.ts;
 
-    let dirty = app.adapters.iter().any(|r| r.selected != r.view.selected);
+    let dirty = app.adapters_dirty();
     let selected = app.adapters.iter().filter(|r| r.selected).count();
+    let priority_mode = app.settings.merge_policy == "priority";
 
     let toolbar = row![
         m3_button(
@@ -1036,7 +1046,12 @@ pub fn adapters(app: &App) -> Element<'_> {
                 .size(ts.body_s.size)
                 .color(s.on_surface_variant),
             None => text(format!(
-                "{selected} selected — one engine per adapter, spread by merge policy"
+                "{selected} bonded — order below = adapter priority{}",
+                if priority_mode {
+                    " (priority policy: fills #1 until saturated, then #2…)"
+                } else {
+                    " (used by the 'priority' policy)"
+                }
             ))
             .size(ts.body_s.size)
             .color(s.on_surface_variant),
@@ -1050,14 +1065,15 @@ pub fn adapters(app: &App) -> Element<'_> {
             .size(ts.title_m.size)
             .color(s.on_surface),
         text(
-            "Check the network adapters the tunnel should bond across. Each checked \
-             adapter gets its own engine bound to that adapter (sendThrough). New \
-             connections spread round-robin across them (Settings → merge policy); \
-             bonding mode \"stream\" (Settings → Advanced) splits every connection's \
-             BYTES across them and needs mt-merge-server on the tunnel server. \
-             Expand a row (▸, or press the adapter's name on the Status tab) \
-             for that adapter's live traffic graph. No selection \
-             = a single link and Windows picks the route.",
+            "Check the network adapters the tunnel should bond across — each \
+             checked adapter gets its own engine bound to that NIC \
+             (sendThrough). The ORDER of the checked rows is the ADAPTER \
+             PRIORITY: with the \"priority\" merge policy (Settings) traffic \
+             fills adapter #1 until its bandwidth is saturated, then the \
+             overflow goes to #2, then #3 — reorder with ↑/↓. Other policies \
+             ignore the order. Expand a row (▸, or press the adapter's name \
+             on the Status tab) for that adapter's live traffic graph. No \
+             selection = a single link and Windows picks the route.",
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant),
@@ -1072,9 +1088,18 @@ pub fn adapters(app: &App) -> Element<'_> {
                 .color(s.on_surface_variant),
         );
     }
+    // S11: position within the selected block (1-based) — the draft's
+    // priority order, i.e. exactly what Apply will persist.
+    let mut running_pos = 0usize;
     for (i, r) in app.adapters.iter().enumerate() {
         let v = &r.view;
         let arrow = if r.expanded { "▾" } else { "▸" };
+        let pos = if r.selected {
+            running_pos += 1;
+            Some(running_pos)
+        } else {
+            None
+        };
         let mut line = row![
             // D20: expand/collapse the per-interface graph (a plain text
             // button — no icon font in the zero-dep build).
@@ -1090,6 +1115,16 @@ pub fn adapters(app: &App) -> Element<'_> {
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center);
+
+        // S11: priority position chip on every bonded row.
+        if let Some(p) = pos {
+            line = line.push(chip(
+                format!("#{p}"),
+                app,
+                s.primary_container,
+                s.on_primary_container,
+            ));
+        }
 
         if !v.description.is_empty() {
             line = line.push(
@@ -1121,6 +1156,22 @@ pub fn adapters(app: &App) -> Element<'_> {
         } else {
             chip("down", app, s.error_container, s.on_error_container)
         });
+        // S11: reorder buttons — swap with the previous/next SELECTED row
+        // (disabled at the block edges; unselected rows carry no order).
+        let can_up = pos.is_some_and(|p| p > 1);
+        let can_down = pos.is_some() && app.adapters[i + 1..].iter().any(|r| r.selected);
+        line = line.push(
+            button(text("↑").size(ts.body_m.size))
+                .padding(Padding::new(2.0).left(6.0).right(6.0))
+                .style(t3::text_button(s))
+                .on_press_maybe(can_up.then_some(Message::AdapterMoved(i, -1))),
+        );
+        line = line.push(
+            button(text("↓").size(ts.body_m.size))
+                .padding(Padding::new(2.0).left(6.0).right(6.0))
+                .style(t3::text_button(s))
+                .on_press_maybe(can_down.then_some(Message::AdapterMoved(i, 1))),
+        );
 
         // D20: the adapter row + its expandable per-interface graph live in
         // ONE card so the graph reads as part of the row.
@@ -1147,14 +1198,22 @@ pub fn adapters(app: &App) -> Element<'_> {
             }
             .mini(110.0);
             let hint = if !app.is_connected() {
-                "connect to see this adapter's tunnel traffic"
+                "connect to see this adapter's tunnel traffic".to_string()
             } else if !r.selected {
-                "not bonded — tick the adapter to route tunnel traffic through it"
-            } else if !carries_traffic {
-                "bonded but idle — no tunnel bytes in the last 2 minutes"
+                "not bonded — tick the adapter to route tunnel traffic through it".to_string()
             } else {
-                "tunnel traffic through this adapter (↓ down / ↑ up, same colors \
-                 as the Status graph)"
+                let prio = match app.priority_position_of(&v.id) {
+                    Some(p) => format!("priority #{p}"),
+                    None => "bonded".to_string(),
+                };
+                if !carries_traffic {
+                    format!("{prio} — no tunnel bytes in the last 2 minutes")
+                } else {
+                    format!(
+                        "{prio} — tunnel traffic through this adapter \
+                         (↓ down / ↑ up, same colors as the Status graph)"
+                    )
+                }
             };
             card_col = card_col.push(
                 container(mini)
@@ -1266,14 +1325,18 @@ pub fn settings(app: &App) -> Element<'_> {
         .spacing(10)
         .align_y(iced::Alignment::Center),
         text(
-            "round-robin (default): new connections alternate across every ticked \
-             adapter — both NICs carry traffic. failover: everything rides the \
-             first healthy adapter (the second stays idle until it dies). \
-             lowest-latency: each connection picks the adapter with the best \
-             smoothed (EWMA) RTT — the faster link naturally takes more \
-             connections than a blind alternation. To use BOTH adapters for a \
-             SINGLE connection at the same time, set bonding mode \"stream\" \
-             in Advanced.",
+            "balanced (default): every new connection goes to the adapter \
+             carrying the least traffic RIGHT NOW — a fat download stops \
+             hogging one NIC and the spread evens out by BYTES. round-robin: \
+             strict turn-taking per connection (even by connection count, \
+             not by bytes). priority: adapters fill in the Adapters-tab \
+             order — #1 takes everything until its bandwidth saturates, \
+             then the overflow spills to #2, and so on. failover: everything \
+             rides the first healthy adapter (spares stay idle). \
+             lowest-latency: each connection picks the adapter with the \
+             best smoothed (EWMA) RTT. In stream bonding mode (Advanced) \
+             the policy also spreads every connection's BYTES across the \
+             bonded adapters.",
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant),
@@ -1346,9 +1409,12 @@ pub fn settings(app: &App) -> Element<'_> {
              connections are spread by the merge policy. stream: the BYTES of \
              every connection are split across ALL ticked adapters at once and \
              re-merged by mt-merge-server on the tunnel server — one download \
-             uses both NICs simultaneously; needs the merge daemon (setup \
-             script in the release zip, port below) and falls back to \
-             per-connection with a log line when it is unreachable.",
+             uses every NIC simultaneously. In stream mode the merge policy \
+             drives the frame scheduler too: balanced spreads frames by live \
+             adapter backpressure (fast NICs take more), priority fills the \
+             Adapters-tab order. Needs the merge daemon (setup script in the \
+             release zip, port below); falls back to per-connection with a \
+             log line when it is unreachable.",
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant),

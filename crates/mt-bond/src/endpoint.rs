@@ -128,6 +128,11 @@ struct Carrier {
     bytes_down: AtomicU64,
     /// Millis of the last frame received on this carrier (liveness).
     last_rx_ms: AtomicU64,
+    /// S11: bytes handed to the writer channel but not yet flushed to the
+    /// socket — the carrier's live BACKPRESSURE. `send_bytes` increments,
+    /// the writer task decrements after each socket write. A carrier whose
+    /// socket keeps up hovers near zero; a bottlenecked one grows.
+    queued: AtomicU64,
 }
 
 impl Carrier {
@@ -141,11 +146,95 @@ impl Carrier {
             bytes_up: AtomicU64::new(0),
             bytes_down: AtomicU64::new(0),
             last_rx_ms: AtomicU64::new(now_millis()),
+            queued: AtomicU64::new(0),
         })
     }
 
     fn alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// S11 carrier scheduling (pure)
+// ---------------------------------------------------------------------------
+
+/// Scheduler snapshot of one LIVE carrier (the pure picker's input).
+#[derive(Debug, Clone, Copy)]
+struct CarrierSlot {
+    /// Carrier slot index == link index == the user's adapter priority
+    /// order (links are built one per bonded adapter, in settings order).
+    idx: usize,
+    /// Bytes queued for the socket writer (the live backpressure).
+    queued: u64,
+    /// Last PING round trip in ms (0 = no sample yet).
+    rtt_ms: u32,
+}
+
+/// A carrier whose writer queue exceeds this many BYTES counts as
+/// SATURATED for the `Priority` policy — its socket provably cannot keep
+/// up with the offered rate. 512 KiB ≈ 8 max-size frames: a healthy
+/// carrier hovers near zero, a bottlenecked one grows without bound, so
+/// the spill decision lands within a fraction of a second at any real
+/// rate difference.
+pub const PRIORITY_QUEUE_HIGH_WATER: u64 = 512 * 1024;
+
+/// Pure carrier pick (the D17 round-robin, made policy-aware in S11).
+/// Returns the SLOT INDEX to send the next frame on:
+/// - `Failover`       — first live carrier (idx order).
+/// - `RoundRobin`     — rotate over live carriers (cursor).
+/// - `LowestLatency`  — best sampled RTT (known beats unknown, ties keep
+///   the earlier carrier).
+/// - `Balanced`       — least queued bytes; ties rotate via the cursor.
+///   A fast adapter drains its queue quicker and naturally takes more
+///   frames — capacity-proportional even spreading.
+/// - `Priority`       — first carrier in USER ORDER whose queue is under
+///   [`PRIORITY_QUEUE_HIGH_WATER`]; when every carrier backs up, the
+///   least-queued one takes the excess.
+fn pick_carrier_index(
+    policy: mt_net::MergePolicy,
+    slots: &[CarrierSlot],
+    cursor: &mut u64,
+) -> Option<usize> {
+    if slots.is_empty() {
+        return None;
+    }
+    match policy {
+        mt_net::MergePolicy::Failover => Some(slots[0].idx),
+        mt_net::MergePolicy::RoundRobin => {
+            let s = slots[(*cursor % slots.len() as u64) as usize];
+            *cursor = cursor.wrapping_add(1);
+            Some(s.idx)
+        }
+        mt_net::MergePolicy::LowestLatency => {
+            let mut best = 0;
+            for i in 1..slots.len() {
+                let (b, c) = (slots[best], slots[i]);
+                let b_known = b.rtt_ms > 0;
+                let c_known = c.rtt_ms > 0;
+                if (c_known && !b_known) || (c_known == b_known && c.rtt_ms < b.rtt_ms) {
+                    best = i;
+                }
+            }
+            Some(slots[best].idx)
+        }
+        mt_net::MergePolicy::Balanced => {
+            let min = slots.iter().map(|s| s.queued).min().expect("non-empty");
+            let tied: Vec<usize> = (0..slots.len())
+                .filter(|&i| slots[i].queued == min)
+                .collect();
+            let pick = tied[(*cursor % tied.len() as u64) as usize];
+            *cursor = cursor.wrapping_add(1);
+            Some(slots[pick].idx)
+        }
+        mt_net::MergePolicy::Priority => {
+            for s in slots {
+                if s.queued < PRIORITY_QUEUE_HIGH_WATER {
+                    return Some(s.idx);
+                }
+            }
+            slots.iter().min_by_key(|s| s.queued).map(|s| s.idx) // every carrier backs up → least queued
+        }
     }
 }
 
@@ -221,6 +310,10 @@ pub(crate) struct Endpoint {
     pub is_server: bool,
     carriers: RwLock<Vec<Arc<Carrier>>>,
     rr: AtomicU64,
+    /// S11: how `pick_carrier` spreads frames across live carriers (the
+    /// user's merge policy, mapped onto carrier scheduling; the daemon
+    /// side keeps plain round-robin).
+    carrier_policy: mt_net::MergePolicy,
     sessions: Mutex<HashMap<u32, Arc<Session>>>,
     /// Monotonic LOCAL session id (client side; starts at 1).
     next_session_id: AtomicU32,
@@ -239,11 +332,15 @@ pub(crate) struct Endpoint {
 }
 
 impl Endpoint {
-    /// Client-side endpoint (carriers dialed through `links`).
-    pub fn client(
+    /// Client-side endpoint with the carrier-scheduling policy (S11: the
+    /// GUI's merge policy rides the bond — `Balanced` spreads frames by
+    /// live writer backpressure, `Priority` fills carriers in user order
+    /// until one backs up; `RoundRobin` is the stock behavior).
+    pub fn client_with_policy(
         bond_id: u32,
         links: Vec<Arc<dyn Outbound>>,
         merge_target: mt_net::TargetAddr,
+        carrier_policy: mt_net::MergePolicy,
     ) -> Arc<Self> {
         let (shutdown, _) = watch::channel(false);
         let (death_tx, death_rx) = mpsc::unbounded_channel();
@@ -252,6 +349,7 @@ impl Endpoint {
             is_server: false,
             carriers: RwLock::new(Vec::new()),
             rr: AtomicU64::new(0),
+            carrier_policy,
             sessions: Mutex::new(HashMap::new()),
             next_session_id: AtomicU32::new(1),
             new_session_tx: Mutex::new(None),
@@ -264,7 +362,9 @@ impl Endpoint {
         })
     }
 
-    /// Server-side endpoint (carriers are accepted connections).
+    /// Server-side endpoint (carriers are accepted connections; the
+    /// daemon keeps plain round-robin — the user's priority order is a
+    /// CLIENT-side concern).
     pub fn server(bond_id: u32) -> Arc<Self> {
         let (shutdown, _) = watch::channel(false);
         let (death_tx, death_rx) = mpsc::unbounded_channel();
@@ -273,6 +373,7 @@ impl Endpoint {
             is_server: true,
             carriers: RwLock::new(Vec::new()),
             rr: AtomicU64::new(0),
+            carrier_policy: mt_net::MergePolicy::RoundRobin,
             sessions: Mutex::new(HashMap::new()),
             next_session_id: AtomicU32::new(1),
             new_session_tx: Mutex::new(None),
@@ -395,13 +496,20 @@ impl Endpoint {
                 }
                 item = rx.recv() => {
                     let Some(bytes) = item else { break };
-                    if let Err(e) = w.write_all(&bytes).await {
+                    let flushed = w.write_all(&bytes).await;
+                    // S11: the bytes left the writer queue either way
+                    // (a failed write kills the carrier — a fresh Carrier
+                    // with a zeroed counter replaces it on respawn).
+                    if let Some(c) = self.carrier_of(idx) {
+                        c.queued.fetch_sub(bytes.len() as u64, Ordering::Relaxed);
+                        if flushed.is_ok() {
+                            c.bytes_up.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                        }
+                    }
+                    if let Err(e) = flushed {
                         tracing::debug!(carrier = idx, error = %e, "bond carrier write failed");
                         let _ = self.death_tx.send((idx, "write failed"));
                         break;
-                    }
-                    if let Some(c) = self.carrier_of(idx) {
-                        c.bytes_up.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                     }
                 }
             }
@@ -728,16 +836,34 @@ impl Endpoint {
         let _ = self.schedule_bytes(close).await;
     }
 
-    /// Pick a live carrier (round-robin over the live set, D17 §4).
+    /// Pick a live carrier under the endpoint's scheduling policy (S11:
+    /// the D17 round-robin became policy-aware — see [`pick_carrier_index`]).
     fn pick_carrier(&self) -> Option<(usize, Arc<Carrier>)> {
         let cs = self.carriers.read().expect("carrier lock");
-        let live: Vec<&Arc<Carrier>> = cs.iter().filter(|c| c.alive()).collect();
-        if live.is_empty() {
-            return None;
-        }
-        let n = self.rr.fetch_add(1, Ordering::Relaxed);
-        let c = live[(n % live.len() as u64) as usize];
-        Some((c.idx, Arc::clone(c)))
+        let slots: Vec<CarrierSlot> = cs
+            .iter()
+            .filter(|c| c.alive())
+            .map(|c| CarrierSlot {
+                idx: c.idx,
+                queued: c.queued.load(Ordering::Relaxed),
+                rtt_ms: c.rtt_ms.load(Ordering::Relaxed),
+            })
+            .collect();
+        drop(cs);
+        // Best-effort fairness cursor: concurrent senders may lose a
+        // tie-rotation increment (both pick the same carrier — harmless,
+        // one extra frame there); correctness never depends on it.
+        let mut cursor = self.rr.load(Ordering::Relaxed);
+        let idx = pick_carrier_index(self.carrier_policy, &slots, &mut cursor)?;
+        self.rr.store(cursor, Ordering::Relaxed);
+        let carrier = self
+            .carriers
+            .read()
+            .expect("carrier lock")
+            .get(idx)
+            .cloned()
+            .filter(|c| c.alive())?;
+        Some((idx, carrier))
     }
 
     /// Queue encoded bytes on a specific carrier.
@@ -750,11 +876,24 @@ impl Endpoint {
             .cloned()
             .filter(|c| c.alive())
             .ok_or_else(|| anyhow::anyhow!("carrier {carrier_idx} not alive"))?;
+        // S11: count the bytes as queued BEFORE the send (backpressure
+        // accounting for the Balanced / Priority picks).
         carrier
+            .queued
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        if carrier
             .tx
             .send(bytes)
             .await
-            .map_err(|_| anyhow::anyhow!("carrier {carrier_idx} writer gone"))?;
+            .map_err(|_| anyhow::anyhow!("carrier {carrier_idx} writer gone"))
+            .is_err()
+        {
+            // The writer is gone: the queue will never drain. Reset so a
+            // respawned carrier (or this dead one, briefly) does not read
+            // as eternally backlogged.
+            carrier.queued.store(0, Ordering::Relaxed);
+            return Err(anyhow::anyhow!("carrier {carrier_idx} writer gone"));
+        }
         Ok(())
     }
 
@@ -1017,5 +1156,114 @@ impl Endpoint {
     /// once; the pump consumes it).
     pub(crate) fn take_inbound(&self, id: u32) -> Option<mpsc::UnboundedReceiver<Inbound>> {
         self.session_of(id).and_then(|s| lock(&s.inbound_rx).take())
+    }
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+
+    fn slot(idx: usize, queued: u64, rtt_ms: u32) -> CarrierSlot {
+        CarrierSlot {
+            idx,
+            queued,
+            rtt_ms,
+        }
+    }
+
+    fn pick1(policy: mt_net::MergePolicy, slots: &[CarrierSlot]) -> Option<usize> {
+        let mut cursor = 0u64;
+        pick_carrier_index(policy, slots, &mut cursor)
+    }
+
+    #[test]
+    fn failover_takes_the_first_live_carrier() {
+        let slots = [slot(0, 900_000, 0), slot(1, 0, 0), slot(2, 0, 0)];
+        assert_eq!(pick1(mt_net::MergePolicy::Failover, &slots), Some(0));
+        assert_eq!(pick1(mt_net::MergePolicy::Failover, &[]), None);
+    }
+
+    #[test]
+    fn round_robin_cycles_the_cursor() {
+        let slots = [slot(0, 0, 0), slot(1, 0, 0), slot(2, 0, 0)];
+        let mut cursor = 0u64;
+        let seq: Vec<usize> = (0..4)
+            .map(|_| {
+                pick_carrier_index(mt_net::MergePolicy::RoundRobin, &slots, &mut cursor).unwrap()
+            })
+            .collect();
+        assert_eq!(seq, vec![0, 1, 2, 0]);
+        assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn lowest_latency_prefers_sampled_rtt_then_known_over_unknown() {
+        // Fastest sampled carrier wins.
+        let slots = [slot(0, 0, 120), slot(1, 0, 0), slot(2, 0, 45)];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::LowestLatency, &slots),
+            Some(2),
+            "known 45 ms beats unknown and known 120 ms"
+        );
+        // A sample beats no sample (0 = not yet measured).
+        let unknowns = [slot(0, 0, 0), slot(1, 0, 300)];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::LowestLatency, &unknowns),
+            Some(1)
+        );
+        // All unknown → first.
+        let all_unknown = [slot(0, 0, 0), slot(1, 0, 0)];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::LowestLatency, &all_unknown),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn balanced_picks_the_least_backlogged_carrier() {
+        // The user's exact complaint shape: one adapter carries the fat
+        // flow (deep queue), the others are nearly drained.
+        let slots = [
+            slot(0, 800_000, 30),
+            slot(1, 120_000, 40),
+            slot(2, 5_000, 55),
+        ];
+        assert_eq!(pick1(mt_net::MergePolicy::Balanced, &slots), Some(2));
+    }
+
+    #[test]
+    fn balanced_ties_rotate() {
+        let slots = [slot(0, 0, 0), slot(1, 0, 0), slot(2, 0, 0)];
+        let mut cursor = 0u64;
+        let seq: Vec<usize> = (0..3)
+            .map(|_| {
+                pick_carrier_index(mt_net::MergePolicy::Balanced, &slots, &mut cursor).unwrap()
+            })
+            .collect();
+        assert_eq!(seq, vec![0, 1, 2], "equal queues rotate like round-robin");
+    }
+
+    #[test]
+    fn priority_fills_in_order_until_the_queue_backs_up() {
+        // Everything below the high-water mark rides carrier 0.
+        let healthy = [slot(0, 100_000, 30), slot(1, 0, 40), slot(2, 0, 55)];
+        assert_eq!(pick1(mt_net::MergePolicy::Priority, &healthy), Some(0));
+        // Carrier 0 backed up (≥ high water) → spill to carrier 1.
+        let c0_saturated = [
+            slot(0, PRIORITY_QUEUE_HIGH_WATER, 30),
+            slot(1, 200_000, 40),
+            slot(2, 0, 55),
+        ];
+        assert_eq!(pick1(mt_net::MergePolicy::Priority, &c0_saturated), Some(1));
+        // Everything backed up → the least-queued carrier takes the excess.
+        let all_saturated = [
+            slot(0, 2_000_000, 30),
+            slot(1, 700_000, 40),
+            slot(2, 1_500_000, 55),
+        ];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::Priority, &all_saturated),
+            Some(1)
+        );
     }
 }

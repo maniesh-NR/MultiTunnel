@@ -1,47 +1,43 @@
-# STATE — rewritten at the end of every stage. Last update: S10 (vendored iced rendering fixes + exclusions import, v0.6.0)
+# STATE — rewritten at the end of every stage. Last update: S11 (balanced+priority scheduling, adapter priority order, v0.7.0)
 
 ## Current position
-- Stage: S10 CLOSED — v0.6.0 on the first v0.5.1 field report: (a) graphs
-  "occasionally out of frame / don't load" and (b) the "Check exit IP"
-  non-total-comparator panic were BOTH root-caused in the terminal iced
-  0.13 releases and fixed as vendored patches (vendor/ +
-  [patch.crates-io]; DECISIONS D21): damage/clip coordinate spaces in
-  iced_tiny_skia, honest MEASURED canvas-text bounds (the INFINITY
-  markers produced the NaN damage rectangles), total_cmp in
-  iced_graphics::damage::group. Reproduced and verified end-to-end in a
-  new Xvfb+XTEST rig (scripts/gui_drive.py): series paint immediately
-  after connect (were blank until a resize), right-aligned labels stay
-  inside the card, the exit-IP click no longer panics.
-- Features: exclusions import (mt-service::parse_exclusion_list: plain
-  list + v2rayN routing JSON; Routing-tab import card feeding the DRAFT;
-  CLI `multitunnel routing list|import`). Two latent v0.5.x bugs fixed on
-  the way: rule-kind vocabulary was kebab in the GUI vs camelCase in the
-  backend (every real-backend Routing save failed, smoke tests blind —
-  MockService is permissive), and hyphenated merge-policy names never
-  parsed ("lowest-latency" silently meant round-robin).
+- Stage: S11 CLOSED — v0.7.0 on the user's v0.6.1 report "with 3+
+  adapters most traffic rides one adapter, the second less, the third
+  rarely any; want even spreading AND a fill-in-order mode with a
+  user-settable adapter order". Two new merge policies (DECISIONS D23):
+  `balanced` (new stock default — live byte-load spreading with a
+  per-connection reserve; kills the one-fat-flow-hogs-one-NIC shape) and
+  `priority` (user order, fill #1 until its measured bandwidth
+  saturates — a ramp/plateau detector, not a naive threshold — then
+  spill to #2…; recovers when load drops). Stream-bond frame scheduling
+  is policy-aware too (least writer backpressure / queue high-water).
+  The Adapters tab is the ordering UI (selected rows first with #n
+  chips + ↑/↓; the saved bonded_adapters ORDER is the priority).
 - Gates: fmt clean; clippy host + windows-gnu -D warnings clean;
-  371 tests / 0 failed (368 workspace + 3 vendored); zigbuild release
-  PE32+ x4; gui --smoke exit 0.
-- Protocol/daemon UNCHANGED from v0.5.0 (D17 framing intact; the VM's
-  mt-merge-server needs no upgrade).
+  396 workspace tests / 0 failed (+18 this stage); vendored iced 6/0;
+  gui --smoke exit 0; Xvfb rig pixel-verified the chips, the ↓ swap
+  (chip x-centers 283↔305), the 5-row policy menu and the Status chips.
+- Protocol/daemon UNCHANGED (D17 framing intact; the VM's
+  mt-merge-server needs no upgrade — the client's scheduler change is
+  local to the carrier pick).
 
 ## Next actions
-1. USER VERIFICATION of v0.6.0: graphs render without needing a resize;
-   "Check exit IP" is safe; Routing tab import works (plain .txt or
-   v2rayN JSON); Settings → Network → merge policy "lowest-latency" now
-   actually engages (check per-link spread on Status).
-2. Watch the v0.6.0 release run (tag push) — verify assets like v0.5.0/v0.5.1.
-3. Backlog unchanged: weighted carrier scheduling (D17 §4), subscription
-   auto-update, vmess validation, profiles.json locking, engine log
-   rotation, listener max_conns, upstream iced migration (re-base or
-   drop the vendor patches when moving past 0.13).
-4. S7 (native REALITY core) still parked.
+1. USER VERIFICATION of v0.7.0: Settings shows merge policy "balanced"
+   (upgraded files migrate from round-robin automatically); watch the
+   Status per-adapter graphs spread more evenly under load; pick
+   "priority" and reorder adapters on the Adapters tab (↑/↓) to fill
+   #1 first; in stream mode the policy drives frame spreading too.
+2. Watch the v0.7.0 release run (tag push) — verify assets like
+   v0.6.x. Local zip + linux daemon already staged in ../download/.
+3. Backlog: subscription auto-update, vmess validation, profiles.json
+   locking, engine log rotation, listener max_conns, upstream iced
+   migration, S7 native REALITY core (parked).
 
 ## Blockers / open items
 - None blocking. Watch item: disk headroom (release zigbuild needs ~5G;
-  /tmp/mt-target/debug was cleaned before the release build this stage).
-  After a sandbox recycle the whole toolchain needs reinstalling (recipe
-  below) — budget ~10 minutes.
+  /tmp/mt-target/debug was cleaned before the release build; the rig
+  rebuilds it). After a sandbox recycle the whole toolchain needs
+  reinstalling (recipe below) — budget ~10 minutes.
 
 ## Environment map (sandbox, rebuilt this stage)
 - Repo: /home/z/my-project/MultiTunnel — branch main, remote
@@ -54,32 +50,34 @@
      --component rustfmt,clippy`; `rustup target add
      x86_64-pc-windows-gnu`. (Rust 1.100.0.)
   2. zig: `pip3 install ziglang==0.14.1` (NETWORK install — the
-     ../tools/pypkgs EXTRACTION is INCOMPLETE: its ziglang/lib/ holds
-     only tsan/ubsan/zig.h, so the cached `zig` binary aborts with
-     "unable to find zig installation directory" on any real compile;
-     `python3 -m ziglang version` alone still works and LIES);
-     `cargo install cargo-zigbuild --locked`.
+     ../tools/pypkgs EXTRACTION is INCOMPLETE); `cargo install
+     cargo-zigbuild --locked`.
   3. Vendored-iced builds just work ([patch.crates-io] in the root
      Cargo.toml; vendor/ is committed).
 - Cross build: CARGO_TARGET_DIR=/tmp/mt-target cargo zigbuild --release
   --target x86_64-pc-windows-gnu --workspace (clean /tmp/mt-target/debug
-  first if disk-tight).
+  first if disk-tight). Zip manifest: multitunnel.exe,
+  multitunnel-tray.exe, config.example.json, LICENSE,
+  THIRD_PARTY_NOTICES.md, README.md, QUICKSTART.md.
 - GUI visual rig: python3 ../scripts/gui_drive.py --app
-  /tmp/mt-target/debug/mt-app --script "..." (verbs: wait|shot|click|
-  type|key|scroll|resize; scroll:X,Y[,up][,N] = XTEST wheel).
-  HiDPI repro: --env WINIT_X11_SCALE_FACTOR=1.5 + --size 2080x1750
-  (an sf=1.5 window defaults to 1536x1152 PHYSICAL — a smaller screen
-  clamps it and the Status graph card collapses to zero height).
-  sf=1.5 control coordinates (mock, resized 2000x1700): connect toggle
-  ≈(285,350), Check-exit-IP ≈(324,552), adapter name rows ≈(293,1333)+
-  — RE-DERIVE per run (scroll drift); pixel-scan the purple name text
-  (primary #6750A4-family bands) or the tonal button (232,222,248)
-  instead of trusting VLM coordinates. Needs: Xvfb (apt, preinstalled),
-  python-xlib (`pip3 install python-xlib`), ffmpeg (preinstalled), and
-  libxkbcommon-x11 + libxcb-xkb extracted into /tmp/xkblibs (Debian
-  debs, `apt-get download libxkbcommon-x11-0 libxcb-xkb1` +
-  `dpkg-deb -x`) with LD_LIBRARY_PATH — the driver wires all of this
-  itself. No WM runs under Xvfb: the driver calls SetInputFocus itself;
-  typed paths should be cwd-relative (XTEST Shift-layer chars are
-  unreliable). Verify claims with PIXEL scans — VLM coordinates are
-  approximate at best.
+  /tmp/mt-target/debug/mt-app --script "verb|verb|..." (verbs:
+  wait|shot|click|type|key|scroll|resize; script verbs are PIPE-separated,
+  scroll args comma-separated). Needs Xvfb (preinstalled), python-xlib
+  (`pip3 install python-xlib`), ffmpeg (preinstalled), libxkbcommon-x11 +
+  libxcb-xkb extracted into /tmp/xkblibs (Debian debs, `apt-get download
+  libxkbcommon-x11-0 libxcb-xkb1` + `dpkg-deb -x`) — the driver wires
+  LD_LIBRARY_PATH itself. No WM under Xvfb: the driver calls
+  SetInputFocus itself; typed paths should be cwd-relative.
+- RIG COORDINATES (mock, default 1280x720 window): rail buttons ≈
+  (58, 18+i·47) — Status 18, Servers 65, Adapters 112, Routing 159,
+  Settings 206, Logs 253. Adapters tab: row 1 chip ≈ y 254, ↑ ≈ (988,
+  254), ↓ ≈ (1015, 254) (rows every ~61px; the rightmost card edge is
+  ≈ x 1055; the "up" chip + its text sit at x 940-970). Settings: the
+  merge-policy pick_list ≈ (347, 359), menu rows ≈ every 33px below
+  y 376. The iced default window is 1280x720 — the Status adapters
+  section is below the fold at that height: `resize:1280x1150` (needs
+  --size ≥ that) makes the bottom card show; chip color for pixel
+  scans: primary container #EADDFF (234,221,255) tol 5, >40 px per
+  row band. RE-DERIVE per run (scroll drift); verify with PIXEL scans,
+  not VLM coordinates. A quick pixel-scan helper lives at
+  ../scripts/scan_priority_chips.py.

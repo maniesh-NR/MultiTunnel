@@ -54,6 +54,11 @@ pub trait Outbound: Send + Sync {
 }
 
 /// Aggregation policy for spreading new connections across links.
+///
+/// S11: `Balanced` (byte-load-aware spreading) and `Priority` (user
+/// priority order with saturation spill) join the original three. The
+/// per-connection picker consumes the live LOAD fields of
+/// [`LinkHealth`] (`rate_bps`, `active_conns`, `capacity_bps`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MergePolicy {
@@ -64,6 +69,15 @@ pub enum MergePolicy {
     RoundRobin,
     /// Prefer the link with the best (EWMA) latency.
     LowestLatency,
+    /// S11: spread by live BYTE LOAD — each new connection goes to the
+    /// link carrying the least traffic right now (rate + a per-connection
+    /// reservation), so fat flows stop skewing the spread.
+    Balanced,
+    /// S11: user priority order (link order = the Adapters-screen order).
+    /// The first link takes everything until its measured rate reaches its
+    /// learned capacity (saturation); the excess spills to the next link,
+    /// and so on. When every link is saturated the least-loaded one wins.
+    Priority,
 }
 
 /// Live health of one link, updated by the background prober.
@@ -76,6 +90,23 @@ pub struct LinkHealth {
     pub ewma_ms: f32,
     pub consecutive_failures: u32,
     pub quarantined_until: Option<Instant>,
+    /// S11 load tracking (per-connection scheduling): live connections
+    /// placed on this link (incremented at establish, decremented when the
+    /// connection ends).
+    pub active_conns: u32,
+    /// S11: EWMA of this link's total (up+down) throughput in bytes/s,
+    /// refreshed once per server tick from the data-plane counters.
+    pub rate_bps: u64,
+    /// S11: learned capacity estimate (peak observed rate, slowly decaying
+    /// toward the current rate while idle). Below [`merge::CAPACITY_FLOOR_BPS`]
+    /// it counts as "unknown" — the link is assumed to have headroom.
+    pub capacity_bps: u64,
+    /// S11: consecutive ticks without a meaningful capacity rise (the
+    /// RAMP→PLATEAU detector behind saturation; see [`merge::update_load`]).
+    pub plateau_ticks: u32,
+    /// S11: saturation verdict — rate pinned at a KNOWN capacity that has
+    /// stopped rising. Recomputed by [`merge::update_load`] every tick.
+    pub saturated: bool,
 }
 
 /// Routing rule matcher.
@@ -160,7 +191,10 @@ mod socks5;
 mod test_support;
 
 pub use error::NetError;
-pub use merge::{pick, Aggregator, QuarantinePolicy};
+pub use merge::{
+    pick, pressure_of, relative_load_of, update_load, Aggregator, QuarantinePolicy,
+    CAPACITY_FLOOR_BPS, CONN_RESERVE_BPS, SATURATION_FRACTION,
+};
 pub use outbound::DirectOutbound;
 pub use router::Router;
 pub use server::ProxyServer;
