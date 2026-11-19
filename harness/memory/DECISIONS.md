@@ -297,3 +297,52 @@ panics on a non-total comparator.
    mt-net; the work was making it reachable and explaining the trade.
    "Both connections at once" = stream bonding (needs mt-merge-server on
    the VM, D17/D18); the Advanced card now says exactly that.
+
+## D23 — S11: even byte spreading (Balanced) + adapter priority order (Priority), v0.7.0
+
+User report: with 3+ bonded adapters, one carries most traffic, the
+second less, the third rarely any. Root cause: round-robin evens
+CONNECTION COUNT, not BYTES — a single fat flow dominates its adapter.
+(D22 was the S10.1 HiDPI fix — recorded in the ledger, no separate
+section here.)
+
+1. BALANCED (new stock default) is load-aware spreading: each new
+   connection goes to the link with the least live pressure
+   (`rate_bps + active_conns × 128 KiB/s`). The per-connection reserve
+   exists specifically so a burst of connections inside one 1 s counter
+   tick spreads instead of stacking on the one link whose byte counters
+   have not ticked yet. Ties rotate via the shared cursor, so an idle
+   table degrades to exactly round-robin. Settings migration v2 moves
+   the stock round-robin to balanced ONCE (D20 precedent: a version<2
+   file carrying the stock value is indistinguishable from an explicit
+   choice; an explicit re-choice persists).
+2. SATURATION IS A PLATEAU, NOT A LEVEL. The learned capacity rises to
+   meet any new rate, so "rate ≈ capacity" is true during a ramp too —
+   a naive threshold would mark a link saturated on its first fat flow.
+   Priority therefore requires the capacity to have STOPPED rising
+   (≥2%/tick resets the streak; the rate EWMA damps jitter below that)
+   for 3+ ticks AND rate ≥ 0.85×capacity AND capacity ≥ 256 KiB/s.
+   Consequences: a still-climbing link is never saturated (priority
+   keeps feeding #1 while it ramps); a pinned link saturates within
+   seconds of plateauing; when demand drops below the band the link
+   un-saturates immediately (priority returns traffic to #1 long before
+   the capacity decays).
+3. PRIORITY ORDER = the bonded_adapters LIST ORDER (ids persisted in
+   order since S8; links and stream carriers are built in that order,
+   so link index IS priority). No new settings field — the Adapters tab
+   became the ordering UI: selected rows render first with #n chips and
+   ↑/↓ buttons; ticking an adapter appends at the END (lowest priority).
+   All-saturated fallback = least relative load (unknown capacity ranks
+   as most-headroom).
+4. STREAM MODE uses WRITER-QUEUE BACKPRESSURE as the saturation signal
+   (no capacity estimation needed — TCP already measured it): carriers
+   track queued bytes (send_bytes +, writer_task −); Balanced picks the
+   least-queued carrier (capacity-proportional: fast NICs drain quicker
+   and take more frames), Priority fills carriers in order until one
+   exceeds 512 KiB queued (≈8 max frames — healthy carriers hover near
+   zero, bottlenecked ones grow without bound). The daemon keeps
+   round-robin; priority is a client-side concern.
+5. HONESTY about what per-connection Balanced can do: it places NEW
+   connections; an already-running fat flow stays on its adapter. Byte
+   evenness at the FLOW level is stream mode's job (per-connection
+   balanced + stream balanced now compose).

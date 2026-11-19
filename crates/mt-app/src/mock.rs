@@ -79,14 +79,22 @@ impl MockService {
             theme_seed: 0x6750A4,
             dark_mode: false,
             system_proxy: false,
-            // D20: mirror the service default (round-robin — failover left
-            // the second ticked adapter idle; see real_service D20).
-            merge_policy: "round-robin".to_string(),
+            // D23: mirror the service default (balanced — live byte-load
+            // spreading; round-robin's connection-count evenness let one
+            // fat flow dominate a single adapter).
+            merge_policy: "balanced".to_string(),
             autostart: false,
-            // D22: both wired adapters bonded — mirrors the demo setup
-            // (round-robin default needs ≥2 ticked adapters to show its
-            // point) and gives both Status-tab adapter graphs traffic.
-            bonded_adapters: vec!["mock-wifi".to_string(), "mock-ethernet".to_string()],
+            // D22/D23: ALL THREE wired adapters bonded — mirrors the demo
+            // setup (balanced needs ≥2 ticked adapters to show its point)
+            // and gives every Status-tab adapter graph traffic. The mock's
+            // byte split is deliberately UNEVEN (Wi-Fi ≫ Ethernet ≫
+            // Cellular) — the "one adapter hogs everything" shape the
+            // balanced policy exists to fix.
+            bonded_adapters: vec![
+                "mock-wifi".to_string(),
+                "mock-ethernet".to_string(),
+                "mock-cellular".to_string(),
+            ],
             bond_mode: "per-connection".to_string(),
             merge_port: 7443,
             socks_port: 10808,
@@ -220,10 +228,11 @@ fn seed_rules() -> Vec<RuleView> {
 
 fn seed_links(rng0: u64) -> Vec<LinkStatus> {
     let jitter = |k: u64, base: u32| base + ((k % 25) as u32);
-    // D22: link names mirror the REAL engine's per-adapter links —
+    // D22/D23: link names mirror the REAL engine's per-adapter links —
     // "<profile> [<adapter>]" — so the GUI's per-adapter rate sampler
     // (link_matches_adapter) attributes mock traffic the same way it
     // does in production, and the Status tab's adapter graphs move.
+    // Three carriers: the demo of a 3-NIC bond.
     vec![
         LinkStatus {
             name: "synthetic-reality [Wi-Fi]".to_string(),
@@ -243,11 +252,21 @@ fn seed_links(rng0: u64) -> Vec<LinkStatus> {
             bytes_up: 0,
             bytes_down: 0,
         },
+        LinkStatus {
+            name: "synthetic-reality [Cellular]".to_string(),
+            ok: true,
+            latency_ms: Some(jitter(rng0 % 83, 121)),
+            ewma_ms: Some(128.0),
+            quarantined: false,
+            bytes_up: 0,
+            bytes_down: 0,
+        },
     ]
 }
 
-/// Synthetic adapters (S7): Wi-Fi + Ethernet up with IPv4s, a cellular
-/// dongle down without one — covers every Adapters-screen chip state.
+/// Synthetic adapters (S7): Wi-Fi + Ethernet + Cellular up with IPv4s —
+/// the 3-NIC demo bond (D23; the mock's traffic split is deliberately
+/// uneven so the balanced policy's effect is visible).
 fn seed_adapters() -> Vec<mt_service::AdapterView> {
     vec![
         mt_service::AdapterView {
@@ -269,12 +288,18 @@ fn seed_adapters() -> Vec<mt_service::AdapterView> {
         mt_service::AdapterView {
             id: "mock-cellular".to_string(),
             name: "Cellular".to_string(),
-            description: "Mock LTE dongle (unplugged)".to_string(),
-            ipv4: Vec::new(),
-            up: false,
+            description: "Mock 5G dongle".to_string(),
+            ipv4: vec!["100.72.14.5".to_string()],
+            up: true,
             selected: false,
         },
     ]
+}
+
+/// Test seam (S11): the synthetic adapter enumeration, for tests of the
+/// GUI's ordering primitives outside a running mock service.
+pub fn seed_adapters_public() -> Vec<mt_service::AdapterView> {
+    seed_adapters()
 }
 
 fn view_of(p: &mt_links::Profile, active_id: &Option<String>) -> ProfileView {
@@ -377,11 +402,18 @@ impl MtService for MockService {
                 let jitters: Vec<u32> = (0..g.links.len())
                     .map(|_| 30 + MockService::rng_below(&mut g, 90) as u32)
                     .collect();
+                // D23: deliberately UNEVEN split across the three bonded
+                // NICs (≈70% / 25% / 5%) — the "one adapter hogs
+                // everything, the third rarely sees traffic" field report
+                // the balanced policy exists to fix, made visible in the
+                // per-adapter graphs.
+                let shares = [70usize, 25, 5];
                 for (k, l) in g.links.iter_mut().enumerate() {
                     let ms = jitters[k];
+                    let share = shares.get(k).copied().unwrap_or(0);
                     l.ok = true;
-                    l.bytes_up += up / 4;
-                    l.bytes_down += down / 4;
+                    l.bytes_up += up * share as u64 / 100;
+                    l.bytes_down += down * share as u64 / 100;
                     l.latency_ms = Some(ms);
                     l.ewma_ms = Some(l.ewma_ms.unwrap_or(ms as f32) * 0.7 + ms as f32 * 0.3);
                     let _ = tx.send(ServiceEvent::LinkUpdated(l.clone()));
@@ -623,7 +655,7 @@ mod tests {
         let snap = svc.status().await;
         assert_eq!(snap.state, ServiceState::Connected);
         assert!(snap.up_since.is_some());
-        assert_eq!(snap.links.len(), 2);
+        assert_eq!(snap.links.len(), 3, "D23: three bonded mock adapters");
         assert!(snap.links.iter().all(|l| l.ok));
         assert!(snap.active_profile.is_some());
 

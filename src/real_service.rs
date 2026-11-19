@@ -440,23 +440,42 @@ fn transport_name(t: &Transport) -> &'static str {
 }
 
 /// Lenient `merge_policy` string → policy. Unknown values fall back to
-/// `RoundRobin` with a warning — the D20 default (a failover default made
-/// a second ticked adapter silently idle, which reads as "bonding is
-/// broken"; round-robin gives every ticked adapter traffic). The GUI
-/// sends the canonical lowercase hyphenated names (its pick-list), which
-/// are accepted verbatim; the un-hyphenated mt-net serde names are
-/// accepted too. (S10: before this fix "lowest-latency" — the GUI's own
-/// string — fell into the fallback and silently behaved as round-robin.)
+/// `RoundRobin` with a warning — a fail-open default keeps the tunnel up
+/// (the D20 rationale). The GUI sends the canonical lowercase hyphenated
+/// names (its pick-list), which are accepted verbatim; the un-hyphenated
+/// mt-net serde names are accepted too. S11 adds `balanced` (live
+/// byte-load spreading — the v0.7.0 default) and `priority` (user
+/// adapter order with saturation spill).
 pub fn merge_policy_from_str(s: &str) -> MergePolicy {
     match s {
         "roundrobin" | "round-robin" => MergePolicy::RoundRobin,
         "lowestlatency" | "lowest-latency" => MergePolicy::LowestLatency,
         "failover" => MergePolicy::Failover,
+        "balanced" => MergePolicy::Balanced,
+        "priority" | "priority-order" | "waterfall" => MergePolicy::Priority,
         other => {
             tracing::warn!("unknown merge policy {other:?}; using round-robin");
             MergePolicy::RoundRobin
         }
     }
+}
+
+/// Does `s` name a KNOWN merge policy (any accepted spelling)? Used by
+/// `set_settings` so a typo'd policy fails loud instead of silently
+/// degrading to the fallback.
+pub fn is_known_merge_policy(s: &str) -> bool {
+    matches!(
+        s,
+        "roundrobin"
+            | "round-robin"
+            | "lowestlatency"
+            | "lowest-latency"
+            | "failover"
+            | "balanced"
+            | "priority"
+            | "priority-order"
+            | "waterfall"
+    )
 }
 
 /// `RuleView` (GUI) → `mt_net::Rule` (data plane). Errors are UI strings.
@@ -527,10 +546,13 @@ impl Default for SettingsFile {
                 theme_seed: 0x6750A4,
                 dark_mode: false,
                 system_proxy: false,
-                // D20: round-robin spreads new connections across every
-                // ticked adapter; the v0.5.0 "failover" default left the
-                // second adapter idle (misread as a bonding bug).
-                merge_policy: "round-robin".to_string(),
+                // D23: "balanced" spreads new connections across the
+                // ticked adapters by LIVE byte load — the v0.7.0 default.
+                // Round-robin's connection-count evenness let one fat
+                // flow dominate a single adapter (the "one adapter hogs
+                // everything" report); failover (v0.5.0's default) left
+                // the second adapter idle entirely.
+                merge_policy: "balanced".to_string(),
                 autostart: false,
                 bonded_adapters: Vec::new(),
                 bond_mode: "per-connection".to_string(),
@@ -555,8 +577,9 @@ impl Default for SettingsFile {
     }
 }
 
-/// Current settings schema version (D20 = 1: stock merge-policy migration).
-const SETTINGS_VERSION: u32 = 1;
+/// Current settings schema version (D20 = 1: stock failover →
+/// round-robin; D23 = 2: stock round-robin → balanced).
+const SETTINGS_VERSION: u32 = 2;
 
 impl SettingsFile {
     fn load(path: &Path) -> Self {
@@ -580,13 +603,23 @@ impl SettingsFile {
         // "failover" merge policy, which sends EVERY connection down the
         // first healthy adapter — a second ticked adapter stayed idle and
         // users read that as broken bonding. Migrate the STOCK value to
-        // the new default (round-robin); an explicit re-choice of
-        // failover persists version >= 1 and is respected verbatim.
+        // the new default; an explicit re-choice persists version >= 1.
+        //
+        // D23 migration (v0.6.x → v0.7.0): the same one-time move for
+        // "round-robin" → "balanced". v0.5.1..v0.6.1 shipped round-robin
+        // as the STOCK default, so a version<2 file carrying it is
+        // indistinguishable from an explicit choice — following the D20
+        // precedent, the stock value migrates once; an explicit
+        // re-choice of round-robin persists (version 2) verbatim.
         let migrated = file.settings_version < SETTINGS_VERSION;
         if migrated {
             if file.settings_version < 1 && file.settings.merge_policy == "failover" {
                 file.settings.merge_policy = "round-robin".to_string();
                 tracing::info!("settings migration: stock merge policy failover → round-robin");
+            }
+            if file.settings_version < 2 && file.settings.merge_policy == "round-robin" {
+                file.settings.merge_policy = "balanced".to_string();
+                tracing::info!("settings migration: stock merge policy round-robin → balanced");
             }
             file.settings_version = SETTINGS_VERSION;
             // Best-effort persist so the Settings screen shows the
@@ -913,7 +946,7 @@ impl RealService {
                 };
                 // The bond keeps its OWN Arc clones of the engines; the
                 // originals stay usable for the per-connection fallback.
-                let candidate = BondOutbound::new(links.clone(), merge_target);
+                let candidate = BondOutbound::with_policy(links.clone(), merge_target, policy);
                 match candidate.ensure_carriers(CONNECT_PROBE_BUDGET).await {
                     Ok(report) => {
                         // D20: per-carrier verdicts in the GUI log — a dead
@@ -932,9 +965,9 @@ impl RealService {
                             )));
                         } else {
                             self.core.emit(ServiceEvent::LogLine(format!(
-                                "INFO  stream bonding active — {} carriers, bytes striped \
-                                 round-robin across them",
-                                report.live
+                                "INFO  stream bonding active — {} carriers, frames spread by the \
+                                 '{}' merge policy across them",
+                                report.live, settings.settings.merge_policy
                             )));
                         }
                         bond = Some(Arc::clone(&candidate));
@@ -1564,6 +1597,12 @@ impl MtService for RealService {
         if !matches!(settings.bond_mode.as_str(), "per-connection" | "stream") {
             return Err(format!("unknown bond mode {:?}", settings.bond_mode));
         }
+        if !is_known_merge_policy(&settings.merge_policy) {
+            return Err(format!(
+                "unknown merge policy {:?} — pick one from the Settings screen",
+                settings.merge_policy
+            ));
+        }
         if parse_http_url(&settings.exit_probe_url).is_none() {
             return Err(format!(
                 "exit probe URL must be plain http:// ({:?})",
@@ -1576,12 +1615,15 @@ impl MtService for RealService {
                 settings.probe_target
             ));
         }
-        // These change the LIVE data plane — remember for the restart below.
+        // These change the LIVE data plane — remember for the restart below
+        // (S11: the merge policy too — it drives per-connection spreading
+        // AND the stream-bond carrier scheduler now).
         let dataplane_changed = file.settings.socks_port != settings.socks_port
             || file.settings.http_port != settings.http_port
             || file.settings.allow_lan != settings.allow_lan
             || file.settings.bond_mode != settings.bond_mode
-            || file.settings.merge_port != settings.merge_port;
+            || file.settings.merge_port != settings.merge_port
+            || file.settings.merge_policy != settings.merge_policy;
         // Module note 15: `bonded_adapters` belongs to the Adapters screen
         // (`set_bonded_adapters`); a possibly-stale GUI settings copy must
         // never clobber a fresh selection — persist the server-side value.
@@ -2431,6 +2473,8 @@ mod tests {
 
         // (a) v0.5.0-shaped file: no settings_version, stock failover.
         // (All v0.5.0-required fields present, as a real v0.5.0 write.)
+        // D23: the migration CHAINS — failover (v0.5.0 stock) →
+        // round-robin (v0.5.1 stock) → balanced (v0.7.0 stock).
         let v050_json = concat!(
             r#"{"settings":{"theme_seed":4273518,"dark_mode":false,"system_proxy":false,"#,
             r#""merge_policy":"failover","autostart":false,"bonded_adapters":[],"#,
@@ -2439,19 +2483,42 @@ mod tests {
         std::fs::write(&path, v050_json).expect("write v0.5.0 file");
         let loaded = SettingsFile::load(&path);
         assert_eq!(
-            loaded.settings.merge_policy, "round-robin",
-            "stock failover migrates to round-robin"
+            loaded.settings.merge_policy, "balanced",
+            "stock failover migrates through the chain to balanced"
         );
         assert_eq!(loaded.settings_version, SETTINGS_VERSION);
         // The migration persists (a second load is a no-op with the same
         // value — explicit failover from NOW ON is respected).
         let persisted = std::fs::read_to_string(&path).expect("migration persisted");
-        assert!(persisted.contains("\"round-robin\""));
+        assert!(persisted.contains("\"balanced\""));
         assert!(persisted.contains(&format!("\"settings_version\": {SETTINGS_VERSION}")));
         let reloaded = SettingsFile::load(&path);
-        assert_eq!(reloaded.settings.merge_policy, "round-robin");
+        assert_eq!(reloaded.settings.merge_policy, "balanced");
 
-        // (b) CURRENT file with an explicit failover: never touched.
+        // (b) v0.6.1-shaped file (version 1) with the then-stock
+        // round-robin: migrates ONCE to balanced.
+        let mut file = SettingsFile::default();
+        file.settings.merge_policy = "round-robin".to_string();
+        file.settings_version = 1;
+        file.save(&path).expect("save v0.6.1 stock");
+        let loaded = SettingsFile::load(&path);
+        assert_eq!(
+            loaded.settings.merge_policy, "balanced",
+            "v0.6.x stock round-robin migrates to balanced"
+        );
+
+        // (c) CURRENT file with an explicit round-robin: never touched.
+        let mut file = SettingsFile::default();
+        file.settings.merge_policy = "round-robin".to_string();
+        file.settings_version = SETTINGS_VERSION;
+        file.save(&path).expect("save explicit round-robin");
+        let loaded = SettingsFile::load(&path);
+        assert_eq!(
+            loaded.settings.merge_policy, "round-robin",
+            "explicit round-robin on a current file is respected"
+        );
+
+        // (d) CURRENT file with an explicit failover: never touched.
         let mut file = SettingsFile::default();
         file.settings.merge_policy = "failover".to_string();
         file.settings_version = SETTINGS_VERSION;
@@ -2462,10 +2529,10 @@ mod tests {
             "explicit failover on a current file is respected"
         );
 
-        // (c) Fresh default (no file at all) is round-robin.
+        // (e) Fresh default (no file at all) is balanced.
         std::fs::remove_file(&path).expect("remove settings");
         let fresh = SettingsFile::load(&path);
-        assert_eq!(fresh.settings.merge_policy, "round-robin");
+        assert_eq!(fresh.settings.merge_policy, "balanced");
         assert_eq!(fresh.settings_version, SETTINGS_VERSION);
     }
 
@@ -2493,7 +2560,7 @@ mod tests {
     /// S10 regression: the GUI's pick-list sends the HYPHENATED names —
     /// before this fix "lowest-latency" (and "round-robin") fell into the
     /// unknown-value fallback, so the lowest-latency policy silently
-    /// behaved as round-robin.
+    /// behaved as round-robin. S11: the two new policies parse too.
     #[test]
     fn hyphenated_merge_policy_names_parse() {
         assert!(matches!(
@@ -2504,6 +2571,17 @@ mod tests {
             merge_policy_from_str("lowest-latency"),
             MergePolicy::LowestLatency
         ));
+        assert!(matches!(
+            merge_policy_from_str("balanced"),
+            MergePolicy::Balanced
+        ));
+        assert!(matches!(
+            merge_policy_from_str("priority"),
+            MergePolicy::Priority
+        ));
+        assert!(is_known_merge_policy("balanced"));
+        assert!(is_known_merge_policy("priority"));
+        assert!(!is_known_merge_policy("fastest"));
     }
 
     #[test]

@@ -14,8 +14,8 @@
 //! Module map:
 //! - `frame`   — the 24-byte wire framing + OPEN target codec (pure).
 //! - `reorder` — per-session inbound reordering (pure).
-//! - `endpoint`— carriers, sessions, round-robin scheduling, cumulative
-//!   ACKs, replay-on-carrier-death, keepalives, sweeps.
+//! - `endpoint`— carriers, sessions, policy-aware scheduling (S11),
+//!   cumulative ACKs, replay-on-carrier-death, keepalives, sweeps.
 //! - `outbound`— [`BondOutbound`] (the client `mt_net::Outbound`) and the
 //!   app-facing [`outbound::BondStream`].
 //! - `daemon`  — the server half (`mt-merge-server` binary).
@@ -33,7 +33,8 @@ pub use daemon::{serve, BOND_IDLE_GC};
 pub use endpoint::{
     CarrierSnapshot, APP_BACKLOG_CAP, CARRIER_RESPAWN_ATTEMPTS, CARRIER_RESPAWN_BACKOFF,
     DIAL_TIMEOUT, MAX_SESSIONS_PER_BOND, PENDING_OPEN_TIMEOUT, PING_INTERVAL, PONG_TIMEOUT,
-    REORDER_CAP, STALL_TIMEOUT, SWEEP_INTERVAL, VERIFY_PONG_TIMEOUT, WRITER_QUEUE,
+    PRIORITY_QUEUE_HIGH_WATER, REORDER_CAP, STALL_TIMEOUT, SWEEP_INTERVAL,
+    VERIFY_PONG_TIMEOUT, WRITER_QUEUE,
 };
 pub use frame::{
     decode_header, decode_target, encode_target, read_frame, write_frame, CloseReason, Frame, Kind,

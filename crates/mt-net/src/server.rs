@@ -269,6 +269,7 @@ impl ProxyServer {
         }
         background.push(tokio::spawn(tick_loop(
             Arc::clone(&self.shared),
+            Arc::clone(&self.aggregator),
             self.events.clone(),
             shutdown.clone(),
         )));
@@ -323,16 +324,19 @@ impl ProxyServer {
 
     /// Pick a link (or go direct) and connect. `Err` carries the SOCKS5 REP
     /// code to report (the HTTP side maps any failure to 502). Reject is
-    /// handled by the callers before this point.
+    /// handled by the callers before this point. On the Proxy path the
+    /// third tuple element is the link's aggregator index (S11 load
+    /// accounting: the tunnel bumps that link's byte counter and closes
+    /// its connection slot at the end).
     async fn establish(
         &self,
         action: Action,
         target: &TargetAddr,
-    ) -> Result<(ProxyStream, String), u8> {
+    ) -> Result<(ProxyStream, String, Option<usize>), u8> {
         match action {
             Action::Reject => Err(rep::GENERAL_FAILURE), // defensive; callers reject earlier
             Action::Direct => match self.direct.connect(target).await {
-                Ok(s) => Ok((s, self.direct.name().to_string())),
+                Ok(s) => Ok((s, self.direct.name().to_string(), None)),
                 Err(e) => {
                     tracing::warn!(target = %target, "direct connect failed: {e:#}");
                     Err(socks5::rep_for_error(&e))
@@ -349,7 +353,8 @@ impl ProxyServer {
                 match link.connect(target).await {
                     Ok(s) => {
                         self.aggregator.record_result(idx, true, None).await;
-                        Ok((s, link.name().to_string()))
+                        self.aggregator.record_conn_open(idx).await;
+                        Ok((s, link.name().to_string(), Some(idx)))
                     }
                     Err(first) => {
                         // ONE transparent retry on a DIFFERENT link (see
@@ -370,7 +375,8 @@ impl ProxyServer {
                                         "retry after first-link failure succeeded"
                                     );
                                     self.aggregator.record_result(idx2, true, None).await;
-                                    Ok((s, link2.name().to_string()))
+                                    self.aggregator.record_conn_open(idx2).await;
+                                    Ok((s, link2.name().to_string(), Some(idx2)))
                                 }
                                 Err(second) => {
                                     self.aggregator.record_result(idx2, false, None).await;
@@ -410,15 +416,18 @@ impl ProxyServer {
             return;
         }
         match self.establish(action, &target).await {
-            Ok((upstream, link)) => {
+            Ok((upstream, link, link_idx)) => {
                 if socks5::send_success_reply(&mut stream).await.is_err() {
+                    if let Some(idx) = link_idx {
+                        self.aggregator.record_conn_close(idx).await;
+                    }
                     return;
                 }
                 self.emit(ProxyEvent::ConnOpened {
                     target: target.to_string(),
                     link: link.clone(),
                 });
-                self.tunnel(stream, upstream, &target, &link, Vec::new())
+                self.tunnel(stream, upstream, &target, &link, link_idx, Vec::new())
                     .await;
             }
             Err(rep_code) => {
@@ -447,20 +456,29 @@ impl ProxyServer {
             return;
         }
         match self.establish(action, &parsed.target).await {
-            Ok((mut upstream, link)) => {
+            Ok((mut upstream, link, link_idx)) => {
                 if parsed.is_connect {
                     if http::write_simple(&mut stream, http::RESP_OK_CONNECT)
                         .await
                         .is_err()
                     {
+                        if let Some(idx) = link_idx {
+                            self.aggregator.record_conn_close(idx).await;
+                        }
                         return;
                     }
                 } else {
                     let Some(forward) = parsed.forward else {
+                        if let Some(idx) = link_idx {
+                            self.aggregator.record_conn_close(idx).await;
+                        }
                         return;
                     };
                     if upstream.write_all(&forward).await.is_err() {
                         tracing::trace!(%peer, "upstream closed while forwarding request head");
+                        if let Some(idx) = link_idx {
+                            self.aggregator.record_conn_close(idx).await;
+                        }
                         return;
                     }
                 }
@@ -473,6 +491,7 @@ impl ProxyServer {
                     upstream,
                     &parsed.target,
                     &link,
+                    link_idx,
                     parsed.tunnel_prefix,
                 )
                 .await;
@@ -485,18 +504,23 @@ impl ProxyServer {
     }
 
     /// Bidirectional copy with byte counters + `ConnClosed` event (see
-    /// module docs for the pump semantics).
+    /// module docs for the pump semantics). `link_idx` (Proxy path only)
+    /// routes every pumped byte into that link's aggregator counter and
+    /// closes the link's connection slot when the tunnel ends (S11).
     async fn tunnel(
         &self,
         client: TcpStream,
         upstream: ProxyStream,
         target: &TargetAddr,
         link: &str,
+        link_idx: Option<usize>,
         prefix_up: Vec<u8>,
     ) {
         let started = Instant::now();
         let up_count = Arc::new(AtomicU64::new(0));
         let down_count = Arc::new(AtomicU64::new(0));
+        // S11: the per-link counter (up+down combined) the pumps bump.
+        let link_counter = link_idx.and_then(|i| self.aggregator.link_bytes(i));
         let (client_rd, client_wr) = tokio::io::split(client);
         let (up_rd, up_wr) = tokio::io::split(upstream);
         let pump_up = tokio::spawn(pump(
@@ -505,6 +529,7 @@ impl ProxyServer {
             prefix_up,
             Arc::clone(&up_count),
             Arc::clone(&self.shared.up_total),
+            link_counter.clone(),
         ));
         let pump_down = tokio::spawn(pump(
             up_rd,
@@ -512,6 +537,7 @@ impl ProxyServer {
             Vec::new(),
             Arc::clone(&down_count),
             Arc::clone(&self.shared.down_total),
+            link_counter,
         ));
         let (ra, rb) = join_pumps(pump_up, pump_down).await;
         for r in [&ra, &rb] {
@@ -523,6 +549,9 @@ impl ProxyServer {
         let down = down_count.load(Ordering::Relaxed);
         let dur_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         tracing::debug!(target = %target, link, up, down, dur_ms, "connection closed");
+        if let Some(idx) = link_idx {
+            self.aggregator.record_conn_close(idx).await;
+        }
         self.emit(ProxyEvent::ConnClosed {
             link: link.to_string(),
             up,
@@ -542,6 +571,7 @@ async fn pump<R, W>(
     prefix: Vec<u8>,
     conn: Arc<AtomicU64>,
     global: Arc<AtomicU64>,
+    per_link: Option<Arc<AtomicU64>>,
 ) -> std::io::Result<()>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -549,7 +579,7 @@ where
 {
     if !prefix.is_empty() {
         wr.write_all(&prefix).await?;
-        bump(&conn, &global, prefix.len() as u64);
+        bump(&conn, &global, per_link.as_deref(), prefix.len() as u64);
     }
     let mut buf = vec![0u8; PUMP_BUF];
     loop {
@@ -559,13 +589,16 @@ where
             return Ok(());
         }
         wr.write_all(&buf[..n]).await?;
-        bump(&conn, &global, n as u64);
+        bump(&conn, &global, per_link.as_deref(), n as u64);
     }
 }
 
-fn bump(conn: &AtomicU64, global: &AtomicU64, n: u64) {
+fn bump(conn: &AtomicU64, global: &AtomicU64, per_link: Option<&AtomicU64>, n: u64) {
     conn.fetch_add(n, Ordering::Relaxed);
     global.fetch_add(n, Ordering::Relaxed);
+    if let Some(link) = per_link {
+        link.fetch_add(n, Ordering::Relaxed);
+    }
 }
 
 /// Await both pumps: when the first one finishes with an ERROR, abort the
@@ -620,8 +653,11 @@ async fn accept_loop(server: Arc<ProxyServer>, listener: TcpListener, kind: Inbo
 }
 
 /// 1 s throughput ticker: bytes/s over the preceding window (see docs).
+/// Also advances the per-link LOAD estimates (S11) on the same cadence —
+/// the `Balanced` / `Priority` pickers read them one tick later.
 async fn tick_loop(
     shared: Arc<Shared>,
+    aggregator: Arc<Aggregator>,
     events: broadcast::Sender<ProxyEvent>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -629,11 +665,15 @@ async fn tick_loop(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ticker.tick().await; // consume the immediate first tick
     let (mut last_up, mut last_down) = (0u64, 0u64);
+    let mut last_tick = Instant::now();
     loop {
         tokio::select! {
             _ = ticker.tick() => {}
             _ = wait_for_shutdown(&mut shutdown) => break,
         }
+        let now = Instant::now();
+        let dt = now - last_tick;
+        last_tick = now;
         let up = shared.up_total.load(Ordering::Relaxed);
         let down = shared.down_total.load(Ordering::Relaxed);
         let ev = ProxyEvent::Tick {
@@ -642,6 +682,7 @@ async fn tick_loop(
         };
         last_up = up;
         last_down = down;
+        aggregator.tick_loads(dt).await;
         let _ = events.send(ev);
     }
 }
@@ -811,6 +852,144 @@ mod tests {
             .expect("run() returns promptly after shutdown")
             .expect("join")
             .expect("run ok");
+    }
+
+    // ---------- S11: load-aware scheduling E2E ----------
+
+    /// Balanced avoids the link that is already carrying bytes, and
+    /// Priority keeps filling the first link while it is not saturated —
+    /// end-to-end through the real pumps + ticker (per-link counters →
+    /// tick_loads → picker).
+    #[tokio::test]
+    async fn balanced_and_priority_route_by_live_load_e2e() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let echo = crate::test_support::spawn_echo().await;
+        let target = TargetAddr {
+            host: Host::Ip(echo.ip()),
+            port: echo.port(),
+        };
+
+        let start_policy = |policy| async move {
+            let links: Vec<Arc<dyn Outbound>> = vec![
+                Arc::new(FakeOutbound::echo("link-a", echo)),
+                Arc::new(FakeOutbound::echo("link-b", echo)),
+            ];
+            let server = Arc::new(ProxyServer::new(
+                "127.0.0.1:0".parse().unwrap(),
+                "127.0.0.1:0".parse().unwrap(),
+                links,
+                Router::new(Vec::new()),
+                policy,
+            ));
+            let events = server.subscribe();
+            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+            let run = tokio::spawn(Arc::clone(&server).run(shutdown_rx));
+            wait_for_addr(|| server.socks_local_addr()).await;
+            TestServer {
+                server,
+                shutdown_tx,
+                events,
+                run,
+            }
+        };
+
+        // --- Balanced: conn 1 lands on link-a (idle tie → cursor); after a
+        // fat flow + one ticker tick, conn 2 must land on link-b. ---
+        let mut ts = start_policy(MergePolicy::Balanced).await;
+        let cli = socks5::Socks5Outbound::new(ts.server.socks_local_addr().unwrap());
+        let mut s1 = tokio::time::timeout(Duration::from_secs(3), cli.connect(&target))
+            .await
+            .expect("conn1 in time")
+            .expect("conn1 established");
+        // ~512 KiB through the tunnel (up + echo down) — comfortably above
+        // the capacity floor once the ticker samples it.
+        let chunk = vec![0x5au8; 64 * 1024];
+        for _ in 0..4 {
+            s1.write_all(&chunk).await.unwrap();
+            let mut back = vec![0u8; chunk.len()];
+            s1.read_exact(&mut back).await.unwrap();
+        }
+        // One real ticker tick (1 s cadence) feeds the counters into the
+        // health table.
+        tokio::time::sleep(Duration::from_millis(1300)).await;
+        let mut s2 = tokio::time::timeout(Duration::from_secs(3), cli.connect(&target))
+            .await
+            .expect("conn2 in time")
+            .expect("conn2 established");
+        s2.write_all(b"hi").await.unwrap();
+        let mut buf = [0u8; 2];
+        s2.read_exact(&mut buf).await.unwrap();
+        // Drain the two ConnOpened events and check their links.
+        let l1 = match wait_event(&mut ts.events, Duration::from_secs(2), |e| {
+            matches!(e, ProxyEvent::ConnOpened { .. })
+        })
+        .await
+        {
+            ProxyEvent::ConnOpened { link, .. } => link,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let l2 = match wait_event(&mut ts.events, Duration::from_secs(2), |e| {
+            matches!(e, ProxyEvent::ConnOpened { .. })
+        })
+        .await
+        {
+            ProxyEvent::ConnOpened { link, .. } => link,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert_eq!(l1, "link-a", "idle tie rotates from the cursor start");
+        assert_eq!(
+            l2, "link-b",
+            "after a fat flow on link-a, Balanced must avoid it"
+        );
+        drop(s1);
+        drop(s2);
+        ts.shutdown_tx.send(true).unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), ts.run).await;
+
+        // --- Priority: while link-a is loaded but NOT saturated (its
+        // capacity is still rising — no plateau), new connections keep
+        // filling link-a. ---
+        let mut ts = start_policy(MergePolicy::Priority).await;
+        let cli = socks5::Socks5Outbound::new(ts.server.socks_local_addr().unwrap());
+        let mut s1 = tokio::time::timeout(Duration::from_secs(3), cli.connect(&target))
+            .await
+            .expect("conn1 in time")
+            .expect("conn1 established");
+        s1.write_all(&chunk).await.unwrap();
+        let mut back = vec![0u8; chunk.len()];
+        s1.read_exact(&mut back).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1300)).await;
+        let mut s2 = tokio::time::timeout(Duration::from_secs(3), cli.connect(&target))
+            .await
+            .expect("conn2 in time")
+            .expect("conn2 established");
+        s2.write_all(b"hi").await.unwrap();
+        s2.read_exact(&mut buf).await.unwrap();
+        let l1 = match wait_event(&mut ts.events, Duration::from_secs(2), |e| {
+            matches!(e, ProxyEvent::ConnOpened { .. })
+        })
+        .await
+        {
+            ProxyEvent::ConnOpened { link, .. } => link,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let l2 = match wait_event(&mut ts.events, Duration::from_secs(2), |e| {
+            matches!(e, ProxyEvent::ConnOpened { .. })
+        })
+        .await
+        {
+            ProxyEvent::ConnOpened { link, .. } => link,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert_eq!(l1, "link-a");
+        assert_eq!(
+            l2, "link-a",
+            "a loaded-but-ramping link is not saturated — Priority keeps filling it"
+        );
+        drop(s1);
+        drop(s2);
+        ts.shutdown_tx.send(true).unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), ts.run).await;
     }
 
     // ---------- HTTP inbound E2E (contract) ----------

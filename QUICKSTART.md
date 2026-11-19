@@ -102,19 +102,26 @@ from a terminal) is the first stop for clues.
   Status tab (switching while connected reconnects automatically).
   Latency tests run per profile from the Servers screen.
 - The data plane bonds multiple links in-process (merge policy in
-  Settings: **round-robin by default** — new connections alternate across
-  every ticked adapter, so both NICs carry traffic; `failover` keeps
-  everything on the first healthy adapter; `lowest-latency` picks the
-  lowest-RTT adapter per connection). The legacy external net-merge tool
-  is no longer needed; see the appendix if you used it with v0.2.
+  Settings: **balanced by default** — every new connection goes to the
+  adapter carrying the least traffic RIGHT NOW, so a big download stops
+  hogging one NIC and the spread evens out by BYTES; `priority` fills
+  the adapters in the order you set on the Adapters tab — #1 takes
+  everything until its bandwidth saturates, then the overflow spills to
+  #2, and so on; `round-robin` alternates by connection count;
+  `failover` keeps everything on the first healthy adapter;
+  `lowest-latency` picks the lowest-RTT adapter per connection). The
+  legacy external net-merge tool is no longer needed; see the appendix
+  if you used it with v0.2.
 - Every adapter row on the Adapters tab has an arrow (▸) that expands a
   live per-interface traffic graph — and since v0.6.1 the same graphs
   live on the Status tab: press an ADAPTER'S NAME in the bottom card to
   expand its chart. The same two color-coded lines as the Status graph
   (down = primary, up = tertiary), so you can SEE which NIC carries
-  what. Upgrading from v0.5.0? The stock merge policy migrates to
-  round-robin automatically (Settings shows it; pick `failover` there if
-  you really want the old behavior).
+  what. The ORDER of the ticked adapters (reorder with ↑/↓) is the
+  adapter priority used by the `priority` policy. Upgrading from
+  v0.6.x? The stock merge policy migrates to balanced automatically
+  (Settings shows it; pick `round-robin` there if you want the old
+  behavior).
 
 ## Step 5 (optional) — stream bonding: one connection, split across adapters
 
@@ -200,10 +207,11 @@ direct / reject). To import a bypass list like in v2rayN:
    `multitunnel routing import C:\path\to\list.txt`.
 
 Which adapter carries which connection is the merge policy's job
-(Settings -> Network): `round-robin` (default) alternates, and
-`lowest-latency` sends each connection over the link with the best
-smoothed RTT. To split ONE connection across both adapters at the same
-time, use bonding mode `stream` (Step 5).
+(Settings -> Network): `balanced` (default) sends each new connection to
+the least-loaded adapter, and `priority` fills the Adapters-tab order —
+#1 until its bandwidth saturates, then #2. To split ONE connection
+across both adapters at the same time, use bonding mode `stream`
+(Step 5).
 
 ## Appendix — the legacy v0.2 path (config.json + tray)
 
