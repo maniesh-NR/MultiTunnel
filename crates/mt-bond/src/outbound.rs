@@ -132,6 +132,13 @@ impl BondOutbound {
         let results = tokio::time::timeout(budget, dial)
             .await
             .map_err(|_| anyhow::anyhow!("carrier establishment timed out"))?;
+        // S11 honest carriers: a successful DIAL is not enough. Xray's
+        // SOCKS inbound replies "connected" BEFORE the upstream tunnel is
+        // established, so with the merge daemon absent (or the server's
+        // Xray freedom policy blackholing the merge port) every carrier
+        // attaches phantom-live and bytes vanish. Demand a verify-pong
+        // (PING right after HELLO, answered by the daemon) per carrier.
+        let mut attached: Vec<(usize, String)> = Vec::new();
         let mut live = 0usize;
         let mut lines = Vec::with_capacity(results.len());
         for (idx, result) in results.into_iter().enumerate() {
@@ -143,8 +150,7 @@ impl BondOutbound {
                         .await
                         .is_ok()
                     {
-                        live += 1;
-                        lines.push(format!("{name}: live"));
+                        attached.push((idx, name));
                     } else {
                         lines.push(format!("{name}: down (carrier handshake failed)"));
                     }
@@ -161,6 +167,24 @@ impl BondOutbound {
                         "carrier slot {idx}: down (dial produced no result)"
                     ));
                 }
+            }
+        }
+        let slots: Vec<usize> = attached.iter().map(|(i, _)| *i).collect();
+        let verified = self
+            .endpoint
+            .await_verified(&slots, crate::endpoint::VERIFY_PONG_TIMEOUT)
+            .await;
+        for (idx, name) in &attached {
+            if verified.contains(idx) {
+                live += 1;
+                lines.push(format!("{name}: live"));
+            } else {
+                self.endpoint.abandon_unverified(*idx);
+                lines.push(format!(
+                    "{name}: down (no pong from the merge daemon — is mt-merge-server \
+                     running on the tunnel server, and does its Xray allow the merge \
+                     port? re-run server/setup-xray-reality.sh to patch finalRules)"
+                ));
             }
         }
         if live == 0 {

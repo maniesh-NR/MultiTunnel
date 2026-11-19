@@ -129,18 +129,30 @@ again. Reverse traffic is split the same way back.
    release binary and registers a systemd service):
    `sudo ./server/setup-merge-daemon.sh`
    (it listens on 127.0.0.1:7443 — loopback only, never exposed).
-2. In MultiTunnel: Settings -> Advanced -> bonding mode = "stream"
-   (leave the merge port at 7443 unless you changed it on the VM).
-3. Adapters tab: tick the adapters to bond, Apply, connect.
+2. On the VM, make sure the Xray server ALLOWS dialing that loopback
+   port: `sudo ./server/setup-xray-reality.sh` (idempotent — an existing
+   install is patched in place with the freedom `finalRules` allow,
+   credentials untouched). Required since Xray 26.x: the freedom
+   outbound blackholes loopback targets dialed from VLESS by default,
+   and without the allow every stream-bonding carrier silently dies
+   while per-connection keeps working.
+3. In MultiTunnel: Settings -> Advanced -> bonding mode = "stream"
+   (leave the merge port at 7443 unless you changed it on the VM — it
+   must match the daemon AND the Xray finalRules allow).
+4. Adapters tab: tick the adapters to bond, Apply, connect.
 
 The Status tab then shows one row per bonded adapter (carrier) with live
 RTT and byte counters, and the log names each carrier's verdict at connect
 (`INFO  carrier <name>: live` / `WARN … down (<reason>)`) — a dead adapter
-is never silent. If the daemon is not reachable, MultiTunnel logs
-`stream bonding unavailable` and falls back to per-connection spreading —
-the tunnel never goes down because of a daemon problem. A carrier that
-dies mid-stream (Wi-Fi drop) is replayed on the surviving carriers: no
-bytes are lost.
+is never silent. Since v0.6.2 a carrier is only reported live after it
+PROVED the round trip with a PING/PONG through the merge daemon (Xray's
+SOCKS listener answers "connected" before the upstream exists — a
+dialed-but-unproven carrier would otherwise silently swallow bytes). If
+no carrier proves itself, MultiTunnel logs `stream bonding unavailable`
+(with the likely fix) and falls back to per-connection spreading — the
+tunnel never goes down because of a daemon problem. A carrier that dies
+mid-stream (Wi-Fi drop) is replayed on the surviving carriers: no bytes
+are lost.
 
 ## Step 6 — verify your exit (the Status tab's Exit identity card)
 

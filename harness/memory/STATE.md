@@ -1,35 +1,37 @@
-# STATE — rewritten at the end of every stage. Last update: S10 (vendored iced rendering fixes + exclusions import, v0.6.0)
+# STATE — rewritten at the end of every stage. Last update: S11 (real-Xray E2E rig + stream-bonding field fix, v0.6.2)
 
 ## Current position
-- Stage: S10 CLOSED — v0.6.0 on the first v0.5.1 field report: (a) graphs
-  "occasionally out of frame / don't load" and (b) the "Check exit IP"
-  non-total-comparator panic were BOTH root-caused in the terminal iced
-  0.13 releases and fixed as vendored patches (vendor/ +
-  [patch.crates-io]; DECISIONS D21): damage/clip coordinate spaces in
-  iced_tiny_skia, honest MEASURED canvas-text bounds (the INFINITY
-  markers produced the NaN damage rectangles), total_cmp in
-  iced_graphics::damage::group. Reproduced and verified end-to-end in a
-  new Xvfb+XTEST rig (scripts/gui_drive.py): series paint immediately
-  after connect (were blank until a resize), right-aligned labels stay
-  inside the card, the exit-IP click no longer panics.
-- Features: exclusions import (mt-service::parse_exclusion_list: plain
-  list + v2rayN routing JSON; Routing-tab import card feeding the DRAFT;
-  CLI `multitunnel routing list|import`). Two latent v0.5.x bugs fixed on
-  the way: rule-kind vocabulary was kebab in the GUI vs camelCase in the
-  backend (every real-backend Routing save failed, smoke tests blind —
-  MockService is permissive), and hyphenated merge-policy names never
-  parsed ("lowest-latency" silently meant round-robin).
-- Gates: fmt clean; clippy host + windows-gnu -D warnings clean;
-  371 tests / 0 failed (368 workspace + 3 vendored); zigbuild release
-  PE32+ x4; gui --smoke exit 0.
-- Protocol/daemon UNCHANGED from v0.5.0 (D17 framing intact; the VM's
-  mt-merge-server needs no upgrade).
+- Stage: S11 CLOSED — v0.6.2 fixes the "per-connection works, stream bonding
+  does not" field report. ROOT CAUSE (server-side): Xray 26.x freedom
+  outbound's default safety policy BLACKHOLES loopback targets dialed from
+  VLESS ("target blocked by a finalrule") — the merge daemon lives on
+  127.0.0.1:<merge port>, so every carrier was black-holed. Client-side
+  aggravation: Xray's SOCKS inbound answers "connected" before the upstream
+  exists → phantom-live carriers. FIXES: (A) setup-xray-reality.sh writes a
+  narrow freedom finalRules allow (127.0.0.1:<MERGE_PORT>, tcp) and, without
+  FORCE, IDEMPOTENTLY PATCHES existing installs (backup + run -test +
+  restart, credentials kept) — the user's one-command VM fix; (B) mt-bond
+  honest carriers: a carrier is schedulable only after a PING/PONG proof
+  through the daemon (VERIFY_PONG_TIMEOUT=5s; ensure_carriers + respawn
+  demand it; fallback WARN names the fix). Daemon binary UNCHANGED.
+- NEW RIG: tests/e2e_real_xray.rs (gated MT_E2E_XRAY=1 + XRAY_BIN=...):
+  real VLESS+REALITY engines → real Xray server → in-process daemon → echo.
+  It caught the field bug that all mock-link tests could not. Dest must be a
+  REAL external site (openssl s_server breaks every REALITY handshake — and
+  s_server exits on stdin EOF; both documented in the rig).
+- Gates at close: fmt clean; clippy --workspace --all-targets -D warnings
+  clean; 26/26 workspace suites green (381 tests) + vendored iced 6;
+  E2E 2/2 green (survives + honest fallback).
+- USER ACTION REQUIRED for stream bonding: on the VM run
+  `sudo bash server/setup-xray-reality.sh` (patches finalRules, keeps
+  credentials) and confirm `sudo bash server/setup-merge-daemon.sh` is
+  installed/running; then reconnect with bonding mode "stream".
 
 ## Next actions
-1. USER VERIFICATION of v0.6.0: graphs render without needing a resize;
-   "Check exit IP" is safe; Routing tab import works (plain .txt or
-   v2rayN JSON); Settings → Network → merge policy "lowest-latency" now
-   actually engages (check per-link spread on Status).
+1. USER VERIFICATION of v0.6.2 stream bonding: patch the VM
+   (setup-xray-reality.sh without FORCE), confirm the daemon, connect in
+   stream mode — expect "carrier <name>: live" lines and BOTH NICs active
+   on one download (Status per-adapter graphs).
 2. Watch the v0.6.0 release run (tag push) — verify assets like v0.5.0/v0.5.1.
 3. Backlog unchanged: weighted carrier scheduling (D17 §4), subscription
    auto-update, vmess validation, profiles.json locking, engine log

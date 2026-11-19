@@ -1054,7 +1054,9 @@ pub fn adapters(app: &App) -> Element<'_> {
              adapter gets its own engine bound to that adapter (sendThrough). New \
              connections spread round-robin across them (Settings → merge policy); \
              bonding mode \"stream\" (Settings → Advanced) splits every connection's \
-             BYTES across them and needs mt-merge-server on the tunnel server. \
+             BYTES across them and needs mt-merge-server on the tunnel server \
+             (plus an Xray finalRules allow for the merge port — re-run \
+             server/setup-xray-reality.sh on the VM). \
              Expand a row (▸, or press the adapter's name on the Status tab) \
              for that adapter's live traffic graph. No selection \
              = a single link and Windows picks the route.",
@@ -1347,8 +1349,9 @@ pub fn settings(app: &App) -> Element<'_> {
              every connection are split across ALL ticked adapters at once and \
              re-merged by mt-merge-server on the tunnel server — one download \
              uses both NICs simultaneously; needs the merge daemon (setup \
-             script in the release zip, port below) and falls back to \
-             per-connection with a log line when it is unreachable.",
+             script in the release zip, port below) and an Xray finalRules \
+             allow for that port on the server (re-run server/setup-xray-reality.sh) \
+             and falls back to per-connection with a log line when it is unreachable.",
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant),
@@ -1384,7 +1387,7 @@ pub fn settings(app: &App) -> Element<'_> {
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center),
-        text("stream mode splits every connection's bytes across the bonded adapters and merges them on the server (needs the mt-merge-server daemon; falls back to per-connection when unreachable)")
+        text("stream mode splits every connection's bytes across the bonded adapters and merges them on the server (needs the mt-merge-server daemon and an Xray finalRules allow for the merge port on the server — re-run server/setup-xray-reality.sh; falls back to per-connection when unreachable)")
             .size(ts.body_s.size)
             .color(s.on_surface_variant),
     ]

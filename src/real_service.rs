@@ -944,7 +944,12 @@ impl RealService {
                         // Never black-hole (D17 §5): per-connection mode.
                         self.core.emit(ServiceEvent::LogLine(format!(
                             "WARN  stream bonding unavailable ({e}) — per-connection \
-                             spreading instead; is mt-merge-server running on the server?"
+                             spreading instead. Likely causes: mt-merge-server not \
+                             running on the tunnel server, or the server's Xray \
+                             freedom policy blocks the merge port (Xray 26.x blackholes \
+                             loopback targets from VLESS by default). Fix on the VM: \
+                             sudo bash server/setup-xray-reality.sh (idempotently patches \
+                             the Xray finalRules allow) + sudo bash server/setup-merge-daemon.sh"
                         )));
                         links
                     }

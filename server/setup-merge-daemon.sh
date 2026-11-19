@@ -127,6 +127,13 @@ cat <<EOF
 [setup] ============================== DONE ==============================
 [setup] mt-merge-server is running on 127.0.0.1:$PORT.
 
+[setup] REMINDER: the server's Xray must ALLOW dialing 127.0.0.1:$PORT from
+[setup] the tunnel (Xray 26.x blackholes loopback targets from VLESS by
+[setup] default). server/setup-xray-reality.sh writes that finalRules allow
+[setup] automatically (re-run it without FORCE to patch an existing install;
+[setup] credentials are kept). Symptom if it is missing: stream bonding
+[setup] "unavailable" or a black-holed tunnel while per-connection works.
+
 [setup] On the Windows machine (MultiTunnel v0.5.0+):
 [setup]   Settings -> Advanced -> bonding mode: "stream"
 [setup]   Settings -> Advanced -> server merge port: $PORT

@@ -168,6 +168,19 @@ stream granularity:
   changes) or `stream`. Stream mode falls back to per-connection with a
   log line when the daemon is unreachable — never a black hole.
 
+**Server requirement (v0.6.2):** the tunnel server's Xray must ALLOW the
+merge target. Xray 26.x's freedom outbound blackholes loopback/private
+targets dialed from VLESS by default (a server-side SSRF guard) — that
+silently killed stream bonding (carriers "connected" but every byte
+vanished) while per-connection kept working. `server/setup-xray-reality.sh`
+now writes the narrow `finalRules` allow (`127.0.0.1:<merge port>`, tcp)
+on fresh installs, and re-running it without FORCE idempotently patches
+an EXISTING install in place (credentials untouched, config validated
+with `xray run -test`, backup kept). The client side demands a
+PING/PONG round trip per carrier before it trusts it, so a dead merge
+path now fails loudly into the per-connection fallback instead of
+black-holing.
+
 The Status tab verifies the whole path live: one row per carrier (RTT,
 wire bytes), a Task-Manager-style bandwidth graph in a fixed-height card
 (scales with the window width) with a color-coded legend (down =

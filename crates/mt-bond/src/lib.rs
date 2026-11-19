@@ -33,7 +33,7 @@ pub use daemon::{serve, BOND_IDLE_GC};
 pub use endpoint::{
     CarrierSnapshot, APP_BACKLOG_CAP, CARRIER_RESPAWN_ATTEMPTS, CARRIER_RESPAWN_BACKOFF,
     DIAL_TIMEOUT, MAX_SESSIONS_PER_BOND, PENDING_OPEN_TIMEOUT, PING_INTERVAL, PONG_TIMEOUT,
-    REORDER_CAP, STALL_TIMEOUT, SWEEP_INTERVAL, WRITER_QUEUE,
+    REORDER_CAP, STALL_TIMEOUT, SWEEP_INTERVAL, VERIFY_PONG_TIMEOUT, WRITER_QUEUE,
 };
 pub use frame::{
     decode_header, decode_target, encode_target, read_frame, write_frame, CloseReason, Frame, Kind,

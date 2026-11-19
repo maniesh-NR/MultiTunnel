@@ -6,6 +6,9 @@
 #     (the version is never hardcoded in this script),
 #   - generates a fresh client UUID, X25519 key pair and REALITY shortId,
 #   - writes the server config to $INSTALL_ROOT/etc/xray/config.json,
+#     including a NARROW freedom finalRules allow for the stream-bonding
+#     merge daemon (Xray 26.x blackholes loopback targets dialed from
+#     VLESS by default — without the allow, stream bonding is dead),
 #   - installs a hardened systemd unit (User=nobody) and starts it,
 #   - prints the firewall checklist for this VM (GCP rule + netfilter-persistent)
 #     and a READY-TO-PASTE client block matching the repo's config.example.json.
@@ -27,9 +30,18 @@
 #   INSTALL_ROOT  Optional. Installation prefix (default /usr/local). Files:
 #                 $INSTALL_ROOT/bin/xray, $INSTALL_ROOT/share/xray/*.dat,
 #                 $INSTALL_ROOT/etc/xray/config.json.
+#   MERGE_PORT    Optional. The stream-bonding merge-daemon port the freedom
+#                 outbound must ALLOW dialing on loopback (default 7443 —
+#                 must match setup-merge-daemon.sh --port).
 #   FORCE         Optional. FORCE=1 overwrites an existing config — and
 #                 REGENERATES every credential (the old client block stops
 #                 working; paste the newly printed one).
+#
+# EXISTING INSTALLATIONS: re-running WITHOUT FORCE does NOT regenerate
+# credentials — it only (idempotently) patches the freedom finalRules allow
+# for MERGE_PORT into the existing config (validated with 'xray run -test',
+# backup kept), then restarts xray. That is the v0.6.2 stream-bonding fix
+# path: run it again on a VM whose stream bonding black-holes.
 #
 # The script never pipes anything into bash (no curl|bash): the release zip is
 # downloaded to a temp dir, integrity-checked, extracted, and only then moved
@@ -46,7 +58,8 @@ die()  { printf '[setup] ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
   cat <<'EOF'
 Usage: sudo DOMAIN=<your-gateway-domain> [PORT=8443] [DEST=127.0.0.1:443] \
-         [INSTALL_ROOT=/usr/local] [FORCE=1] bash server/setup-xray-reality.sh
+         [INSTALL_ROOT=/usr/local] [MERGE_PORT=7443] [FORCE=1] \
+         bash server/setup-xray-reality.sh
 
 Environment:
   DOMAIN        REQUIRED  existing gateway domain whose TLS certificate the
@@ -54,8 +67,14 @@ Environment:
   PORT          optional  VLESS listen port (default 8443)
   DEST          optional  REALITY dest, default 127.0.0.1:443 (the gateway)
   INSTALL_ROOT  optional  install prefix (default /usr/local, must be absolute)
+  MERGE_PORT    optional  loopback port the freedom outbound must ALLOW for
+                          the stream-bonding merge daemon (default 7443;
+                          must match setup-merge-daemon.sh --port)
   FORCE         optional  1 = overwrite an existing xray config (regenerates
-                          ALL credentials — the old client block dies)
+                          ALL credentials — the old client block dies).
+                          WITHOUT FORCE an existing config is only
+                          idempotently PATCHED with the merge-port finalRules
+                          allow (credentials are kept).
 
 Example:
   sudo DOMAIN=tunnel.example.org PORT=8443 bash setup-xray-reality.sh
@@ -79,6 +98,7 @@ DOMAIN="${DOMAIN:-}"
 PORT="${PORT:-8443}"
 DEST="${DEST:-127.0.0.1:443}"
 INSTALL_ROOT="${INSTALL_ROOT:-/usr/local}"
+MERGE_PORT="${MERGE_PORT:-7443}"
 FORCE="${FORCE:-0}"
 
 [ -n "$DOMAIN" ] || { usage >&2; die "DOMAIN is required (the gateway domain whose TLS certificate REALITY borrows)"; }
@@ -121,6 +141,14 @@ case "$FORCE" in
   *) die "FORCE must be 0 or 1; got: $FORCE" ;;
 esac
 
+# MERGE_PORT: the stream-bonding merge-daemon port the freedom outbound must
+# allow dialing on loopback (Xray 26.x default safety policy blackholes
+# loopback targets from VLESS otherwise — stream bonding would be dead).
+printf '%s' "$MERGE_PORT" | grep -Eq '^[1-9][0-9]{0,4}$' || die "MERGE_PORT must be a number 1-65535; got: $MERGE_PORT"
+if [ "$MERGE_PORT" -lt 1 ] || [ "$MERGE_PORT" -gt 65535 ]; then
+  die "MERGE_PORT must be between 1 and 65535; got: $MERGE_PORT"
+fi
+
 # ------------------------------------------------------------ environment ----
 
 [ "$(id -u)" -eq 0 ] || die "must run as root — try: sudo DOMAIN=$DOMAIN bash \"$0\""
@@ -145,15 +173,84 @@ API_LATEST="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 REDIRECT_LATEST="https://github.com/XTLS/Xray-core/releases/latest"
 DL_BASE="https://github.com/XTLS/Xray-core/releases/download"
 
-if [ -e "$CONFIG_PATH" ]; then
-  if [ "$FORCE" != "1" ]; then
-    die "config already exists: $CONFIG_PATH
-  To regenerate it (NEW uuid, NEW keys, NEW shortId — the old client block
-  stops working), re-run with FORCE=1:
-    sudo FORCE=1 DOMAIN=$DOMAIN PORT=$PORT bash \"$0\"
-  If you only lost the client block, copy it from the machine where you
-  first ran this script instead."
+if [ -e "$CONFIG_PATH" ] && [ "$FORCE" != "1" ]; then
+  # ------------------------------------------------------------- patch mode ----
+  # v0.6.2: re-running WITHOUT FORCE no longer dies — it idempotently patches
+  # the freedom finalRules allow for the merge port into the EXISTING config
+  # (credentials untouched). This is the stream-bonding fix path for a VM
+  # whose Xray (26.x+) blackholes the loopback merge target by default.
+  [ -x "$XRAY_BIN" ] || die "config exists but $XRAY_BIN is missing — run a full install first (or FORCE=1)"
+  command -v python3 >/dev/null 2>&1 || die "python3 not found — needed to patch the existing config.\n  Manual patch: add to the freedom outbound's settings:\n    \"finalRules\": [ { \"action\": \"allow\", \"network\": \"tcp\", \"ip\": [\"127.0.0.1/32\"], \"port\": \"$MERGE_PORT\" } ]"
+
+  ALREADY=$(MERGE_PORT="$MERGE_PORT" CONFIG_PATH="$CONFIG_PATH" python3 - <<'PYEOF'
+import json, os
+p = os.environ["CONFIG_PATH"]; port = os.environ["MERGE_PORT"]
+cfg = json.load(open(p))
+rule = {"action": "allow", "network": "tcp", "ip": ["127.0.0.1/32"], "port": str(port)}
+for o in cfg.get("outbounds", []):
+    if o.get("protocol") == "freedom":
+        for r in (o.get("settings", {}) or {}).get("finalRules", []) or []:
+            if (r.get("action"), r.get("network")) == ("allow", "tcp") \
+               and r.get("ip") == rule["ip"] and str(r.get("port", "")) == rule["port"]:
+                print("yes"); break
+PYEOF
+)
+  if [ "$ALREADY" = "yes" ]; then
+    log "finalRules allow for 127.0.0.1:$MERGE_PORT already present — nothing to do"
+    log "credentials unchanged; client block unchanged"
+    exit 0
   fi
+
+  BACKUP="$CONFIG_PATH.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+  cp -a "$CONFIG_PATH" "$BACKUP"
+  log "backed up $CONFIG_PATH -> $BACKUP"
+
+  MERGE_PORT="$MERGE_PORT" CONFIG_PATH="$CONFIG_PATH" python3 - <<'PYEOF'
+import json, os
+p = os.environ["CONFIG_PATH"]; port = os.environ["MERGE_PORT"]
+cfg = json.load(open(p))
+rule = {"action": "allow", "network": "tcp", "ip": ["127.0.0.1/32"], "port": str(port)}
+patched = False
+for o in cfg.get("outbounds", []):
+    if o.get("protocol") == "freedom":
+        settings = o.setdefault("settings", {})
+        fr = settings.setdefault("finalRules", [])
+        fr.insert(0, rule)
+        patched = True
+if not patched:
+    raise SystemExit("[patch] no freedom outbound found in the existing config")
+json.dump(cfg, open(p, "w"), indent=2)
+print("[patch] finalRules allow inserted for 127.0.0.1:" + port)
+PYEOF
+
+  log "validating the patched config with 'xray run -test'..."
+  if ! XRAY_LOCATION_ASSET="$ASSET_DIR" "$XRAY_BIN" run -test -c "$CONFIG_PATH" >/dev/null 2>&1; then
+    cp -a "$BACKUP" "$CONFIG_PATH"
+    die "the patched config does not pass 'xray run -test' (old Xray without finalRules?) —\n  the original config was RESTORED from $BACKUP.\n  Upgrade Xray (re-run this script with FORCE=1 to also update the binary —\n  WARNING: FORCE=1 regenerates credentials) or patch manually."
+  fi
+  log "config validated"
+
+  log "restarting xray..."
+  systemctl restart xray
+  sleep 2
+  systemctl is-active --quiet xray || die "xray service is not active after the patch — see: journalctl -u xray -e"
+  cat <<EOF
+
+[setup] ============================ PATCHED ============================
+[setup] The freedom outbound now ALLOWS loopback tcp/$MERGE_PORT (the
+[setup] stream-bonding merge-daemon port) — Xray 26.x blackholes loopback
+[setup] targets from VLESS by default, which silently killed stream bonding.
+[setup] Credentials are UNCHANGED; the client block is unchanged.
+[setup] On the VM also ensure the daemon runs on the SAME port:
+[setup]   sudo bash server/setup-merge-daemon.sh --port $MERGE_PORT
+[setup] Then reconnect MultiTunnel on Windows (Settings -> Advanced ->
+[setup] bonding mode "stream"). Backup: $BACKUP
+[setup] ======================================================================
+EOF
+  exit 0
+fi
+
+if [ -e "$CONFIG_PATH" ]; then
   warn "FORCE=1 — $CONFIG_PATH will be OVERWRITTEN with fresh credentials"
 fi
 
@@ -287,7 +384,17 @@ cat > "$CONFIG_PATH" <<EOF
   "outbounds": [
     {
       "tag": "direct",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "finalRules": [
+          {
+            "action": "allow",
+            "network": "tcp",
+            "ip": ["127.0.0.1/32"],
+            "port": "$MERGE_PORT"
+          }
+        ]
+      }
     }
   ]
 }
@@ -302,9 +409,29 @@ chown root:nogroup "$CONFIG_PATH"
 
 log "validating the config with 'xray run -test'..."
 if ! XRAY_LOCATION_ASSET="$ASSET_DIR" "$XRAY_BIN" run -test -c "$CONFIG_PATH" >/dev/null 2>&1; then
-  warn "'xray run -test' FAILED — its output follows:"
-  XRAY_LOCATION_ASSET="$ASSET_DIR" "$XRAY_BIN" run -test -c "$CONFIG_PATH" \
-    || die "the generated config does not pass 'xray run -test' (this is a bug in the script — please report it)"
+  # An Xray older than the finalRules feature rejects the unknown field.
+  # Degrade honestly: strip finalRules, re-validate, and warn — per-connection
+  # works there, but stream bonding will need an Xray upgrade.
+  warn "'xray run -test' FAILED (finalRules unsupported by this Xray?) — retrying without them"
+  python3 - "$CONFIG_PATH" <<'PYEOF'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+for o in cfg.get("outbounds", []):
+    if o.get("protocol") == "freedom":
+        (o.get("settings", {}) or {}).pop("finalRules", None)
+        if o.get("settings") == {}:
+            o.pop("settings", None)
+json.dump(cfg, open(p, "w"), indent=2)
+PYEOF
+  if ! XRAY_LOCATION_ASSET="$ASSET_DIR" "$XRAY_BIN" run -test -c "$CONFIG_PATH" >/dev/null 2>&1; then
+    warn "'xray run -test' FAILED again — its output follows:"
+    XRAY_LOCATION_ASSET="$ASSET_DIR" "$XRAY_BIN" run -test -c "$CONFIG_PATH" \
+      || die "the generated config does not pass 'xray run -test' (this is a bug in the script — please report it)"
+  fi
+  warn "finalRules stripped (old Xray): per-connection is fine, but stream \
+bonding needs an Xray that supports freedom finalRules — upgrade Xray and \
+re-run this script"
 fi
 log "config validated"
 
@@ -392,6 +519,13 @@ cat <<EOF
 [setup] Service commands:
 [setup]   systemctl status xray
 [setup]   journalctl -u xray -f
+
+[setup] --------------------- STREAM BONDING (merge daemon) -------------------
+[setup] The freedom outbound ALLOWS loopback tcp/$MERGE_PORT (Xray 26.x
+[setup] blackholes loopback targets from VLESS by default — this allow is
+[setup] what keeps stream bonding alive). For stream bonding also run:
+[setup]   sudo bash server/setup-merge-daemon.sh --port $MERGE_PORT
+[setup] The client's "server merge port" setting must match $MERGE_PORT.
 
 [setup] -------------------------- FIREWALL CHECKLIST -------------------------
 [setup] Two layers must allow tcp/$PORT INBOUND before the client can connect.

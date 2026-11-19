@@ -74,6 +74,13 @@ pub const CLOSE_FLUSH_TIMEOUT: Duration = Duration::from_secs(3);
 pub const CARRIER_RESPAWN_ATTEMPTS: u32 = 3;
 /// Client: backoff between respawn attempts.
 pub const CARRIER_RESPAWN_BACKOFF: Duration = Duration::from_secs(2);
+/// Client: how long a fresh carrier has to prove itself with a PING/PONG
+/// round trip before it is considered dead (S11). Xray's SOCKS inbound
+/// replies "connected" BEFORE the upstream tunnel is established, so a
+/// just-dialed carrier is PHANTOM-LIVE when the merge daemon is absent or
+/// the server's Xray freedom policy blackholes the merge port — bytes
+/// queued into it vanish. The pong is the honest "carrier works" signal.
+pub const VERIFY_PONG_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Inbound message delivered to a session consumer (app side or daemon pump).
 #[derive(Debug)]
@@ -122,6 +129,10 @@ struct Carrier {
     name: String,
     tx: mpsc::Sender<Vec<u8>>,
     alive: AtomicBool,
+    /// S11: true once this carrier PROVED itself with a PING/PONG round
+    /// trip (client side). The server marks carriers verified at attach
+    /// (it has no dial-phantom problem: freedom hands it the stream).
+    verified: AtomicBool,
     rtt_ms: AtomicU32,
     /// Wire bytes written (header + payload) — status accounting.
     bytes_up: AtomicU64,
@@ -137,6 +148,7 @@ impl Carrier {
             name,
             tx,
             alive: AtomicBool::new(true),
+            verified: AtomicBool::new(false),
             rtt_ms: AtomicU32::new(0),
             bytes_up: AtomicU64::new(0),
             bytes_down: AtomicU64::new(0),
@@ -146,6 +158,13 @@ impl Carrier {
 
     fn alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
+    }
+
+    /// Schedulable: the transport is up AND the carrier proved its tunnel
+    /// (client verify-pong). Frames are never queued into a carrier that
+    /// has not proven the merge daemon actually receives them.
+    fn usable(&self) -> bool {
+        self.alive() && self.verified.load(Ordering::Relaxed)
     }
 }
 
@@ -232,10 +251,13 @@ pub(crate) struct Endpoint {
     /// the sweeper consumes these).
     death_tx: mpsc::UnboundedSender<(usize, &'static str)>,
     death_rx: Mutex<Option<mpsc::UnboundedReceiver<(usize, &'static str)>>>,
-    /// Client only: the links carriers are dialed through + merge target.
+    /// Client only: links carriers are dialed through + merge target.
     links: Vec<Arc<dyn Outbound>>,
     merge_target: Option<mt_net::TargetAddr>,
     next_ping_seq: AtomicU64,
+    /// Verify pings in flight: ping seq → carrier idx (S11). A pong
+    /// carrying that seq proves THAT carrier's tunnel is bidirectional.
+    pending_verify: Mutex<HashMap<u64, usize>>,
 }
 
 impl Endpoint {
@@ -261,6 +283,7 @@ impl Endpoint {
             links,
             merge_target: Some(merge_target),
             next_ping_seq: AtomicU64::new(0),
+            pending_verify: Mutex::new(HashMap::new()),
         })
     }
 
@@ -282,6 +305,7 @@ impl Endpoint {
             links: Vec::new(),
             merge_target: None,
             next_ping_seq: AtomicU64::new(0),
+            pending_verify: Mutex::new(HashMap::new()),
         })
     }
 
@@ -351,6 +375,30 @@ impl Endpoint {
         });
         let this = Arc::clone(self);
         tokio::spawn(async move { this.reader_task(idx, rh).await });
+        if self.is_server {
+            // The server has no dial-phantom problem: freedom handed it the
+            // stream, so the tunnel demonstrably exists. Verified at attach.
+            carrier.verified.store(true, Ordering::Relaxed);
+        } else {
+            // S11 honest carriers: queue a verify PING right behind the
+            // HELLO (same writer, so in-order on this carrier). The carrier
+            // becomes schedulable only when ITS pong returns — matched by
+            // seq, wherever the daemon schedules the reply. Until then the
+            // carrier is phantom-live: Xray's SOCKS inbound answered the
+            // dial, but nothing proves the merge daemon receives frames.
+            let seq = self.next_ping_seq.fetch_add(1, Ordering::Relaxed);
+            lock(&self.pending_verify).insert(seq, idx);
+            let ping = Frame::control(
+                Kind::Ping,
+                self.bond_id,
+                seq,
+                now_millis().to_le_bytes().to_vec(),
+            )
+            .encode_to_vec();
+            if carrier.tx.send(ping).await.is_err() {
+                let _ = self.death_tx.send((idx, "verify ping failed"));
+            }
+        }
         Ok(idx)
     }
 
@@ -375,6 +423,44 @@ impl Endpoint {
             }
         }
         self.attach_carrier(stream, name, Some(idx)).await
+    }
+
+    /// Client: wait until every slot in `slots` has proven itself with a
+    /// verify-pong (or the budget expires). Returns the VERIFIED subset in
+    /// slot order. Callers treat the unverified remainder as dead — bytes
+    /// queued into them would vanish into a tunnel that never came up.
+    pub(crate) async fn await_verified(
+        self: &Arc<Self>,
+        slots: &[usize],
+        budget: Duration,
+    ) -> Vec<usize> {
+        let deadline = Instant::now() + budget;
+        loop {
+            let verified: Vec<usize> = slots
+                .iter()
+                .copied()
+                .filter(|i| self.carrier_of(*i).is_some_and(|c| c.usable()))
+                .collect();
+            if verified.len() == slots.len() || Instant::now() >= deadline {
+                return verified;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Client: abandon a dialed-but-unproven carrier slot — drop its verify
+    /// registration, mark it dead. Unlike `carrier_died` this does NOT
+    /// replay frames (nothing was ever scheduled onto an unverified
+    /// carrier) and does NOT spawn another respawn task (the caller —
+    /// ensure_carriers or respawn_carrier — owns the retry loop).
+    pub(crate) fn abandon_unverified(&self, idx: usize) {
+        {
+            let mut pv = lock(&self.pending_verify);
+            pv.retain(|_, &mut v| v != idx);
+        }
+        if let Some(c) = self.carrier_of(idx) {
+            c.alive.store(false, Ordering::Relaxed);
+        }
     }
 
     /// Carrier writer: drains queued encoded frames to the socket.
@@ -424,9 +510,10 @@ impl Endpoint {
                 f = frame::read_frame(&mut r) => match f {
                     Ok(f) => f,
                     Err(e) => {
-                        if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                            tracing::debug!(carrier = idx, error = %e, "bond carrier read failed");
-                        }
+                        // An EOF is DIAGNOSTIC GOLD (S11 field failure): it
+                        // means the peer (or the tunnel under us) closed our
+                        // write direction — never swallow it silently.
+                        tracing::debug!(carrier = idx, error = %e, "bond carrier read ended");
                         let _ = self.death_tx.send((idx, "read failed"));
                         break;
                     }
@@ -471,6 +558,16 @@ impl Endpoint {
                     let rtt = now_millis().saturating_sub(sent).min(u32::MAX as u64) as u32;
                     if let Some(c) = self.carrier_of(_carrier_idx) {
                         c.rtt_ms.store(rtt, Ordering::Relaxed);
+                    }
+                }
+                // S11: a pong carrying a VERIFY ping's seq proves that
+                // carrier's tunnel end-to-end (the daemon exists, receives
+                // frames, and answers) — wherever the reply rode back.
+                let verified_idx = lock(&self.pending_verify).remove(&frame.seq);
+                if let Some(v_idx) = verified_idx {
+                    if let Some(c) = self.carrier_of(v_idx) {
+                        c.verified.store(true, Ordering::Relaxed);
+                        tracing::debug!(carrier = v_idx, "bond carrier verified (pong)");
                     }
                 }
             }
@@ -728,10 +825,12 @@ impl Endpoint {
         let _ = self.schedule_bytes(close).await;
     }
 
-    /// Pick a live carrier (round-robin over the live set, D17 §4).
+    /// Pick a live VERIFIED carrier (round-robin over the live set, D17 §4).
+    /// Unverified (phantom-live) carriers are never schedulable: bytes
+    /// queued into them are lost when the tunnel never actually came up.
     fn pick_carrier(&self) -> Option<(usize, Arc<Carrier>)> {
         let cs = self.carriers.read().expect("carrier lock");
-        let live: Vec<&Arc<Carrier>> = cs.iter().filter(|c| c.alive()).collect();
+        let live: Vec<&Arc<Carrier>> = cs.iter().filter(|c| c.usable()).collect();
         if live.is_empty() {
             return None;
         }
@@ -748,8 +847,8 @@ impl Endpoint {
             .expect("carrier lock")
             .get(carrier_idx)
             .cloned()
-            .filter(|c| c.alive())
-            .ok_or_else(|| anyhow::anyhow!("carrier {carrier_idx} not alive"))?;
+            .filter(|c| c.usable())
+            .ok_or_else(|| anyhow::anyhow!("carrier {carrier_idx} not usable"))?;
         carrier
             .tx
             .send(bytes)
@@ -857,13 +956,27 @@ impl Endpoint {
             }
             match link.connect(&target).await {
                 Ok(stream) => {
-                    tracing::info!(carrier = idx, attempt, "bond carrier respawned");
+                    // The DIAL succeeding is NOT enough (S11): Xray's SOCKS
+                    // inbound answers before the upstream exists, so the
+                    // slot may be phantom-live. Demand a verify-pong before
+                    // declaring the respawn a success.
                     if self
                         .attach_carrier(stream, name.clone(), Some(idx))
                         .await
                         .is_ok()
                     {
-                        return;
+                        let verified = self.await_verified(&[idx], VERIFY_PONG_TIMEOUT).await;
+                        if !verified.is_empty() {
+                            tracing::info!(carrier = idx, attempt, "bond carrier respawned");
+                            return;
+                        }
+                        tracing::warn!(
+                            carrier = idx,
+                            attempt,
+                            "bond carrier respawn dial answered but the merge daemon \
+                             never ponged — treating the slot as down"
+                        );
+                        self.abandon_unverified(idx);
                     }
                 }
                 Err(e) => {
@@ -979,7 +1092,9 @@ impl Endpoint {
             .map(|c| CarrierSnapshot {
                 idx: c.idx,
                 name: c.name.clone(),
-                alive: c.alive(),
+                // Honest status (S11): a dialed-but-unproven carrier is NOT
+                // alive — the GUI must not show a phantom carrier as up.
+                alive: c.usable(),
                 rtt_ms: (c.rtt_ms.load(Ordering::Relaxed) > 0)
                     .then(|| c.rtt_ms.load(Ordering::Relaxed)),
                 bytes_up: c.bytes_up.load(Ordering::Relaxed),
@@ -988,13 +1103,13 @@ impl Endpoint {
             .collect()
     }
 
-    /// Number of live carriers.
+    /// Number of usable (alive AND verified) carriers.
     pub fn live_carriers(&self) -> usize {
         self.carriers
             .read()
             .expect("carrier lock")
             .iter()
-            .filter(|c| c.alive())
+            .filter(|c| c.usable())
             .count()
     }
 
@@ -1003,14 +1118,14 @@ impl Endpoint {
         lock(&self.sessions).len()
     }
 
-    /// True when no carrier is alive.
+    /// True when no carrier is usable (alive AND verified).
     pub fn all_carriers_dead(&self) -> bool {
         !self
             .carriers
             .read()
             .expect("carrier lock")
             .iter()
-            .any(|c| c.alive())
+            .any(|c| c.usable())
     }
 
     /// Daemon-side: take the inbound receiver of a remote session (exactly
