@@ -53,9 +53,12 @@
      `./rustup-init -y --profile minimal --default-toolchain stable
      --component rustfmt,clippy`; `rustup target add
      x86_64-pc-windows-gnu`. (Rust 1.100.0.)
-  2. zig: `pip3 install ziglang==0.14.1` (wheel also cached at
-     ../tools/pypkgs — PYTHONPATH there works too);
-     `cargo install cargo-zigbuild`.
+  2. zig: `pip3 install ziglang==0.14.1` (NETWORK install — the
+     ../tools/pypkgs EXTRACTION is INCOMPLETE: its ziglang/lib/ holds
+     only tsan/ubsan/zig.h, so the cached `zig` binary aborts with
+     "unable to find zig installation directory" on any real compile;
+     `python3 -m ziglang version` alone still works and LIES);
+     `cargo install cargo-zigbuild --locked`.
   3. Vendored-iced builds just work ([patch.crates-io] in the root
      Cargo.toml; vendor/ is committed).
 - Cross build: CARGO_TARGET_DIR=/tmp/mt-target cargo zigbuild --release
@@ -63,9 +66,18 @@
   first if disk-tight).
 - GUI visual rig: python3 ../scripts/gui_drive.py --app
   /tmp/mt-target/debug/mt-app --script "..." (verbs: wait|shot|click|
-  type|key|resize). Needs: Xvfb (apt, preinstalled), python-xlib
-  (`pip3 install python-xlib`), ffmpeg (preinstalled), and
-  libxkbcommon-x11 + libxcb-xkb extracted into /tmp/xkblibs (Debian debs,
+  type|key|scroll|resize; scroll:X,Y[,up][,N] = XTEST wheel).
+  HiDPI repro: --env WINIT_X11_SCALE_FACTOR=1.5 + --size 2080x1750
+  (an sf=1.5 window defaults to 1536x1152 PHYSICAL — a smaller screen
+  clamps it and the Status graph card collapses to zero height).
+  sf=1.5 control coordinates (mock, resized 2000x1700): connect toggle
+  ≈(285,350), Check-exit-IP ≈(324,552), adapter name rows ≈(293,1333)+
+  — RE-DERIVE per run (scroll drift); pixel-scan the purple name text
+  (primary #6750A4-family bands) or the tonal button (232,222,248)
+  instead of trusting VLM coordinates. Needs: Xvfb (apt, preinstalled),
+  python-xlib (`pip3 install python-xlib`), ffmpeg (preinstalled), and
+  libxkbcommon-x11 + libxcb-xkb extracted into /tmp/xkblibs (Debian
+  debs, `apt-get download libxkbcommon-x11-0 libxcb-xkb1` +
   `dpkg-deb -x`) with LD_LIBRARY_PATH — the driver wires all of this
   itself. No WM runs under Xvfb: the driver calls SetInputFocus itself;
   typed paths should be cwd-relative (XTEST Shift-layer chars are

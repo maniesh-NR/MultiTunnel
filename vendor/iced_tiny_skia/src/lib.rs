@@ -36,6 +36,34 @@ use crate::graphics::compositor;
 use crate::graphics::text::{Editor, Paragraph};
 use crate::graphics::Viewport;
 
+/// Composes a canvas group's LOCAL transformation (logical-space offsets,
+/// e.g. the canvas widget's `with_translation(bounds.x, bounds.y)`) with
+/// the viewport scale factor, producing the transformation that maps
+/// LOCAL canvas coordinates to PHYSICAL pixels.
+///
+/// MultiTunnel patch (S10.1): upstream multiplied in the OTHER order —
+/// `group_transformation * scale` — which, under glam's `(a * b) · v =
+/// a · (b · v)` semantics, scales FIRST and then adds the UNSCALED
+/// offset: `physical = local·sf + offset`. The correct mapping is
+/// `physical = (local + offset)·sf = local·sf + offset·sf`. The two
+/// only coincide at `sf == 1`, so the bug was invisible at 100% DPI:
+/// on any HiDPI display (Windows 125%/150% scaling is the default on
+/// laptops) every canvas' content — the MultiTunnel bandwidth graph's
+/// grid, series and labels — landed `offset·(sf − 1)` px up and to the
+/// LEFT of its card, clipped by the (correctly computed) clip mask to
+/// a sliver at the card's top edge (the v0.6.0 "the axes of the graph
+/// jump to the upper left, out of bounds" report; pixel-reproduced in
+/// the Xvfb rig at `WINIT_X11_SCALE_FACTOR=1.5`). Note the clip mapping
+/// in `Renderer::draw` chains `rect * group * scale` left-to-right,
+/// which applies translate first and scale second — the correct order —
+/// so only these two composition sites needed the swap.
+fn group_transform(
+    group_transformation: Transformation,
+    scale_factor: f32,
+) -> Transformation {
+    Transformation::scale(scale_factor) * group_transformation
+}
+
 /// A [`tiny-skia`] graphics renderer for [`iced`].
 ///
 /// [`tiny-skia`]: https://github.com/RazrFalcon/tiny-skia
@@ -179,8 +207,12 @@ impl Renderer {
                     for primitive in group.as_slice() {
                         self.engine.draw_primitive(
                             primitive,
-                            group.transformation()
-                                * Transformation::scale(scale_factor),
+                            // MultiTunnel patch (S10.1): scale AFTER the
+                            // group offset — see `group_transform`.
+                            group_transform(
+                                group.transformation(),
+                                scale_factor,
+                            ),
                             pixels,
                             clip_mask,
                             clip_bounds,
@@ -204,8 +236,13 @@ impl Renderer {
                     for text in group.as_slice() {
                         self.engine.draw_text(
                             text,
-                            group.transformation()
-                                * Transformation::scale(scale_factor),
+                            // MultiTunnel patch (S10.1): same order fix as
+                            // the primitive groups above — canvas TEXT was
+                            // displaced identically on HiDPI.
+                            group_transform(
+                                group.transformation(),
+                                scale_factor,
+                            ),
                             pixels,
                             clip_mask,
                             clip_bounds,
@@ -416,4 +453,74 @@ impl core::svg::Renderer for Renderer {
 
 impl compositor::Default for Renderer {
     type Compositor = window::Compositor;
+}
+
+#[cfg(test)]
+mod multitunnel_tests {
+    use super::*;
+    use crate::core::Size;
+
+    /// MultiTunnel S10.1 regression: the composed group transform must map
+    /// LOCAL canvas coordinates to PHYSICAL pixels as
+    /// `(local + offset) · sf`. Upstream composed `group * scale`, which
+    /// under glam semantics scales first and adds the UNSCALED offset
+    /// (`local·sf + offset`) — every canvas at a non-identity scale factor
+    /// was displaced `offset·(sf − 1)` px up-left of its widget bounds
+    /// (the v0.6.0 HiDPI "graph axes jump out of bounds" bug).
+    #[test]
+    fn group_transform_scales_the_offset_too() {
+        // A canvas card whose top-left sits at logical (200, 300) in a
+        // 150%-scaled viewport.
+        let group = Transformation::translate(200.0, 300.0);
+        let sf = 1.5;
+
+        let t = group_transform(group, sf);
+
+        // Local origin -> physical card origin: (200, 300) * 1.5.
+        let origin = Point::ORIGIN * t;
+        assert_eq!(origin, Point::new(300.0, 450.0));
+
+        // A point 100 px into the canvas.
+        let inside = Point::new(100.0, 40.0) * t;
+        assert_eq!(inside, Point::new(450.0, 510.0));
+
+        // The scale factor must survive the composition (glyph
+        // rasterization reads `transformation.scale_factor()`).
+        assert_eq!(t.scale_factor(), sf);
+
+        // The WRONG order (upstream) for contrast: local·sf + offset.
+        let wrong = group * Transformation::scale(sf);
+        let wrong_origin = Point::ORIGIN * wrong;
+        assert_eq!(wrong_origin, Point::new(200.0, 300.0));
+        assert_ne!(wrong_origin, origin);
+    }
+
+    /// At scale factor 1 both orders coincide — the fix must not change
+    /// 100%-DPI rendering.
+    #[test]
+    fn group_transform_identity_at_scale_one() {
+        let group = Transformation::translate(123.0, 456.0);
+        assert_eq!(group_transform(group, 1.0), group);
+    }
+
+    /// The render-loop CLIP mapping (`rect * group * scale`, applied
+    /// left-to-right = translate first, scale second) must agree with
+    /// `group_transform` — the clip and the content it clips must be in
+    /// the same space.
+    #[test]
+    fn clip_mapping_agrees_with_group_transform() {
+        let group = Transformation::translate(200.0, 300.0);
+        let sf = 1.5;
+        let local_clip = Rectangle::new(Point::ORIGIN, Size::new(400.0, 200.0));
+
+        let clip = local_clip * group * Transformation::scale(sf);
+        let content_origin = Point::ORIGIN * group_transform(group, sf);
+
+        assert_eq!(
+            (clip.x, clip.y),
+            (content_origin.x, content_origin.y),
+            "clip and content origins must coincide: {clip:?} vs {content_origin:?}"
+        );
+        assert_eq!((clip.width, clip.height), (600.0, 300.0));
+    }
 }

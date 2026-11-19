@@ -1523,35 +1523,36 @@ mod tests {
         let service = Arc::new(crate::mock::MockService::new());
         let mut app = App::init_async(service, Flags::default()).await;
 
-        // Seed: mock-wifi selected, mock-ethernet not.
+        // Seed (D22): mock-wifi AND mock-ethernet bonded (the demo setup),
+        // cellular not.
         assert_eq!(app.adapters.len(), 3);
         assert!(app.adapters[0].selected);
-        assert!(!app.adapters[1].selected);
-
-        // Toggle ethernet on (draft dirty, not persisted).
-        drop(app.update(Message::AdapterToggled(1)));
         assert!(app.adapters[1].selected);
-        assert!(!app.adapters[1].view.selected, "draft only — not applied");
+        assert!(!app.adapters[2].selected);
 
-        // Apply persists both (service call directly — the established
-        // test idiom; the update task only wraps it in Task::perform).
-        let ids = ["mock-wifi", "mock-ethernet"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        // Toggle ethernet off (draft dirty, not persisted).
+        drop(app.update(Message::AdapterToggled(1)));
+        assert!(!app.adapters[1].selected);
+        assert!(app.adapters[1].view.selected, "draft only — not applied");
+
+        // Apply persists the narrower bond (service call directly — the
+        // established test idiom; the update task only wraps it in
+        // Task::perform).
+        let ids = ["mock-wifi"].iter().map(|s| s.to_string()).collect();
         app.service.set_bonded_adapters(ids).await.expect("apply");
         drop(app.update(Message::AdaptersSaved(Ok(()))));
         // The saved-handler chains a reload; drive the service call the
         // handler would perform and feed the result back.
         let views = app.service.adapters().await;
         drop(app.update(Message::AdaptersLoaded(views)));
-        assert!(app.adapters[0].selected && app.adapters[1].selected);
-        assert!(app.adapters[1].view.selected, "applied selection visible");
+        assert!(app.adapters[0].selected);
+        assert!(!app.adapters[1].selected);
+        assert!(!app.adapters[1].view.selected, "applied selection visible");
         assert!(
             app.adapters_status
                 .as_deref()
                 .unwrap_or("")
-                .contains("bonding across 2"),
+                .contains("bonding across 1"),
             "status line reports the applied selection"
         );
 

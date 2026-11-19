@@ -169,10 +169,12 @@ stream granularity:
   log line when the daemon is unreachable — never a black hole.
 
 The Status tab verifies the whole path live: one row per carrier (RTT,
-wire bytes), a Task-Manager-style bandwidth graph scaled to the window
-with a color-coded legend (down = primary, up = tertiary), per-adapter
-traffic graphs behind the arrow on every Adapters-tab row, and the Exit
-identity card (see below).
+wire bytes), a Task-Manager-style bandwidth graph in a fixed-height card
+(scales with the window width) with a color-coded legend (down =
+primary, up = tertiary), per-adapter traffic graphs — press an adapter's
+name in the Status tab's bottom card (or the arrow on any Adapters-tab
+row) to expand its own live chart — and the Exit identity card (see
+below).
 
 ## Exit identity (v0.5) — no hidden hops, verifiable in one click
 
@@ -233,7 +235,7 @@ bonding mode to `stream` (Advanced): the bytes of every connection are
 split across all ticked adapters and re-merged by `mt-merge-server` on
 the tunnel server — see "Stream bonding (v0.5)" above.
 
-## Rendering fixes (v0.6)
+## Rendering fixes (v0.6, v0.6.1)
 
 v0.5.1 shipped three rendering defects, all root-caused and fixed via
 surgical patches to the terminal iced 0.13 releases (vendored under
@@ -244,6 +246,18 @@ in the wrong coordinate space), canvas labels could render displaced
 `user-provided comparison function does not correctly implement a total
 order` (NaN damage rectangles + a non-total sort comparator in
 `iced_graphics::damage::group`).
+
+v0.6.1 fixes the one that survived HiDPI screens: at a display scale
+factor other than 100% (Windows' default 125%/150% on laptops) the
+render backend composed each canvas' translation and the viewport scale
+in the wrong order, displacing the whole graph — grid, series, labels —
+`offset × (scale − 1)` px up and left of its card ("the axes of the
+graph jump to the upper left, out of bounds", and the shifted canvas
+could collide with the exit-IP card above it). The Status graph now
+also lives in a fixed-height container so neighbouring cards (the
+exit-probe result) can never re-flow or share its lines, and the Status
+tab gained per-adapter graphs: press an adapter's name in the bottom
+card to expand its own live traffic chart.
 
 ## The v0.3 way: GUI + profiles (recommended)
 

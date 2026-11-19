@@ -83,7 +83,10 @@ impl MockService {
             // the second ticked adapter idle; see real_service D20).
             merge_policy: "round-robin".to_string(),
             autostart: false,
-            bonded_adapters: vec!["mock-wifi".to_string()],
+            // D22: both wired adapters bonded — mirrors the demo setup
+            // (round-robin default needs ≥2 ticked adapters to show its
+            // point) and gives both Status-tab adapter graphs traffic.
+            bonded_adapters: vec!["mock-wifi".to_string(), "mock-ethernet".to_string()],
             bond_mode: "per-connection".to_string(),
             merge_port: 7443,
             socks_port: 10808,
@@ -217,9 +220,13 @@ fn seed_rules() -> Vec<RuleView> {
 
 fn seed_links(rng0: u64) -> Vec<LinkStatus> {
     let jitter = |k: u64, base: u32| base + ((k % 25) as u32);
+    // D22: link names mirror the REAL engine's per-adapter links —
+    // "<profile> [<adapter>]" — so the GUI's per-adapter rate sampler
+    // (link_matches_adapter) attributes mock traffic the same way it
+    // does in production, and the Status tab's adapter graphs move.
     vec![
         LinkStatus {
-            name: "primary".to_string(),
+            name: "synthetic-reality [Wi-Fi]".to_string(),
             ok: true,
             latency_ms: Some(jitter(rng0 % 97, 38)),
             ewma_ms: Some(41.0),
@@ -228,7 +235,7 @@ fn seed_links(rng0: u64) -> Vec<LinkStatus> {
             bytes_down: 0,
         },
         LinkStatus {
-            name: "backup".to_string(),
+            name: "synthetic-reality [Ethernet]".to_string(),
             ok: true,
             latency_ms: Some(jitter(rng0 % 89, 92)),
             ewma_ms: Some(96.0),

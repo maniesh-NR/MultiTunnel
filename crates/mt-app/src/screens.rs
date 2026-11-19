@@ -147,10 +147,12 @@ enum ButtonKind {
 // Status
 // ---------------------------------------------------------------------------
 
-/// Status screen (S9 / D19): state card + server picker, live bandwidth
-/// graph (window-scaling, Task-Manager style), exit probe card, links.
-/// No outer scrollable — the graph grows with the window; the links list
-/// scrolls internally.
+/// Status screen (S9 / D19, D22): state card + server picker, live
+/// bandwidth graph in a FIXED-height container, exit probe card, and a
+/// bottom card with the tunnel links plus per-adapter rows (press an
+/// adapter's name to expand its own traffic graph).
+/// No outer scrollable — the graph keeps its size; only the bottom
+/// card scrolls.
 pub fn status(app: &App) -> Element<'_> {
     let s = app.theme.scheme;
     let ts = app.theme.ts;
@@ -263,7 +265,12 @@ pub fn status(app: &App) -> Element<'_> {
         .padding(8)
         .style(t3::card(s, s.surface_container_lowest))
         .width(Length::Fill)
-        .height(Length::FillPortion(3));
+        // D22: FIXED height (was FillPortion(3)) — the graph must be a
+        // stable, fixed container: growing neighbours (the exit-probe
+        // result appearing) used to re-flow it every time, and any canvas
+        // displacement immediately read as "axes out of bounds". The
+        // canvas inside still Fill-scales with the window WIDTH.
+        .height(Length::Fixed(STATUS_GRAPH_HEIGHT));
     let _ = util::fmt_bps; // rate labels live in graph.rs; kept for chips/tests
 
     // --- exit probe card (D18) ---------------------------------------------
@@ -435,14 +442,49 @@ pub fn status(app: &App) -> Element<'_> {
     }
     // NOTE: scrollable content must NOT fill the scroll axis (iced
     // layout rule) — the inner container shrinks; the scrollable itself
-    // owns the FillPortion height.
-    let links_scroll = scrollable(container(links_col).padding(12).width(Length::Fill))
-        .width(Length::Fill)
-        .height(Length::FillPortion(2));
-    let links_card = container(links_scroll)
+    // owns the Fill height.
+    //
+    // D22: the bottom card hosts BOTH the tunnel links and the
+    // per-adapter rows (press a name to expand that adapter's graph) in
+    // one scrollable that owns ALL remaining vertical space — links and
+    // adapters can grow without ever re-flowing the fixed graph card.
+    let mut bottom_col = column![].spacing(4).width(Length::Fill);
+    bottom_col = bottom_col.push(
+        text("Links")
+            .size(ts.title_s.size)
+            .color(s.on_surface_variant),
+    );
+    bottom_col = bottom_col.push(links_col);
+    bottom_col = bottom_col.push(vertical_space().height(Length::Fixed(8.0)));
+    bottom_col = bottom_col.push(
+        text("Adapters")
+            .size(ts.title_s.size)
+            .color(s.on_surface_variant),
+    );
+    bottom_col = bottom_col.push(
+        text("press an adapter's name for its live traffic graph")
+            .size(ts.label_s.size)
+            .color(s.on_surface_variant),
+    );
+    let mut adapters_col = column![].spacing(8);
+    if app.adapters.is_empty() {
+        adapters_col = adapters_col.push(
+            text("no adapters found — check the Adapters tab")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant),
+        );
+    }
+    for (i, r) in app.adapters.iter().enumerate() {
+        adapters_col = adapters_col.push(status_adapter_row(app, i, r));
+    }
+    bottom_col = bottom_col.push(adapters_col);
+
+    let bottom_scroll =
+        scrollable(container(bottom_col).padding(12).width(Length::Fill)).width(Length::Fill);
+    let bottom_card = container(bottom_scroll)
         .style(t3::card(s, s.surface_container_lowest))
         .width(Length::Fill)
-        .height(Length::FillPortion(2));
+        .height(Length::Fill);
 
     let _ = RATE_HISTORY_LEN; // (documented window; the App enforces it)
 
@@ -452,11 +494,123 @@ pub fn status(app: &App) -> Element<'_> {
             .width(Length::Fill),
         exit_card,
         graph_card,
-        links_card,
+        bottom_card,
     ]
     .spacing(12)
     .height(Length::Fill);
     scaffold_fixed(app, "Status", head.into())
+}
+
+/// Height of the Status screen's combined graph card (D22).
+pub const STATUS_GRAPH_HEIGHT: f32 = 240.0;
+
+/// One adapter row for the Status screen's bottom card (D22): the NAME is
+/// the expander (the user's ask), with live rate chips; expanding reveals
+/// that adapter's mini graph, fed by the same 1 s per-adapter sampler the
+/// Adapters tab uses.
+fn status_adapter_row<'a>(app: &'a App, i: usize, r: &'a crate::app::AdapterRow) -> Element<'a> {
+    let s = app.theme.scheme;
+    let ts = app.theme.ts;
+    let v = &r.view;
+
+    // The pressable name: arrow + name in one text button (no icon font
+    // in the zero-dep build — plain glyphs, same as the Adapters tab).
+    let arrow = if r.expanded { "▾" } else { "▸" };
+    let mut line = row![button(
+        row![
+            text(arrow.to_string())
+                .size(ts.body_m.size)
+                .color(s.primary),
+            text(v.name.clone()).size(ts.body_m.size).color(s.primary),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding(Padding::new(4.0).left(8.0).right(8.0))
+    .style(t3::text_button(s))
+    .on_press(Message::AdapterExpanded(i)),]
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
+
+    line = line.push(if v.up {
+        chip("up", app, s.secondary_container, s.on_secondary_container)
+    } else {
+        chip("down", app, s.error_container, s.on_error_container)
+    });
+    if !r.selected {
+        line = line.push(chip(
+            "not bonded",
+            app,
+            s.surface_container_high,
+            s.on_surface_variant,
+        ));
+    }
+    line = line.push(horizontal_space().width(Length::Fill));
+    // Live per-adapter rates: the newest 1 s sample, same formatting as
+    // the graph's own readout.
+    let last = app
+        .adapter_rates
+        .get(&v.id)
+        .and_then(|series| series.back());
+    if let Some(&(u, d)) = last {
+        line = line.push(chip(
+            format!("↑ {}", crate::graph::format_rate(u as f64)),
+            app,
+            s.surface_container_high,
+            s.on_surface_variant,
+        ));
+        line = line.push(chip(
+            format!("↓ {}", crate::graph::format_rate(d as f64)),
+            app,
+            s.surface_container_high,
+            s.on_surface_variant,
+        ));
+    }
+
+    let mut card_col = column![line].spacing(8);
+    if r.expanded {
+        let samples: Vec<crate::graph::Sample> = app
+            .adapter_rates
+            .get(&v.id)
+            .map(|series| series.iter().copied().collect())
+            .unwrap_or_default();
+        let carries_traffic = samples.iter().any(|(u, d)| *u > 0 || *d > 0);
+        let mini = RateGraph {
+            samples,
+            style: RateGraphStyle {
+                down_stroke: t3::col(s.primary),
+                down_fill: translucent(t3::col(s.primary), 0.25),
+                up_stroke: t3::col(s.tertiary),
+                up_fill: translucent(t3::col(s.tertiary), 0.25),
+                grid: translucent(t3::col(s.on_surface_variant), 0.30),
+                label: t3::col(s.on_surface_variant),
+            },
+            font_size: ts.label_s.size,
+            legend: false, // the Status graph owns the legend
+        }
+        .mini(110.0);
+        let hint = if !app.is_connected() {
+            "connect to see this adapter's tunnel traffic"
+        } else if !r.selected {
+            "not bonded — tick it on the Adapters tab to route tunnel traffic through it"
+        } else if !carries_traffic {
+            "bonded but idle — no tunnel bytes in the last 2 minutes"
+        } else {
+            "tunnel traffic through this adapter (↓ down / ↑ up, same colors \
+             as the combined graph)"
+        };
+        card_col = card_col.push(
+            container(mini)
+                .padding(Padding::new(4.0).left(28.0).right(4.0).bottom(4.0))
+                .style(t3::card(s, s.surface_container)),
+        );
+        card_col = card_col.push(text(hint).size(ts.label_s.size).color(s.on_surface_variant));
+    }
+    container(card_col)
+        .padding(10)
+        .style(t3::card(s, s.surface_container_low))
+        .width(Length::Fill)
+        .into()
 }
 
 // ---------------------------------------------------------------------------
@@ -901,7 +1055,8 @@ pub fn adapters(app: &App) -> Element<'_> {
              connections spread round-robin across them (Settings → merge policy); \
              bonding mode \"stream\" (Settings → Advanced) splits every connection's \
              BYTES across them and needs mt-merge-server on the tunnel server. \
-             Expand a row (▸) for that adapter's live traffic graph. No selection \
+             Expand a row (▸, or press the adapter's name on the Status tab) \
+             for that adapter's live traffic graph. No selection \
              = a single link and Windows picks the route.",
         )
         .size(ts.body_s.size)

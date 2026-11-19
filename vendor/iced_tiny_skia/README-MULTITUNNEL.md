@@ -1,9 +1,9 @@
 # MultiTunnel vendored iced_tiny_skia 0.13.0
 
 Vendored from crates.io `iced_tiny_skia 0.13.0` (terminal release of the
-0.13 line) with THREE surgical fixes — see the inline
-`MultiTunnel patch (S10)` comments in `src/layer.rs`, `src/lib.rs` and
-`src/geometry.rs`.
+0.13 line) with FOUR surgical fixes — see the inline
+`MultiTunnel patch (S10)` / `MultiTunnel patch (S10.1)` comments in
+`src/layer.rs`, `src/lib.rs` and `src/geometry.rs`.
 
 ## Why
 
@@ -48,6 +48,24 @@ throughput → series blank, resize round-trip → series appear).
 Map the group clip through the group transformation before intersecting
 (damage) / before building the clip mask (render). Regression tests live
 in `multitunnel_tests` modules at the bottom of each touched file.
+
+4. Transform composition order (src/lib.rs, S10.1): upstream composed
+   each canvas group's draw transform as
+   `group.transformation() * Transformation::scale(scale_factor)`. Under
+   glam's `(a * b) · v = a · (b · v)` semantics that scales FIRST and
+   then adds the UNSCALED canvas offset: `physical = local·sf + offset`
+   instead of the correct `(local + offset)·sf`. The two coincide only
+   at `sf == 1`, so every canvas on a HiDPI display (Windows 125%/150%
+   scaling — the default on laptops) was displaced
+   `offset × (sf − 1)` px up-and-left of its widget, clipped by the
+   correctly-computed clip mask to a sliver at the card's top edge —
+   the v0.6.0 "the axes of the graph jump to the upper left, out of
+   bounds" report (pixel-reproduced in the Xvfb rig at
+   `WINIT_X11_SCALE_FACTOR=1.5`; fixed by composing
+   `scale * group_transformation` via the `group_transform` helper in
+   both the primitive and the text draw paths). Regression tests pin
+   the composed mapping, its sf=1 identity, and its agreement with the
+   clip mapping.
 
 ## Tracking
 

@@ -108,9 +108,11 @@ from a terminal) is the first stop for clues.
   lowest-RTT adapter per connection). The legacy external net-merge tool
   is no longer needed; see the appendix if you used it with v0.2.
 - Every adapter row on the Adapters tab has an arrow (▸) that expands a
-  live per-interface traffic graph — the same two color-coded lines as the
-  Status graph (down = primary, up = tertiary), so you can SEE which NIC
-  carries what. Upgrading from v0.5.0? The stock merge policy migrates to
+  live per-interface traffic graph — and since v0.6.1 the same graphs
+  live on the Status tab: press an ADAPTER'S NAME in the bottom card to
+  expand its chart. The same two color-coded lines as the Status graph
+  (down = primary, up = tertiary), so you can SEE which NIC carries
+  what. Upgrading from v0.5.0? The stock merge policy migrates to
   round-robin automatically (Settings shows it; pick `failover` there if
   you really want the old behavior).
 
@@ -156,7 +158,10 @@ exit IP, its country/city/ISP, and a verdict.
 The bandwidth graph above it plots the last two minutes of combined
 inbound/outbound throughput, one sample per second, with a color-coded
 legend (down = primary, up = tertiary) and current rates at the top
-right; it scales with the window (Task Manager style).
+right; it lives in a fixed-height card that scales with the window
+width (Task Manager style), so the exit result and the graph can never
+collide — and since v0.6.1 it renders correctly on HiDPI displays
+(125%/150% Windows scaling) too.
 
 ## Step 7 (optional) — exclusions: let selected traffic bypass the tunnel
 
