@@ -182,13 +182,16 @@ PING/PONG round trip per carrier before it trusts it, so a dead merge
 path now fails loudly into the per-connection fallback instead of
 black-holing.
 
-The Status tab verifies the whole path live: one row per carrier (RTT,
-wire bytes), a Task-Manager-style bandwidth graph in a fixed-height card
-(scales with the window width) with a color-coded legend (down =
+The Status tab verifies the whole path live: a connection frame at the
+top (tunnel state, the connect switch and the server dropdown stacked
+compactly on the left, the combined bandwidth graph filling the rest of
+the frame), then ONE scrollable page below it — wheel scrolling moves
+everything (exit identity, carrier rows, every adapter) together, so
+arbitrarily long adapter lists stay reachable. One row per carrier (RTT,
+wire bytes), a color-coded legend on the combined graph (down =
 primary, up = tertiary), per-adapter traffic graphs — press an adapter's
-name in the Status tab's bottom card (or the arrow on any Adapters-tab
-row) to expand its own live chart — and the Exit identity card (see
-below).
+name on the Status tab (or the arrow on any Adapters-tab row) to expand
+its own live chart — and the Exit identity card (see below).
 
 ## Exit identity (v0.5) — no hidden hops, verifiable in one click
 
@@ -284,11 +287,15 @@ render backend composed each canvas' translation and the viewport scale
 in the wrong order, displacing the whole graph — grid, series, labels —
 `offset × (scale − 1)` px up and left of its card ("the axes of the
 graph jump to the upper left, out of bounds", and the shifted canvas
-could collide with the exit-IP card above it). The Status graph now
-also lives in a fixed-height container so neighbouring cards (the
-exit-probe result) can never re-flow or share its lines, and the Status
-tab gained per-adapter graphs: press an adapter's name in the bottom
-card to expand its own live traffic chart.
+could collide with the exit-IP card above it). Since v0.7.1 the Status
+tab is one connection frame + one page scrollable: the graph lives
+INSIDE the frame (fixed-height panel filling the space right of the
+connect switch and server dropdown, so that space is used instead of a
+wide dead gap) and everything below the frame — exit identity, carrier
+rows, every adapter row — scrolls together; the old inner-scrollable
+adapter list capped the visible rows at whatever space three stacked
+cards left, which made long adapter lists effectively unusable. Press
+an adapter's name to expand its own live traffic chart.
 
 ## The v0.3 way: GUI + profiles (recommended)
 

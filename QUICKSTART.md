@@ -114,10 +114,14 @@ from a terminal) is the first stop for clues.
   if you used it with v0.2.
 - Every adapter row on the Adapters tab has an arrow (▸) that expands a
   live per-interface traffic graph — and since v0.6.1 the same graphs
-  live on the Status tab: press an ADAPTER'S NAME in the bottom card to
-  expand its chart. The same two color-coded lines as the Status graph
-  (down = primary, up = tertiary), so you can SEE which NIC carries
-  what. The ORDER of the ticked adapters (reorder with ↑/↓) is the
+  live on the Status tab: press an ADAPTER'S NAME on the page below the
+  connection frame to expand its chart (since v0.7.1 that page scrolls
+  as ONE — the wheel moves the exit card, the carrier rows and every
+  adapter together, and the combined graph fills the free space inside
+  the connection frame itself). The same two color-coded lines as the
+  Status graph (down = primary, up = tertiary), so you can SEE which NIC
+  carries what. The ORDER of the ticked adapters (reorder with ↑/↓) is
+  the
   adapter priority used by the `priority` policy. Upgrading from
   v0.6.x? The stock merge policy migrates to balanced automatically
   (Settings shows it; pick `round-robin` there if you want the old

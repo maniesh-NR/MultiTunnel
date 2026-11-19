@@ -47,9 +47,10 @@ pub fn nav_rail(app: &App) -> Element<'_> {
         .into()
 }
 
-/// Screen scaffold WITHOUT the scrollable (Status): the bandwidth graph
-/// must scale with the window, so the column owns Fill heights and only
-/// the links list scrolls internally (D19 §3).
+/// Screen scaffold WITHOUT its own scrollable (Status): the body owns
+/// Fill heights — a fixed connection frame on top and a page scrollable
+/// below it (S13). The graph canvas must scale with the window, so it
+/// cannot live inside a scrollable (D19 §3).
 fn scaffold_fixed<'a>(app: &'a App, title: &'a str, body: Element<'a>) -> Element<'a> {
     let ts = app.theme.ts;
     let inner = column![
@@ -147,12 +148,15 @@ enum ButtonKind {
 // Status
 // ---------------------------------------------------------------------------
 
-/// Status screen (S9 / D19, D22): state card + server picker, live
-/// bandwidth graph in a FIXED-height container, exit probe card, and a
-/// bottom card with the tunnel links plus per-adapter rows (press an
-/// adapter's name to expand its own traffic graph).
-/// No outer scrollable — the graph keeps its size; only the bottom
-/// card scrolls.
+/// Status screen (S9 / D19, D22, S13): ONE connection frame on top —
+/// tunnel state text, the connect toggle and the server picker stacked
+/// in a fixed-width left column, with the global bandwidth graph filling
+/// all remaining frame space — and, below it, ONE page scrollable owning
+/// everything else: the exit-probe card, the tunnel links, and the
+/// per-adapter rows (press an adapter's name to expand its own traffic
+/// graph). The wheel therefore scrolls EVERYTHING under the connection
+/// frame (S13: the old inner-scrollable bottom card capped the visible
+/// adapter rows at the space left after three stacked cards).
 pub fn status(app: &App) -> Element<'_> {
     let s = app.theme.scheme;
     let ts = app.theme.ts;
@@ -204,7 +208,12 @@ pub fn status(app: &App) -> Element<'_> {
         String::new()
     };
 
-    let state_card = column![
+    // --- connection frame, left column (S13): state text, connect
+    // toggle and server picker STACKED in a fixed-width column. The old
+    // layout parked the toggle and the picker at opposite ends of a
+    // Fill row — a wide dead gap between them — and kept the graph in
+    // its own card below; the graph now takes that free space instead.
+    let mut left_col = column![
         text("Tunnel state")
             .size(ts.label_m.size)
             .color(s.on_surface_variant),
@@ -212,24 +221,22 @@ pub fn status(app: &App) -> Element<'_> {
         text(profile_line).size(ts.body_m.size).color(state_fg),
         text(meta_line).size(ts.body_s.size).color(state_fg),
         vertical_space().height(Length::Fixed(8.0)),
-        row![
-            toggler(app.is_connected())
-                .size(36.0)
-                .label("connect")
-                .on_toggle(Message::ConnectToggle)
-                .style(t3::switch(s)),
-            horizontal_space().width(Length::Fill),
+        toggler(app.is_connected())
+            .size(36.0)
+            .label("connect")
+            .on_toggle(Message::ConnectToggle)
+            .style(t3::switch(s)),
+    ]
+    .spacing(6)
+    .width(Length::Fixed(STATUS_FRAME_LEFT_WIDTH));
+    if !picker_label.is_empty() {
+        left_col = left_col.push(
             text(picker_label)
                 .size(ts.body_s.size)
                 .color(s.on_surface_variant),
-            picker,
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center),
-    ]
-    .spacing(6)
-    .padding(20)
-    .width(Length::Fill);
+        );
+    }
+    left_col = left_col.push(picker);
 
     // --- bandwidth graph (D19 §1, D20 fix + legend) ------------------------
     let graph = RateGraph {
@@ -261,15 +268,16 @@ pub fn status(app: &App) -> Element<'_> {
         .height(Length::Fill)
         .into()
     };
-    let graph_card = container(graph_inner)
+    // S13: the graph panel lives INSIDE the connection frame and fills
+    // all remaining frame space. D22's stable-container rule holds: the
+    // height stays FIXED and nothing that can grow (exit probe result,
+    // links, adapter rows) lives inside the frame any more — they all
+    // scroll in the page scrollable below it. The canvas Fill-scales
+    // with the window WIDTH.
+    let graph_panel = container(graph_inner)
         .padding(8)
         .style(t3::card(s, s.surface_container_lowest))
         .width(Length::Fill)
-        // D22: FIXED height (was FillPortion(3)) — the graph must be a
-        // stable, fixed container: growing neighbours (the exit-probe
-        // result appearing) used to re-flow it every time, and any canvas
-        // displacement immediately read as "axes out of bounds". The
-        // canvas inside still Fill-scales with the window WIDTH.
         .height(Length::Fixed(STATUS_GRAPH_HEIGHT));
     let _ = util::fmt_bps; // rate labels live in graph.rs; kept for chips/tests
 
@@ -441,13 +449,13 @@ pub fn status(app: &App) -> Element<'_> {
         }
     }
     // NOTE: scrollable content must NOT fill the scroll axis (iced
-    // layout rule) — the inner container shrinks; the scrollable itself
-    // owns the Fill height.
+    // layout rule) — the inner column shrinks to its content; the page
+    // scrollable itself owns the Fill height.
     //
-    // D22: the bottom card hosts BOTH the tunnel links and the
-    // per-adapter rows (press a name to expand that adapter's graph) in
-    // one scrollable that owns ALL remaining vertical space — links and
-    // adapters can grow without ever re-flowing the fixed graph card.
+    // S13: the Links + Adapters card is content-sized now — it lives in
+    // the PAGE scrollable together with the exit card, so the wheel
+    // scrolls everything below the connection frame and no adapter is
+    // stuck behind a short inner viewport.
     let mut bottom_col = column![].spacing(4).width(Length::Fill);
     bottom_col = bottom_col.push(
         text("Links")
@@ -479,30 +487,39 @@ pub fn status(app: &App) -> Element<'_> {
     }
     bottom_col = bottom_col.push(adapters_col);
 
-    let bottom_scroll =
-        scrollable(container(bottom_col).padding(12).width(Length::Fill)).width(Length::Fill);
-    let bottom_card = container(bottom_scroll)
+    let bottom_card = container(bottom_col)
+        .padding(12)
         .style(t3::card(s, s.surface_container_lowest))
-        .width(Length::Fill)
-        .height(Length::Fill);
+        .width(Length::Fill);
 
     let _ = RATE_HISTORY_LEN; // (documented window; the App enforces it)
 
-    let head = column![
-        container(state_card)
-            .style(t3::card(s, state_bg))
-            .width(Length::Fill),
-        exit_card,
-        graph_card,
-        bottom_card,
-    ]
-    .spacing(12)
-    .height(Length::Fill);
+    // --- the connection frame: left column + graph side by side -------
+    let frame = container(row![left_col, graph_panel].spacing(12))
+        .style(t3::card(s, state_bg))
+        .padding(20)
+        .width(Length::Fill);
+
+    // --- ONE page scrollable below the frame (S13) ---------------------
+    let mut below = column![].spacing(12).width(Length::Fill);
+    below = below.push(exit_card);
+    below = below.push(bottom_card);
+    let page_scroll = scrollable(container(below).width(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+    let head = column![frame, page_scroll].spacing(12).height(Length::Fill);
     scaffold_fixed(app, "Status", head.into())
 }
 
-/// Height of the Status screen's combined graph card (D22).
+/// Height of the Status screen's global graph panel (D22: a stable,
+/// fixed container — S13 moved it INSIDE the connection frame; its
+/// height stays fixed so nothing can re-flow the canvas).
 pub const STATUS_GRAPH_HEIGHT: f32 = 240.0;
+
+/// Width of the Status connection frame's left column (state text,
+/// connect toggle, server picker) — the global graph fills the rest.
+pub const STATUS_FRAME_LEFT_WIDTH: f32 = 296.0;
 
 /// One adapter row for the Status screen's bottom card (D22): the NAME is
 /// the expander (the user's ask), with live rate chips; expanding reveals

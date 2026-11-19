@@ -264,9 +264,14 @@ fn seed_links(rng0: u64) -> Vec<LinkStatus> {
     ]
 }
 
-/// Synthetic adapters (S7): Wi-Fi + Ethernet + Cellular up with IPv4s —
-/// the 3-NIC demo bond (D23; the mock's traffic split is deliberately
-/// uneven so the balanced policy's effect is visible).
+/// Synthetic adapters (S7 + S13): Wi-Fi + Ethernet + Cellular up with
+/// IPv4s — the 3-NIC demo bond (D23; the mock's traffic split is
+/// deliberately uneven so the balanced policy's effect is visible) —
+/// plus five typical virtual/software adapters a real Windows box
+/// enumerates (Bluetooth, WSL/Hyper-V switch, Tailscale, loopback,
+/// VirtualBox). The extras are NOT bonded: the Status page scrollable
+/// (S13) has to reach a realistic-length adapter list, and the Adapters
+/// tab shows the bonded block sorted above the unticked rows.
 fn seed_adapters() -> Vec<mt_service::AdapterView> {
     vec![
         mt_service::AdapterView {
@@ -291,6 +296,46 @@ fn seed_adapters() -> Vec<mt_service::AdapterView> {
             description: "Mock 5G dongle".to_string(),
             ipv4: vec!["100.72.14.5".to_string()],
             up: true,
+            selected: false,
+        },
+        mt_service::AdapterView {
+            id: "mock-bluetooth".to_string(),
+            name: "Bluetooth".to_string(),
+            description: "Mock Bluetooth device (PAN)".to_string(),
+            ipv4: vec![],
+            up: false,
+            selected: false,
+        },
+        mt_service::AdapterView {
+            id: "mock-vethernet-wsl".to_string(),
+            name: "vEthernet (WSL)".to_string(),
+            description: "Mock Hyper-V virtual switch for WSL2".to_string(),
+            ipv4: vec!["172.28.16.1".to_string()],
+            up: true,
+            selected: false,
+        },
+        mt_service::AdapterView {
+            id: "mock-tailscale".to_string(),
+            name: "Tailscale".to_string(),
+            description: "Mock Tailscale virtual NIC".to_string(),
+            ipv4: vec!["100.84.113.77".to_string()],
+            up: true,
+            selected: false,
+        },
+        mt_service::AdapterView {
+            id: "mock-loopback".to_string(),
+            name: "Loopback Pseudo-Interface 1".to_string(),
+            description: "Mock software loopback interface".to_string(),
+            ipv4: vec!["127.0.0.1".to_string()],
+            up: true,
+            selected: false,
+        },
+        mt_service::AdapterView {
+            id: "mock-virtualbox".to_string(),
+            name: "VirtualBox Host-Only".to_string(),
+            description: "Mock VirtualBox host-only adapter".to_string(),
+            ipv4: vec!["192.168.56.1".to_string()],
+            up: false,
             selected: false,
         },
     ]

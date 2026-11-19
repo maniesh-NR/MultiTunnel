@@ -1614,8 +1614,8 @@ mod tests {
         assert_eq!(app.profiles.len(), 3, "mock seeds three synthetic profiles");
         assert_eq!(
             app.adapters.len(),
-            3,
-            "mock seeds three synthetic adapters (S7)"
+            8,
+            "mock seeds the 3-NIC bond plus five virtual adapters (S13)"
         );
 
         // One tick per screen: every view (incl. Adapters) gets built.
@@ -1635,12 +1635,24 @@ mod tests {
         let service = Arc::new(crate::mock::MockService::new());
         let mut app = App::init_async(service, Flags::default()).await;
 
-        // Seed (D23): all THREE adapters bonded, saved order
-        // wifi → ethernet → cellular (the mock demo setup).
-        assert_eq!(app.adapters.len(), 3);
+        // Seed (D23 + S13): the THREE wired adapters bonded, saved order
+        // wifi → ethernet → cellular (the mock demo setup), plus five
+        // virtual adapters that stay unticked (enumeration order below
+        // the selected block).
+        const UNTICKED: [&str; 5] = [
+            "mock-bluetooth",
+            "mock-vethernet-wsl",
+            "mock-tailscale",
+            "mock-loopback",
+            "mock-virtualbox",
+        ];
+        assert_eq!(app.adapters.len(), 8);
         let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
-        assert_eq!(ids, vec!["mock-wifi", "mock-ethernet", "mock-cellular"]);
-        assert!(app.adapters.iter().all(|r| r.selected));
+        let mut expected = vec!["mock-wifi", "mock-ethernet", "mock-cellular"];
+        expected.extend_from_slice(&UNTICKED);
+        assert_eq!(ids, expected);
+        assert!(app.adapters.iter().take(3).all(|r| r.selected));
+        assert!(app.adapters.iter().skip(3).all(|r| !r.selected));
         assert!(!app.adapters_dirty(), "fresh load matches the saved order");
         assert_eq!(app.priority_position_of("mock-ethernet"), Some(2));
         assert_eq!(app.priority_position_of("mock-cellular"), Some(3));
@@ -1662,17 +1674,19 @@ mod tests {
         // Untick ethernet: its row leaves the block (index moves!).
         drop(app.update(Message::AdapterToggled(1)));
         let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        let mut expected = vec!["mock-wifi", "mock-cellular", "mock-ethernet"];
+        expected.extend_from_slice(&UNTICKED);
         assert_eq!(
-            ids,
-            vec!["mock-wifi", "mock-cellular", "mock-ethernet"],
+            ids, expected,
             "unselected row sinks below the selected block"
         );
         // Re-tick ethernet (now index 2): appends at the END of the block.
         drop(app.update(Message::AdapterToggled(2)));
         let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
+        let mut expected = vec!["mock-wifi", "mock-cellular", "mock-ethernet"];
+        expected.extend_from_slice(&UNTICKED);
         assert_eq!(
-            ids,
-            vec!["mock-wifi", "mock-cellular", "mock-ethernet"],
+            ids, expected,
             "re-ticked adapter lands at the lowest priority"
         );
         assert!(app.adapters_dirty(), "order differs from the saved one");
@@ -1680,18 +1694,29 @@ mod tests {
         // REORDER: move Wi-Fi (index 0) DOWN — swaps with cellular.
         drop(app.update(Message::AdapterMoved(0, 1)));
         let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
-        assert_eq!(ids, vec!["mock-cellular", "mock-wifi", "mock-ethernet"]);
+        let mut expected = vec!["mock-cellular", "mock-wifi", "mock-ethernet"];
+        expected.extend_from_slice(&UNTICKED);
+        assert_eq!(ids, expected);
         // Edge moves are no-ops (Wi-Fi is at the top of the block).
         drop(app.update(Message::AdapterMoved(0, -1)));
         let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
-        assert_eq!(ids, vec!["mock-cellular", "mock-wifi", "mock-ethernet"]);
+        assert_eq!(ids, expected);
 
         // Apply persists the new order (service call directly — the
         // established test idiom; the update task only wraps it in
-        // Task::perform). The saved-handler chains settings + adapters +
-        // status reloads; drive those service calls and feed the results
-        // back in the same order.
-        let draft: Vec<String> = app.adapters.iter().map(|r| r.view.id.clone()).collect();
+        // Task::perform). NOTE: the real AdaptersApply filters to
+        // SELECTED rows only — the unticked virtual adapters must NOT
+        // land in bonded_adapters (this test idiom used to send every
+        // row id, which the old all-bonded 3-seed could never expose).
+        // The saved-handler chains settings + adapters + status reloads;
+        // drive those service calls and feed the results back in the
+        // same order.
+        let draft: Vec<String> = app
+            .adapters
+            .iter()
+            .filter(|r| r.selected)
+            .map(|r| r.view.id.clone())
+            .collect();
         app.service.set_bonded_adapters(draft).await.expect("apply");
         drop(app.update(Message::AdaptersSaved(Ok(()))));
         let settings = app.service.settings().await;
@@ -1699,11 +1724,9 @@ mod tests {
         let views = app.service.adapters().await;
         drop(app.update(Message::AdaptersLoaded(views)));
         let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            vec!["mock-cellular", "mock-wifi", "mock-ethernet"],
-            "applied order survives the reload"
-        );
+        let mut expected = vec!["mock-cellular", "mock-wifi", "mock-ethernet"];
+        expected.extend_from_slice(&UNTICKED);
+        assert_eq!(ids, expected, "applied order survives the reload");
         assert!(!app.adapters_dirty());
         assert_eq!(app.priority_position_of("mock-cellular"), Some(1));
         assert!(app
@@ -1718,11 +1741,11 @@ mod tests {
         drop(app.update(Message::AdaptersReverted));
         let ids: Vec<&str> = app.adapters.iter().map(|r| r.view.id.as_str()).collect();
         assert_eq!(
-            ids,
-            vec!["mock-cellular", "mock-wifi", "mock-ethernet"],
+            ids, expected,
             "revert restores the saved selection and order"
         );
-        assert!(app.adapters.iter().all(|r| r.selected));
+        assert!(app.adapters.iter().take(3).all(|r| r.selected));
+        assert!(app.adapters.iter().skip(3).all(|r| !r.selected));
     }
 
     /// S11: `sort_adapter_rows` (the load/revert ordering primitive).
@@ -1741,9 +1764,16 @@ mod tests {
             .collect();
         sort_adapter_rows(&mut rows, &saved);
         let ids: Vec<&str> = rows.iter().map(|r| r.view.id.as_str()).collect();
+        let mut expected = vec!["mock-cellular", "mock-wifi", "mock-ethernet"];
+        expected.extend_from_slice(&[
+            "mock-bluetooth",
+            "mock-vethernet-wsl",
+            "mock-tailscale",
+            "mock-loopback",
+            "mock-virtualbox",
+        ]);
         assert_eq!(
-            ids,
-            vec!["mock-cellular", "mock-wifi", "mock-ethernet"],
+            ids, expected,
             "selected block first in SAVED order, rest in enumeration order"
         );
     }

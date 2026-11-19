@@ -346,3 +346,35 @@ section here.)
    connections; an already-running fat flow stays on its adapter. Byte
    evenness at the FLOW level is stream mode's job (per-connection
    balanced + stream balanced now compose).
+
+## D24 — S13: Status tab = one connection frame + one page scrollable (2026-11-19)
+
+User report (v0.7.0): the Status scrollbars only scrolled the adapter
+list, so long adapter lists were effectively unusable; wide dead
+horizontal gap between the connect switch and the server dropdown; the
+combined graph should use that free space.
+
+1. STRUCTURE: ONE fixed connection frame at the top — tunnel state
+   text, the connect toggler and the server pick_list STACKED in a
+   fixed-width left column (STATUS_FRAME_LEFT_WIDTH 296) — and the
+   combined bandwidth graph in a fixed-height panel (STATUS_GRAPH_HEIGHT
+   240, D22's stable-container rule intact) that Fill-scales into ALL
+   remaining frame width. Below the frame: ONE page scrollable owning
+   everything (exit card + the Links/Adapters card). The wheel therefore
+   scrolls the whole page; the frame never moves.
+2. WHY the graph may Fill WIDTH inside the frame but keep FIXED height:
+   nothing that can grow lives in the frame any more (the exit-probe
+   result, links and adapter rows all scroll below) — the D22 reflow
+   triggers are gone by construction.
+3. MOCK FIDELITY: seed_adapters now carries EIGHT adapters (the 3-NIC
+   bond + Bluetooth, vEthernet (WSL), Tailscale, Loopback, VirtualBox —
+   a realistic Windows enumeration); only the 3 wired ones are bonded.
+   This is what exposed the stale test idiom: the toggle test's apply
+   step used to send ALL row ids to set_bonded_adapters (the real
+   AdaptersApply filters to selected rows; the all-bonded 3-seed made
+   the two indistinguishable). Test now mirrors production.
+4. RIG PROOF (pixel-verified): frame anchors byte-stable across scrolls
+   at sf=1.0 AND sf=1.5; all 8 adapter rows render in priority order and
+   the last row is visible at max scroll; per-adapter expansion, the
+   exit-probe verdict card and the resize round-trip all still work;
+   0 panics.
