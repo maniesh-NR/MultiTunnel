@@ -209,11 +209,7 @@ async fn check_dest() {
 /// The Xray SERVER: VLESS+REALITY inbound on SERVER_PORT (dest = the real
 /// external site), a single freedom outbound, no routing — byte-for-byte the
 /// shape `server/setup-xray-reality.sh` ships, minus the external listen.
-fn spawn_xray_server(
-    work: &Path,
-    xray: &PathBuf,
-    allow_ports: &[u16],
-) -> (SocketAddr, ChildGuard) {
+fn spawn_xray_server(work: &Path, xray: &PathBuf, allow_ports: &[u16]) -> (SocketAddr, ChildGuard) {
     let config = work.join("xray-server.json");
     let ports_csv = allow_ports
         .iter()
@@ -440,8 +436,7 @@ async fn stream_bonding_survives_real_xray() {
         eprintln!("e2e: step5 half-close done");
     });
     let mut echoed = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(30), r.read_to_end(&mut echoed))
-        .await;
+    let _ = tokio::time::timeout(Duration::from_secs(30), r.read_to_end(&mut echoed)).await;
     send.await.unwrap();
     eprintln!("e2e: step5 read_to_end done, {} bytes", echoed.len());
     assert_eq!(
