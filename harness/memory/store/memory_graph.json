@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "6c7eedd 2026-11-20T11:21:55Z",
+  "as_of": "25f93ff 2026-11-20T15:47:04Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 249,
-  "edge_count": 257,
+  "node_count": 254,
+  "edge_count": 262,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -371,6 +371,26 @@
       "passages": [
         {
           "text": "backup(s8-adapter-bonding): 2026-11-18T07:45:06Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:25f93ff",
+      "type": "commit",
+      "title": "backup(s17-tag-v0.11.0): 2026-11-20T15:47:04Z [no changes]",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "25f93ff"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s17-tag-v0.11.0): 2026-11-20T15:47:04Z [no changes]",
           "kind": "title"
         }
       ]
@@ -1536,6 +1556,26 @@
       ]
     },
     {
+      "id": "commit:ce6af07",
+      "type": "commit",
+      "title": "backup(s17-pre-release): 2026-11-20T15:46:40Z [no changes]",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "ce6af07"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s17-pre-release): 2026-11-20T15:46:40Z [no changes]",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:d241e42",
       "type": "commit",
       "title": "backup(s12-post-release): 2026-11-19T14:09:49Z",
@@ -1831,6 +1871,26 @@
       "passages": [
         {
           "text": "backup(s9-fmt): 2026-11-18T12:04:06Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:f79a3c9",
+      "type": "commit",
+      "title": "s17: titlebar version + live global speeds, logs viewport with floating jump buttons + autoscroll — (1) workspace version inheritance ([workspace.package] 0.11.0; root + mt-app inherit) so the titlebar 'v0.11.0' rides next to the app name and moves in lock-step with the release tag (one-line bumps; mt-app.exe ships with the release version in its PE metadata now); (2) titlebar right side: live global down/up rates (the same 1 s throughput sample the tray tooltip reports; down in tertiary, up in primary, zeros before the first sample) as plain text inside the drag strip; (3) logs screen restructure (D27): fixed toolbar + dedicated viewport scrollable (the page no longer scrolls as a whole), stable scrollable id shared with update; floating jump-to-top/bottom buttons over the viewport's bottom-right corner in a surface_container_high card, autoscroll toggle in the toolbar (Tonal while following the tail, Text while off, default ON); (4) update paths: LogLine re-anchors to bottom while autoscroll ON + Logs on screen (gated by pure autoscroll_logs_now()), entering Logs with autoscroll ON lands on the tail, re-enabling the toggle re-anchors immediately, LogsScrollTop/Bottom via scrollable::snap_to RelativeOffset 0.0/1.0; (5) RIG FINDING fixed: the floating card anchored flush to the corner sat inside the scrollable's scrollbar grab zone — the rail swallowed the button clicks (reproduced at sf=1.0: clicks dead-center on the pill did nothing); overlay now stands off 26px from the right edge, clear of the rail+grab, and the clicks land (VLM-verified jump to the true first line at ",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "f79a3c9"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s17: titlebar version + live global speeds, logs viewport with floating jump buttons + autoscroll — (1) workspace version inheritance ([workspace.package] 0.11.0; root + mt-app inherit) so the titlebar 'v0.11.0' rides next to the app name and moves in lock-step with the release tag (one-line bumps; mt-app.exe ships with the release version in its PE metadata now); (2) titlebar right side: live global down/up rates (the same 1 s throughput sample the tray tooltip reports; down in tertiary, up in primary, zeros before the first sample) as plain text inside the drag strip; (3) logs screen restructure (D27): fixed toolbar + dedicated viewport scrollable (the page no longer scrolls as a whole), stable scrollable id shared with update; floating jump-to-top/bottom buttons over the viewport's bottom-right corner in a surface_container_high card, autoscroll toggle in the toolbar (Tonal while following the tail, Text while off, default ON); (4) update paths: LogLine re-anchors to bottom while autoscroll ON + Logs on screen (gated by pure autoscroll_logs_now()), entering Logs with autoscroll ON lands on the tail, re-enabling the toggle re-anchors immediately, LogsScrollTop/Bottom via scrollable::snap_to RelativeOffset 0.0/1.0; (5) RIG FINDING fixed: the floating card anchored flush to the corner sat inside the scrollable's scrollbar grab zone — the rail swallowed the button clicks (reproduced at sf=1.0: clicks dead-center on the pill did nothing); overlay now stands off 26px from the right edge, clear of the rail+grab, and the clicks land (VLM-verified jump to the true first line at ",
           "kind": "title"
         }
       ]
@@ -4181,6 +4241,43 @@
       ]
     },
     {
+      "id": "ledger:s17",
+      "type": "ledger",
+      "title": "Stage s17 ledger",
+      "tags": [
+        "s17",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s17"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-20T15:40Z | S17 OPENED per user asks (D27): version number next to the app name in the titlebar; current global download/upload speed on the right side of the titlebar; Logs tab floating scroll-to-top/bottom buttons + autoscroll-to-bottom toggle. Side question answered from server/setup-*.sh: GCP VM merge-daemon setup = clone/curl the two scripts, then sudo DOMAIN=<gateway> bash setup-xray-reality.sh + sudo bash setup-merge-daemon.sh (idempotent; daemon auto-downloads the arch-correct binary from GitHub releases).",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T15:45Z | IMPLEMENTED (D27): (1) [workspace.package] version 0.11.0, root + mt-app inherit (version.workspace) — the titlebar shows v0.11.0 via app_version()=env!(CARGO_PKG_VERSION) and release bumps stay one line (mt-app.exe PE metadata now carries the release version); (2) titlebar right: live global rates from self.throughput (the tray tooltip's same 1s sample; ↓ tertiary / ↑ primary, zeros pre-sample) as plain text inside the drag strip — no click capture; (3) logs screen: scaffold_fixed + dedicated viewport scrollable (id \"logs-lines\" via screens::logs_scroll_id()), floating ↑/↓ jump buttons in a surface_container_high card bottom-right, toolbar autoscroll toggle (Tonal on / Text off, default ON); update: LogLine→snap_to(RelativeOffset y=1.0) gated by pure autoscroll_logs_now() (toggle ON && Screen::Logs), entering Logs with autoscroll ON re-anchors, re-enabling the toggle re-anchors; LogsScrollTop/Bottom = snap_to y=0.0/1.0; (4) mock connect burst (engine/config/adapters/routing/listeners/bond/reality/merge/tunnel-up + per-link lines) + deterministic every-2s keepalive (tick.is_multiple_of(2)); (5) zig shims regenerated to `exec zig` from PATH (python -m ziglang fallback died with the pypkgs wheel in the recycle; tools/zig now a 0.17.1 tarball install, CI-parity).",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T15:50Z | RIG VERIFIED + REAL BUG FOUND&FIXED: the floating card flush to the viewport corner sat inside the scrollable's SCROLLBAR GRAB ZONE — the rail swallowed the button clicks (repro: clicks dead-center on the ↑ pill at sf=1.0 did nothing while rail buttons/togglers worked; VLM ruler-zoom saw the scrollbar strip THROUGH the capsule). FIX: overlay padding right 26px — capsule clears the rail+grab, the rail renders separately again. RIG LESSONS: (a) coordinate guessing burned an hour — the connect toggler's pill is at y252-288 (track-arc scan: runs of 6<d<90 between text rows finds the pill; VLM y-estimates drift ~25px, ruler-zoom crops make it usable; XTEST cursor renders BLACK in ffmpeg x11grab shots — a 31-px diff cluster at the click point is the CURSOR, not a widget change); (b) full-window diffs vs boot: connect=18755px (state+card+graph+speeds), autoscroll toggle=4409, jumps=3686/6307, wheel=2845 — pixel thresholds now known for this window size; (c) VLM reads content reliably (log lines verbatim, speeds \"↓ 10.9 MB/s ↑ 2.9 MB/s\" live-ticking, \"connecting: spinning up links\" as the true first line after ↑) but must be prompted \"plain text only, no HTML\" or it hallucinates mockups. sf=1.0 AND sf=1.5 both verified end-to-end (version cluster x131-169 @1.0, speeds live, toggler flips, autoscroll on→off, top/bottom jumps, wheel through overlay, keepalive tail following).",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T16:15Z | RUNNER FLAKE ROUND 2 (verdict: fleet, not code — same class as the s16 v0.10.0 event): ci run 44766745503 attempt 1 failed mt-bond carrier_death_mid_stream (the s16-documented flake, byte-identical signature \"bond send failed: no live bond carrier\"); rerun attempt 2 failed a DIFFERENT test — multitunnel core_proc socks_probe_total_deadline_bounds_byte_dripping_proxy (\"probe ran 211.66ms — failed before the budget\", a timing-budget assertion); attempt 3 ALL GREEN. Corroborating green on the SAME commit: windows-latest ci, lint, cross-check, the sibling ci run 44766699760 (ubuntu, full suite), the release run's own build-linux-daemon leg, and local cargo test --workspace 433/0 x2. Neither failing test's crate was touched by S17 (mt-app GUI + Cargo.toml version only). PATTERN CONFIRMED: ubuntu runner fleet intermittently stalls IO/timing-sensitive tests (carrier liveness + deadline budgets); if a THIRD distinct test flakes, consider serializing the timing-sensitive set (MT_SERIAL_TESTS=1 style) instead of rerun-chasing.",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T17:05Z | v0.11.0 RELEASED: attempt 1's build-windows leg sat 68 min inside cargo test on a 100%-cold rust-cache (the version bump changed Cargo.lock; every other leg incl. build-linux-daemon green) — cancelled per the >45-min protocol (rust-cache@v2 saves in post-steps even on cancellation), attempt 2 completed SUCCESS in ~6 min WARM exactly as predicted (the s9 pattern, now proven twice). Assets verified by download+unzip (download/v0110-verify/): multitunnel-v0.11.0-windows-x64.zip 6,314,832 B (10 entries, integrity OK; multitunnel.exe PE32+ console 13.26 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB; README carries the v0.9-v0.11 section, QUICKSTART the v0.11 note, server/ scripts included) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. CI on the same commit: green on attempt 3 after the two-test runner-flake round (see 16:15Z entry). S17 CLOSED — the three asks shipped: version next to the app name in the titlebar, live global down/up speeds on the titlebar's right, Logs tab floating top/bottom jump buttons + autoscroll toggle (default on). User actions: none.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "ledger:s2",
       "type": "ledger",
       "title": "Stage s2 ledger",
@@ -4980,7 +5077,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: IDLE — all committed task chains closed and released through v0.10.0. S16 (repo polish + window menu + state-aware tray, D26) CLOSED: the seven asks shipped — GitHub About + 20 topic tags (the About description had been a stale leftover of an unrelated project), README attribution section + banner + transparent logo, transparent titlebar emblem (flood-fill key-out + AREA resample — bilinear punches holes at 20:1), monochrome not-connected tray icon (NIM_MODIFY swap, boots Mono), tray hover = live speeds + Σ totals, titlebar right-click window menu with always-on-top (cross-platform iced change_level, persisted, honored at startup); also fixed the latent S15 top-aligned identity cluster (align_y(Center)). v0.10.0 RELEASED and verified (re-run after two GitHub-runner flakes in the mt-bond leg — verdict + retry protocol in LEDGER s16; release re-confirmed live 2026-11-20 via API: 3 assets + About + 20 topics). - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling shipped — the \"one adapter maxes out, no spill\" complaint fixed by peer-reported per-carrier delivery rates (1 s PINGs), carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + writer backlog. S14 also shipped the agentic memory graph + RAG (query_memory.py / write_memory.py, 18/18 tests).",
+          "text": "- **Stage**: IDLE — S17 CLOSED, v0.11.0 released and verified. The three asks shipped: release version next to the app name in the titlebar (workspace version inheritance — one-line release bumps; mt-app.exe PE metadata now carries the release version), live global ↓/↑ rates on the strip's right (the tray tooltip's same 1 s sample), Logs tab = fixed toolbar + dedicated viewport with floating top/bottom jump buttons (26px right stand-off — the rig caught the scrollbar grab-zone swallowing flush-corner clicks) + autoscroll toggle (default ON, follows the tail; re-enabling re-anchors). All 8 gates green; rig verified sf=1.0+1.5 (VLM content reads + pixel diffs); 433/0 tests. Release: attempt-1 windows leg cancelled at 68 min on a cold rust-cache (Cargo.lock changed), attempt-2 SUCCESS in 6 min warm (s9 pattern proven); CI green on attempt 3 after a two-test ubuntu runner-flake round (carrier_death + socks_probe deadline, different tests per attempt, all other legs/local green — LEDGER 16:15Z). - **Prior stages**: S16 (v0.10.0, About+topics+attribution+banner, transparent emblem, mono tray icon, hover speeds+totals, titlebar menu + always-on-top), S15 (v0.9.0, logo + blended titlebar + close-to-tray + persistent tray + Quick Settings), S13 (v0.7.1, status tab: one connection frame + one page scrollable, graph fills frame), S12 (v0.7.0, balanced+priority scheduling + adapter ordering), S11 (v0.6.2, stream bonding finalRules + verified carriers), S10/10.1 (v0.6.0/01, rendering fixes + per-adapter graphs).",
           "kind": "body"
         }
       ]
@@ -5109,6 +5206,26 @@
       "passages": [
         {
           "text": "Release v0.10.0: tag points at commit a5f4864.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "release:v0.11.0",
+      "type": "release",
+      "title": "Release v0.11.0 (tagged ce6af07)",
+      "tags": [
+        "v0.11.0"
+      ],
+      "sources": [
+        {
+          "file": "git:tags/v0.11.0",
+          "anchor": "ce6af07"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Release v0.11.0: tag points at commit ce6af07.",
           "kind": "body"
         }
       ]
@@ -7298,6 +7415,12 @@
       "evidence": "subject stage label (s8)"
     },
     {
+      "src": "commit:25f93ff",
+      "dst": "ledger:s17",
+      "rel": "part_of",
+      "evidence": "subject stage label (s17)"
+    },
+    {
       "src": "commit:3507ff3",
       "dst": "ledger:s11",
       "rel": "part_of",
@@ -7578,6 +7701,12 @@
       "dst": "ledger:s13",
       "rel": "part_of",
       "evidence": "subject stage label (s13)"
+    },
+    {
+      "src": "commit:ce6af07",
+      "dst": "ledger:s17",
+      "rel": "part_of",
+      "evidence": "subject stage label (s17)"
     },
     {
       "src": "commit:d241e42",
@@ -8204,6 +8333,18 @@
       "evidence": "2026-11-20T12:45Z | v0.10.0 RELEASED: first attempt (run 44719389267 attempt 1) hit TWO GitHub-runner flakes in the mt-bond integration leg (windows: carrier_death_mid_stream second-half write \"no live bond carrier\"; linux: hang inside cargo test -p mt-bond for 38 min with the sweeper's STALL_TIMEOUT=10s making a real product hang implausible) while the SAME commit passed CI on BOTH OSes (44717917257) minutes earlier and 25x solo + 12x full-suite stress runs under 8-way CPU load locally = 408 executions 0 failures — verdict runner flake (precedent v0.5.1), cancelled + re-run. Attempt 2: BOTH jobs green (linux-daemon success — the earlier hang did not reproduce, confirming the verdict). Assets verified by download+unzip (download/v0100-verify/): multitunnel-v0.10.0-windows-x64.zip 6,311,338 B (10 entries, integrity OK; multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI; README carries Attribution + banner + logo_transparent references, QUICKSTART the v0.10 note) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. KNOWN MINOR (not release-blocking): the ZIP's README references assets/banner.png relatively — renders on GitHub (repo path), not inside the extracted zip (no assets/ in the archive, matching S15's manifest). S16 CLOSED — all seven asks shipped: About+tags, attribution, banner+logo README, transparent titlebar emblem, monochrome not-connected tray icon, hover speeds+totals, titlebar right-click menu with always-on-top. User actions: none."
     },
     {
+      "src": "ledger:s17",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
+      "src": "ledger:s17",
+      "dst": "release:v0.11.0",
+      "rel": "released_in",
+      "evidence": "2026-11-20T17:05Z | v0.11.0 RELEASED: attempt 1's build-windows leg sat 68 min inside cargo test on a 100%-cold rust-cache (the version bump changed Cargo.lock; every other leg incl. build-linux-daemon green) — cancelled per the >45-min protocol (rust-cache@v2 saves in post-steps even on cancellation), attempt 2 completed SUCCESS in ~6 min WARM exactly as predicted (the s9 pattern, now proven twice). Assets verified by download+unzip (download/v0110-verify/): multitunnel-v0.11.0-windows-x64.zip 6,314,832 B (10 entries, integrity OK; multitunnel.exe PE32+ console 13.26 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB; README carries the v0.9-v0.11 section, QUICKSTART the v0.11 note, server/ scripts included) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. CI on the same commit: green on attempt 3 after the two-test runner-flake round (see 16:15Z entry). S17 CLOSED — the three asks shipped: version next to the app name in the titlebar, live global down/up speeds on the titlebar's right, Logs tab floating top/bottom jump buttons + autoscroll toggle (default on). User actions: none."
+    },
+    {
       "src": "ledger:s2",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -8412,6 +8553,12 @@
       "dst": "commit:a5f4864",
       "rel": "built_from",
       "evidence": "git tag v0.10.0"
+    },
+    {
+      "src": "release:v0.11.0",
+      "dst": "commit:ce6af07",
+      "rel": "built_from",
+      "evidence": "git tag v0.11.0"
     },
     {
       "src": "release:v0.2.0",
