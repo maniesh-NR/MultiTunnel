@@ -221,4 +221,28 @@ mod tests {
         // But any future frame exceeds cap 0.
         assert_eq!(rb.insert(9, payload(9)), Err(ReorderError::Overflow));
     }
+
+    #[test]
+    fn would_overflow_mirrors_the_insert_boundary() {
+        // S14: the endpoint's backpressure path polls would_overflow BEFORE
+        // inserting — it must agree exactly with insert's Overflow check.
+        let mut rb = ReorderBuffer::new(16);
+        assert!(rb.insert(5, vec![0u8; 10]).is_ok());
+        assert!(!rb.would_overflow(6), "10 + 6 == cap 16 fits");
+        assert!(rb.would_overflow(7), "10 + 7 > cap 16 overflows");
+        // An insert that would_overflow rejects must be the same size that
+        // insert() errors on — the pause loop's invariant.
+        let probe = vec![0u8; 7];
+        assert_eq!(rb.would_overflow(probe.len()), rb.insert(6, probe).is_err());
+        assert_eq!(rb.buffered_bytes(), 10, "rejected insert left state intact");
+        // Once the gap ahead of seq 5 drains (in-order 0..=4 flushes the
+        // buffered 5), the previously-rejected frame fits — the backpressure
+        // pause resolves instead of erroring.
+        for seq in 0..5u64 {
+            assert!(rb.insert(seq, vec![0u8; 4]).is_ok());
+        }
+        assert_eq!(rb.buffered_bytes(), 0, "seq 5 flushed by the 0..=4 run");
+        assert!(!rb.would_overflow(7));
+        assert!(rb.insert(6, vec![0u8; 7]).is_ok());
+    }
 }

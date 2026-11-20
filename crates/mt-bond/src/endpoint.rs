@@ -314,7 +314,10 @@ fn pick_carrier_index(
                 return Some(slots[pick].idx);
             }
             // Capacity-aware: least relative load; ties rotate.
-            let min = slots.iter().map(carrier_score).fold(f64::INFINITY, f64::min);
+            let min = slots
+                .iter()
+                .map(carrier_score)
+                .fold(f64::INFINITY, f64::min);
             let tied: Vec<usize> = (0..slots.len())
                 .filter(|&i| (carrier_score(&slots[i]) - min).abs() < f64::EPSILON)
                 .collect();
@@ -333,9 +336,7 @@ fn pick_carrier_index(
                 return slots.iter().min_by_key(|s| s.queued).map(|s| s.idx);
             }
             for s in slots {
-                if carrier_score(s) < PRIORITY_SPILL_RATIO
-                    && s.queued < PRIORITY_QUEUE_HIGH_WATER
-                {
+                if carrier_score(s) < PRIORITY_SPILL_RATIO && s.queued < PRIORITY_QUEUE_HIGH_WATER {
                     return Some(s.idx);
                 }
             }
@@ -784,9 +785,8 @@ impl Endpoint {
                 // (both ends send these every sweep). Short/old payloads
                 // carry no report and are ignored.
                 if frame.payload.len() >= 16 {
-                    let rate = u64::from_le_bytes(
-                        frame.payload[8..16].try_into().expect("8 bytes"),
-                    );
+                    let rate =
+                        u64::from_le_bytes(frame.payload[8..16].try_into().expect("8 bytes"));
                     if let Some(c) = self.carrier_of(_carrier_idx) {
                         c.deliver_bps.store(rate, Ordering::Relaxed);
                     }
@@ -876,7 +876,7 @@ impl Endpoint {
         // be stuck behind THIS one on the same carrier — no deadlock).
         // Bounded by REORDER_PAUSE_MAX (soft insert, at most one frame
         // of overshoot per budget) and by the stall sweeper.
-        let mut payload = frame.payload;
+        let payload = frame.payload;
         let mut waited = Duration::ZERO;
         let insert_result = loop {
             let fits = {
@@ -1116,13 +1116,7 @@ impl Endpoint {
             // lock; a missing entry (fresh carrier) reads as 0.
             let rates = lock(&self.rates);
             cs.iter()
-                .map(|c| {
-                    rates
-                        .assign_ewma
-                        .get(c.idx)
-                        .copied()
-                        .unwrap_or(0.0)
-                })
+                .map(|c| rates.assign_ewma.get(c.idx).copied().unwrap_or(0.0))
                 .collect()
         };
         let slots: Vec<CarrierSlot> = cs
@@ -1366,8 +1360,14 @@ impl Endpoint {
                     // Table changed (first sweep / respawn / new carrier):
                     // re-seed from the current counters — deltas start
                     // next sweep.
-                    rates.prev_assigned = carriers.iter().map(|c| c.assigned.load(Ordering::Relaxed)).collect();
-                    rates.prev_down = carriers.iter().map(|c| c.bytes_down.load(Ordering::Relaxed)).collect();
+                    rates.prev_assigned = carriers
+                        .iter()
+                        .map(|c| c.assigned.load(Ordering::Relaxed))
+                        .collect();
+                    rates.prev_down = carriers
+                        .iter()
+                        .map(|c| c.bytes_down.load(Ordering::Relaxed))
+                        .collect();
                     rates.assign_ewma.resize(n, 0.0);
                     rates.inbound_ewma.resize(n, 0.0);
                 }
@@ -1384,10 +1384,10 @@ impl Endpoint {
                         let d_down = cur_d.saturating_sub(rates.prev_down[i]) as f64 / dt;
                         rates.prev_assigned[i] = cur_a;
                         rates.prev_down[i] = cur_d;
-                        rates.assign_ewma[i] =
-                            RATE_EWMA_ALPHA * d_assigned + (1.0 - RATE_EWMA_ALPHA) * rates.assign_ewma[i];
-                        rates.inbound_ewma[i] =
-                            RATE_EWMA_ALPHA * d_down + (1.0 - RATE_EWMA_ALPHA) * rates.inbound_ewma[i];
+                        rates.assign_ewma[i] = RATE_EWMA_ALPHA * d_assigned
+                            + (1.0 - RATE_EWMA_ALPHA) * rates.assign_ewma[i];
+                        rates.inbound_ewma[i] = RATE_EWMA_ALPHA * d_down
+                            + (1.0 - RATE_EWMA_ALPHA) * rates.inbound_ewma[i];
                         (c.idx, rates.inbound_ewma[i].max(0.0) as u64)
                     })
                     .collect()
@@ -1514,6 +1514,21 @@ mod scheduling_tests {
             idx,
             queued,
             rtt_ms,
+            // No peer report: exercises the S12 fallback paths (least
+            // writer backpressure) until a delivery rate arrives.
+            assign_bps: 0.0,
+            deliver_bps: 0.0,
+        }
+    }
+
+    /// Capacity-aware slot with explicit S14 rate state.
+    fn cap_slot(idx: usize, queued: u64, rtt_ms: u32, assign: f64, deliver: f64) -> CarrierSlot {
+        CarrierSlot {
+            idx,
+            queued,
+            rtt_ms,
+            assign_bps: assign,
+            deliver_bps: deliver,
         }
     }
 
@@ -1611,5 +1626,117 @@ mod scheduling_tests {
             pick1(mt_net::MergePolicy::Priority, &all_saturated),
             Some(1)
         );
+    }
+
+    #[test]
+    fn carrier_score_is_relative_load_with_probe_floor() {
+        // Keeping up: offered == delivered → score 1.0.
+        let ok = cap_slot(0, 0, 0, 1_000_000.0, 1_000_000.0);
+        assert!((carrier_score(&ok) - 1.0).abs() < 1e-9);
+        // Over-committed uplink: 2 MiB/s offered on a 1 MiB/s path → 2.0.
+        let over = cap_slot(0, 0, 0, 2_000_000.0, 1_000_000.0);
+        assert!((carrier_score(&over) - 2.0).abs() < 1e-9);
+        // No report yet → probed at PROBE_BPS: 64 KiB/s offered → 2.0.
+        let probe = cap_slot(0, 0, 0, 2.0 * PROBE_BPS, 0.0);
+        assert!((carrier_score(&probe) - 2.0).abs() < 1e-9);
+        // Idle + no report → 0 (looks free).
+        let idle = cap_slot(0, 0, 0, 0.0, 0.0);
+        assert_eq!(carrier_score(&idle), 0.0);
+    }
+
+    #[test]
+    fn balanced_capacity_aware_bypasses_the_saturated_adapter() {
+        // The user's saturation complaint: adapter 0 (Wi-Fi) is at its
+        // ceiling — it is OFFERED 1.6 MiB/s but only DELIVERS 1.0 — while
+        // adapter 1 (Ethernet) has headroom (offered 0.2, delivers 2.0).
+        // Capacity-aware Balanced must pick adapter 1 even though adapter
+        // 0 has the SHALLOWER writer queue (queue depth alone is not a
+        // saturation signal).
+        let slots = [
+            cap_slot(0, 10_000, 30, 1.6 * 1024.0 * 1024.0, 1.0 * 1024.0 * 1024.0),
+            cap_slot(1, 900_000, 40, 0.2 * 1024.0 * 1024.0, 2.0 * 1024.0 * 1024.0),
+        ];
+        assert_eq!(pick1(mt_net::MergePolicy::Balanced, &slots), Some(1));
+        // Equal relative load (both 0.5, above the probe floor) →
+        // capacity-proportional tie via the cursor.
+        let tied = [
+            cap_slot(0, 0, 30, 1.0 * 1024.0 * 1024.0, 2.0 * 1024.0 * 1024.0),
+            cap_slot(1, 0, 40, 0.5 * 1024.0 * 1024.0, 1.0 * 1024.0 * 1024.0),
+        ];
+        let mut cursor = 0u64;
+        let seq: Vec<usize> = (0..2)
+            .map(|_| pick_carrier_index(mt_net::MergePolicy::Balanced, &tied, &mut cursor).unwrap())
+            .collect();
+        assert_eq!(seq, vec![0, 1]);
+    }
+
+    #[test]
+    fn balanced_spreads_proportionally_to_reported_capacity() {
+        // 10:1 capacity ratio. Greedy min-relative-load picking converges
+        // on the equilibrium where every carrier's assign/deliver ratio is
+        // equal — i.e. the fat path ends up carrying ~10x the thin one's
+        // share. Assert the crossover points around that equilibrium.
+        let fat = cap_slot(0, 0, 30, 0.0, 10_000_000.0);
+        let thin = cap_slot(1, 0, 40, 3_000_000.0, 1_000_000.0);
+        // fat score 0 < thin score 3.0 → fat wins; still winning at 0.4.
+        let mut slots = [fat, thin];
+        assert_eq!(pick1(mt_net::MergePolicy::Balanced, &slots), Some(0));
+        slots[0].assign_bps = 4_000_000.0; // 0.4 < 3.0
+        assert_eq!(pick1(mt_net::MergePolicy::Balanced, &slots), Some(0));
+        // Near equilibrium (fat 0.99 vs thin 1.0) fat still wins…
+        slots[0].assign_bps = 9_900_000.0; // 0.99
+        slots[1].assign_bps = 1_000_000.0; // 1.0
+        assert_eq!(pick1(mt_net::MergePolicy::Balanced, &slots), Some(0));
+        // …and flips the moment its relative load exceeds thin's.
+        slots[0].assign_bps = 10_100_000.0; // 1.01 > 1.0
+        assert_eq!(pick1(mt_net::MergePolicy::Balanced, &slots), Some(1));
+    }
+
+    #[test]
+    fn priority_spills_when_relative_load_exceeds_ratio() {
+        // Adapter 0 is #1 in user order and its writer queue is EMPTY —
+        // but the peer reports it only delivers 1 MiB/s while it is being
+        // offered 1.2 MiB/s (score 1.2 ≥ PRIORITY_SPILL_RATIO) → spill to
+        // adapter 1 even though its queue is deeper.
+        let c0_ceiling = [
+            cap_slot(0, 0, 30, 1.2 * 1024.0 * 1024.0, 1.0 * 1024.0 * 1024.0),
+            cap_slot(1, 300_000, 40, 0.1 * 1024.0 * 1024.0, 4.0 * 1024.0 * 1024.0),
+        ];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::Priority, &c0_ceiling),
+            Some(1),
+            "queue-empty but over-reported #1 must spill"
+        );
+        // Just under the ratio (1.1 < 1.15) → #1 keeps filling.
+        let c0_healthy = [
+            cap_slot(0, 0, 30, 1.1 * 1024.0 * 1024.0, 1.0 * 1024.0 * 1024.0),
+            cap_slot(1, 300_000, 40, 0.1 * 1024.0 * 1024.0, 4.0 * 1024.0 * 1024.0),
+        ];
+        assert_eq!(pick1(mt_net::MergePolicy::Priority, &c0_healthy), Some(0));
+        // Everything over-reported → the least RELATIVE load takes the
+        // excess (0.9 beats 2.5), not the least-queued.
+        let all_over = [
+            cap_slot(
+                0,
+                1_000_000,
+                30,
+                0.9 * 1024.0 * 1024.0,
+                1.0 * 1024.0 * 1024.0,
+            ),
+            cap_slot(1, 100_000, 40, 5.0 * 1024.0 * 1024.0, 2.0 * 1024.0 * 1024.0),
+        ];
+        assert_eq!(pick1(mt_net::MergePolicy::Priority, &all_over), Some(0));
+    }
+
+    #[test]
+    fn mixed_reports_probe_the_unreported_carrier() {
+        // One reporter (delivering fine, score 0.5) vs one silent peer
+        // being offered 64 KiB/s → probed score 2.0: the reported carrier
+        // wins despite the silent one having the empty queue.
+        let slots = [
+            cap_slot(0, 500_000, 30, 0.5 * 1024.0 * 1024.0, 1.0 * 1024.0 * 1024.0),
+            cap_slot(1, 0, 40, 64.0 * 1024.0, 0.0),
+        ];
+        assert_eq!(pick1(mt_net::MergePolicy::Balanced, &slots), Some(0));
     }
 }
