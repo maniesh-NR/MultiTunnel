@@ -140,6 +140,11 @@ pub struct SettingsView {
     /// migration by serde default, D20 precedent).
     #[serde(default)]
     pub close_to_tray: bool,
+    /// S16: keep the window above all normal windows (titlebar
+    /// right-click menu + Settings → Window & tray). Absent in older
+    /// files → false (same D8 version-free migration).
+    #[serde(default)]
+    pub always_on_top: bool,
 }
 
 fn default_bond_mode() -> String {
@@ -683,7 +688,7 @@ mod close_to_tray_migration_tests {
     }
 
     impl SettingsView {
-        fn default_settings_for_tests() -> Self {
+        pub(crate) fn default_settings_for_tests() -> Self {
             Self {
                 theme_seed: 0,
                 dark_mode: false,
@@ -700,7 +705,44 @@ mod close_to_tray_migration_tests {
                 probe_target: String::new(),
                 exit_probe_url: String::new(),
                 close_to_tray: false,
+                always_on_top: false,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod always_on_top_migration_tests {
+    use super::*;
+
+    /// S16: settings.json written by v0.9 (no `always_on_top` key) loads
+    /// with always_on_top = false — the serde-default migration (D8).
+    #[test]
+    fn old_settings_without_always_on_top_default_off() {
+        let json = r#"{
+            "theme_seed": 42,
+            "dark_mode": false,
+            "system_proxy": true,
+            "merge_policy": "balanced",
+            "autostart": false,
+            "close_to_tray": true,
+            "log_level": "info",
+            "probe_target": "connectivitycheck.gstatic.com:80",
+            "exit_probe_url": "http://ip-api.com/json"
+        }"#;
+        let v: SettingsView = serde_json::from_str(json).expect("old settings load");
+        assert!(!v.always_on_top);
+        assert!(v.close_to_tray, "S15 field intact");
+    }
+
+    /// The round trip: a file written by S16 reads back the same value.
+    #[test]
+    fn always_on_top_roundtrips() {
+        let mut v = SettingsView::default_settings_for_tests();
+        v.always_on_top = true;
+        let json = serde_json::to_string(&v).expect("serialize");
+        assert!(json.contains("\"always_on_top\":true"));
+        let back: SettingsView = serde_json::from_str(&json).expect("reload");
+        assert!(back.always_on_top);
     }
 }

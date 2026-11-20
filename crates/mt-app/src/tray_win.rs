@@ -24,8 +24,12 @@ mod win {
         WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WS_OVERLAPPED,
     };
 
-    use crate::tray::ffi_helpers::{ico_image_bytes, tip_array, to_wide, ICON_BYTES, ICON_SIZE};
-    use crate::tray::{action_for_id, assign_ids, QuickAction, QuickEntry, TrayCommand, TrayEvent};
+    use crate::tray::ffi_helpers::{
+        ico_image_bytes, tip_array, to_wide, ICON_BYTES, ICON_MONO_BYTES, ICON_SIZE,
+    };
+    use crate::tray::{
+        action_for_id, assign_ids, QuickAction, QuickEntry, TrayCommand, TrayEvent, TrayIcon,
+    };
 
     /// Tray icon id (NOTIFYICONDATAW.uID) — one icon per window.
     const TRAY_ID: u32 = 1;
@@ -46,12 +50,19 @@ mod win {
 
     struct UiState {
         hwnd: HWND,
+        /// S16: both icons live for the app's lifetime; `icon` is the one
+        /// currently shown (swapped by TrayCommand::Icon).
         icon: HICON,
         /// True only when `icon` came from `CreateIconFromResourceEx` (must
         /// then be `DestroyIcon`d). A `LoadIconW` fallback is a SHARED
         /// system icon — never destroyed.
         icon_owned: bool,
         icon_added: bool,
+        /// The monochrome (not-connected) icon + ownership.
+        icon_mono: HICON,
+        icon_mono_owned: bool,
+        /// Which style is currently on the tray (S16).
+        icon_style: TrayIcon,
         /// Registered "TaskbarCreated" id (0 = registration failed).
         taskbar_msg: u32,
         last_tip: String,
@@ -78,6 +89,7 @@ mod win {
     pub(crate) fn spawn_impl(
         initial_tooltip: String,
         initial_model: Vec<QuickEntry>,
+        initial_icon: TrayIcon,
     ) -> Option<(
         crate::tray::TrayHandle,
         tokio::sync::mpsc::UnboundedReceiver<TrayEvent>,
@@ -102,6 +114,9 @@ mod win {
                         icon: std::ptr::null_mut(),
                         icon_owned: false,
                         icon_added: false,
+                        icon_mono: std::ptr::null_mut(),
+                        icon_mono_owned: false,
+                        icon_style: initial_icon,
                         taskbar_msg: 0,
                         last_tip: initial_tooltip,
                         model: initial_model,
@@ -194,12 +209,16 @@ mod win {
         {
             let mut ui = ctx.ui.borrow_mut();
             ui.hwnd = hwnd;
-            let (icon, owned) = load_tray_icon();
+            let (icon, owned) = load_tray_icon(ICON_BYTES);
             ui.icon = icon;
             ui.icon_owned = owned;
+            let (mono, mono_owned) = load_tray_icon(ICON_MONO_BYTES);
+            ui.icon_mono = mono;
+            ui.icon_mono_owned = mono_owned;
             let tip = ui.last_tip.clone();
+            let shown = ui.icon_for(ui.icon_style);
             drop(ui);
-            if add_tray_icon(hwnd, icon, &tip).is_err() {
+            if add_tray_icon(hwnd, shown, &tip).is_err() {
                 // SAFETY: hwnd was created on this thread.
                 unsafe { DestroyWindow(hwnd) };
                 CTX.with(|c| *c.borrow_mut() = None);
@@ -248,7 +267,7 @@ mod win {
         teardown(ctx, hwnd);
     }
 
-    /// Final teardown: timer off, icon off, icon handle freed, window
+    /// Final teardown: timer off, icon off, icon handles freed, window
     /// gone (WM_DESTROY already quit the loop).
     fn teardown(ctx: &'static TrayCtx, hwnd: HWND) {
         // SAFETY: our own timer.
@@ -260,19 +279,22 @@ mod win {
                 // SAFETY: d carries the icon identity; NIM_DELETE removes it.
                 let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &d) };
             }
-            if ui.icon_owned && !ui.icon.is_null() {
-                // SAFETY: icon came from CreateIconFromResourceEx.
-                unsafe { DestroyIcon(ui.icon) };
+            for (icon, owned) in [(ui.icon, ui.icon_owned), (ui.icon_mono, ui.icon_mono_owned)] {
+                if owned && !icon.is_null() {
+                    // SAFETY: icon came from CreateIconFromResourceEx.
+                    unsafe { DestroyIcon(icon) };
+                }
             }
             ui.icon_added = false;
             ui.icon = std::ptr::null_mut();
+            ui.icon_mono = std::ptr::null_mut();
         }
     }
 
     // ---- icon / window ---------------------------------------------------------
 
-    fn load_tray_icon() -> (HICON, bool) {
-        if let Some(bytes) = ico_image_bytes(ICON_BYTES, ICON_SIZE) {
+    fn load_tray_icon(ico_bytes: &[u8]) -> (HICON, bool) {
+        if let Some(bytes) = ico_image_bytes(ico_bytes, ICON_SIZE) {
             // SAFETY: bytes points into our read-only embedded ICO data
             // with exactly the length from the directory entry; 0x00030000
             // is the documented icon-resource version; fIcon=1.
@@ -297,6 +319,19 @@ mod win {
             unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) },
             false,
         )
+    }
+
+    impl UiState {
+        /// The HICON currently representing a style. Falls back to the
+        /// colored icon when the mono handle is unavailable (load
+        /// failure) — a wrong-color icon beats an invisible one.
+        fn icon_for(&self, style: TrayIcon) -> HICON {
+            match style {
+                TrayIcon::Color => self.icon,
+                TrayIcon::Mono if !self.icon_mono.is_null() => self.icon_mono,
+                TrayIcon::Mono => self.icon,
+            }
+        }
     }
 
     /// Hidden TOP-LEVEL STATIC window, subclassed with our procedure (see
@@ -415,11 +450,16 @@ mod win {
 
     // ---- handlers ----------------------------------------------------------------
 
-    /// Explorer restarted: re-add the SAME icon identity.
+    /// Explorer restarted: re-add the SAME icon identity (the style
+    /// currently selected — S16).
     fn on_taskbar_created(ctx: &'static TrayCtx, hwnd: HWND) {
         let (icon, added, tip) = {
             let ui = ctx.ui.borrow();
-            (ui.icon, ui.icon_added, ui.last_tip.clone())
+            (
+                ui.icon_for(ui.icon_style),
+                ui.icon_added,
+                ui.last_tip.clone(),
+            )
         };
         if !added || icon.is_null() {
             return;
@@ -458,6 +498,22 @@ mod win {
                     let mut ui = ctx.ui.borrow_mut();
                     ui.model = model;
                     ui.ids = ids;
+                }
+                TrayCommand::Icon(style) => {
+                    let icon = {
+                        let mut ui = ctx.ui.borrow_mut();
+                        if ui.icon_style == style {
+                            continue;
+                        }
+                        ui.icon_style = style;
+                        ui.icon_for(style)
+                    };
+                    let mut d = nid_base(hwnd);
+                    d.uFlags = NIF_ICON;
+                    d.hIcon = icon;
+                    // SAFETY: NIM_MODIFY only reads d; a missing icon just
+                    // returns FALSE.
+                    let _ = unsafe { Shell_NotifyIconW(NIM_MODIFY, &d) };
                 }
                 TrayCommand::Shutdown(ack) => {
                     // Stop the icon first (best effort), ack, then let
@@ -614,13 +670,14 @@ pub(crate) use win::{spawn_impl, HandleInner};
 
 #[cfg(not(windows))]
 mod stub {
-    use crate::tray::{QuickEntry, TrayCommand, TrayEvent};
+    use crate::tray::{QuickEntry, TrayCommand, TrayEvent, TrayIcon};
 
     /// Non-Windows: no tray (the app keeps working; close-to-tray
     /// degrades to minimize — see D25 §3).
     pub fn spawn_impl(
         _initial_tooltip: String,
         _initial_model: Vec<QuickEntry>,
+        _initial_icon: TrayIcon,
     ) -> Option<(
         crate::tray::TrayHandle,
         tokio::sync::mpsc::UnboundedReceiver<TrayEvent>,

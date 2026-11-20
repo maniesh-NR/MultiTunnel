@@ -72,6 +72,12 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > switch, exit). Want the ✕ button to hide into the tray instead of
 > quitting? Turn ON "keep running in the tray when closed" under
 > Settings → Window & tray (off by default — closing really closes).
+>
+> v0.10: the tray icon is state-aware — the colored logo while connected,
+> a monochrome version while not — and hovering it shows the live
+> download/upload speeds plus the session totals. Right-clicking the
+> title bar opens a window menu with "Always on top" (also under
+> Settings → Window & tray), Minimize, Maximize/Restore and Close.
 
 **SMOKE TEST — this is the first time the GUI binary runs on real Windows.**
 The development sandbox is Linux; the window has been cross-compiled and

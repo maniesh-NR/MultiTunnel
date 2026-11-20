@@ -7,12 +7,20 @@ This script decodes it with the stdlib only (zlib + per-scanline unfilter
 — the repo carries no image crate), splits the two segments, and emits:
 
     assets/logo.png     verbatim copy of the source (reference/repro)
-    assets/logo_24.rgba titlebar emblem, 24x24 RGBA8 (iced image Handle)
+    assets/logo_24.rgba titlebar emblem, 24x24 RGBA8, TRANSPARENT
+                        background (S16: flood-fill key-out)
     assets/logo_64.rgba window icon,    64x64 RGBA8 (window::Settings icon)
-    assets/icon.ico     tray icon: BMP-format entries 16/32/48 (emblem,
-                        tight crop keeps the mark legible) + 256 (full
-                        lockup) — the same file src/tray.rs (legacy tray)
-                        and the mt-app tray parse at runtime.
+    assets/icon.ico     tray icon (connected state): BMP-format entries
+                        16/32/48 (emblem, tight crop keeps the mark
+                        legible) + 256 (full lockup) — the same file
+                        src/tray.rs (legacy tray) and the mt-app tray parse
+                        at runtime.
+    assets/icon_mono.ico  tray icon (not-connected state): same entry
+                        shape, monochrome + transparent (S16).
+    assets/logo_transparent.png  full lockup, transparent background.
+    assets/banner.png    1280x360 README hero banner (S16): the lockup
+                        composited on a canvas matching the logo
+                        background.
 
 Small squares are the EMBLEM on the logo's own background color (the
 source art is a solid-color canvas, so letterboxing is seamless); the
@@ -216,19 +224,188 @@ def resize_bilinear(img, dw, dh):
     return (dw, dh, bytes(out))
 
 
+def resize_area(img, dw, dh):
+    """Area-averaging (box) resample — REQUIRED for large downscales
+    (S16): bilinear samples only 4 of ~400 source pixels at 20:1, which
+    punched holes through the transparent emblem. Alpha is premultiplied
+    before averaging and unpremultiplied after, so transparent
+    surroundings never tint the surviving colors."""
+    w, h, buf = img
+    if (w, h) == (dw, dh):
+        return img
+    out = bytearray(dw * dh * 4)
+    for dy in range(dh):
+        sy0, sy1 = dy * h / dh, (dy + 1) * h / dh
+        for dx in range(dw):
+            sx0, sx1 = dx * w / dw, (dx + 1) * w / dw
+            r = g = b = a = 0.0
+            for y in range(int(sy0), min(int(sy1) + 1, h)):
+                wy = min(sy1, y + 1) - max(sy0, y)
+                if wy <= 0:
+                    continue
+                for x in range(int(sx0), min(int(sx1) + 1, w)):
+                    wx = min(sx1, x + 1) - max(sx0, x)
+                    if wx <= 0:
+                        continue
+                    wgt = wy * wx
+                    o = (y * w + x) * 4
+                    al = buf[o + 3] / 255.0
+                    r += buf[o] * al * wgt
+                    g += buf[o + 1] * al * wgt
+                    b += buf[o + 2] * al * wgt
+                    a += al * wgt
+            o = (dy * dw + dx) * 4
+            if a > 0:
+                out[o] = int(round(r / a))
+                out[o + 1] = int(round(g / a))
+                out[o + 2] = int(round(b / a))
+                out[o + 3] = int(round(min(a / (w / dw * h / dh), 1.0) * 255))
+    return (dw, dh, bytes(out))
+
+
+def smart_resize(img, dw, dh):
+    """Bilinear for upscales/mild rescales, area-average when the source
+    is more than 2x the destination in either axis."""
+    w, h, _ = img
+    if dw * 2 <= w or dh * 2 <= h:
+        return resize_area(img, dw, dh)
+    return resize_bilinear(img, dw, dh)
+
+
 def square_on_bg(img, size, bg, margin=0.08):
-    """Scale img to fit a size x size canvas of `bg`, centered."""
+    """Scale img to fit a size x size canvas of `bg` (4-tuple: alpha is
+    honored — (0,0,0,0) yields a transparent canvas), centered."""
     w, h, _ = img
     inner = size * (1.0 - 2 * margin)
     scale = min(inner / w, inner / h)
     tw, th = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
-    scaled = resize_bilinear(img, tw, th)
+    scaled = smart_resize(img, tw, th)
     ox, oy = (size - tw) // 2, (size - th) // 2
-    out = bytearray(bytes(bg[:3]) + b"\xff") * (size * size)
+    out = bytearray(bytes(bg[:3]) + bytes((bg[3],)) * 1) * (size * size)
     for y in range(th):
         d = ((oy + y) * size + ox) * 4
         out[d : d + tw * 4] = scaled[2][(y * tw) * 4 : (y * tw + tw) * 4]
     return (size, size, bytes(out))
+
+
+# ---- S16: background key-out / monochrome / compositing / PNG encode --------
+
+
+def key_out_background(img, local_tol=14, global_tol=25):
+    """Flood-fill the border-connected background to alpha=0.
+
+    Two gates keep the mark intact: a pixel joins the background only if
+    it is (a) adjacent to an already-classified background pixel with a
+    per-channel diff <= local_tol (handles the source's soft gradient)
+    and (b) within global_tol of the average border color (so a pale
+    interior region of the mark can never be eaten via a soft edge).
+    Enclosed background-colored pockets stay opaque (they read as part of
+    the mark, like the counters of letters)."""
+    w, h, buf = img
+    # Average border color (the canvas the mark was drawn on).
+    border = []
+    for x in range(w):
+        border.append((0, x))
+        border.append((h - 1, x))
+    for y in range(1, h - 1):
+        border.append((y, 0))
+        border.append((y, w - 1))
+    n = len(border)
+    avg = [sum(px(img, x, y)[c] for y, x in border) // n for c in range(3)]
+    out = bytearray(buf)
+    seen = bytearray(w * h)
+    stack = []
+    for y, x in border:
+        if dist(px(img, x, y), avg) <= global_tol:
+            stack.append((y, x))
+            seen[y * w + x] = 1
+    while stack:
+        y, x = stack.pop()
+        o = (y * w + x) * 4
+        out[o + 3] = 0
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w and not seen[ny * w + nx]:
+                seen[ny * w + nx] = 1
+                c = px(img, nx, ny)
+                cur = (buf[o], buf[o + 1], buf[o + 2])
+                if (
+                    max(abs(c[k] - cur[k]) for k in range(3)) <= local_tol
+                    and dist(c, avg) <= global_tol
+                ):
+                    stack.append((ny, nx))
+    return (w, h, bytes(out))
+
+
+def desaturate(img, lo=64, hi=216):
+    """Monochrome: luminance grayscale with contrast normalization to
+    [lo, hi] — mid-tones that stay legible on light AND dark taskbars."""
+    w, h, buf = img
+    out = bytearray(buf)
+    lums = []
+    for i in range(w * h):
+        o = i * 4
+        if buf[o + 3] > 0:
+            lums.append(int(0.299 * buf[o] + 0.587 * buf[o + 1] + 0.114 * buf[o + 2]))
+    if not lums:
+        return img
+    lums.sort()
+    p2, p98 = lums[len(lums) // 50], lums[49 * len(lums) // 50]
+    span = max(p98 - p2, 1)
+    for i in range(w * h):
+        o = i * 4
+        if buf[o + 3] > 0:
+            lum = int(0.299 * buf[o] + 0.587 * buf[o + 1] + 0.114 * buf[o + 2])
+            g = int(round(lo + (min(max(lum, p2), p98) - p2) * (hi - lo) / span))
+            out[o] = out[o + 1] = out[o + 2] = g
+    return (w, h, bytes(out))
+
+
+def composite_on(img, size_wh, bg, margin=0.14):
+    """Alpha-composite a transparent RGBA raster centered on a solid
+    `bg` canvas of size_wh (w, h), with a symmetric margin."""
+    w, h, buf = img
+    cw, ch = size_wh
+    aw, ah = cw * (1.0 - 2 * margin), ch * (1.0 - 2 * margin)
+    scale = min(aw / w, ah / h)
+    tw, th = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+    scaled = smart_resize(img, tw, th)
+    ox, oy = (cw - tw) // 2, (ch - th) // 2
+    out = bytearray(bytes(bg[:3]) + b"\xff" * 1) * (cw * ch)
+    for y in range(th):
+        for x in range(tw):
+            s = (y * tw + x) * 4
+            a = scaled[2][s + 3]
+            if a == 0:
+                continue
+            d = ((oy + y) * cw + ox + x) * 4
+            if a == 255:
+                out[d : d + 3] = scaled[2][s : s + 3]
+            else:
+                for c in range(3):
+                    out[d + c] = (scaled[2][s + c] * a + out[d + c] * (255 - a)) // 255
+    return (cw, ch, bytes(out))
+
+
+def encode_png(img):
+    """Minimal deterministic PNG writer (RGBA8, filter 0, zlib level 9)."""
+    w, h, buf = img
+    raw = b"".join(b"\x00" + bytes(buf[y * w * 4 : (y + 1) * w * 4]) for y in range(h))
+
+    def chunk(typ, body):
+        return (
+            struct.pack(">I", len(body))
+            + typ
+            + body
+            + struct.pack(">I", zlib.crc32(typ + body) & 0xFFFFFFFF)
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
 
 
 # ---- ICO writing (BMP-format entries, same layout as make_icon.py) ---------
@@ -317,20 +494,55 @@ def main() -> int:
     with open(os.path.join(outdir, "logo.png"), "wb") as f:
         f.write(data)
 
-    # titlebar emblem + window icon (square canvases on the logo's bg)
-    for size in (24, 64):
-        sq = square_on_bg(emblem_img, size, bg)
-        with open(os.path.join(outdir, f"logo_{size}.rgba"), "wb") as f:
-            f.write(sq[2])
-        print(f"logo_{size}.rgba: {len(sq[2])} bytes ({size}x{size})")
+    # S16: transparent variants (flood-fill key-out on the tight crops).
+    emblem_t = key_out_background(emblem_img)
+    lockup_t = key_out_background(lockup_img)
+    opaque = sum(1 for i in range(len(emblem_t[2])) if i % 4 == 3 and emblem_t[2][i] > 0)
+    print(f"transparent emblem: {opaque} opaque px of {emblem_t[0]*emblem_t[1]}")
 
-    # tray icon: 16/32/48 emblem squares + 256 full lockup
+    # titlebar emblem: TRANSPARENT background (S16 ask), padded to a square
+    # so the mark stays centered at 20x20 draw size.
+    sq24 = square_on_bg(emblem_t, 24, (0, 0, 0, 0))
+    with open(os.path.join(outdir, "logo_24.rgba"), "wb") as f:
+        f.write(sq24[2])
+    print(f"logo_24.rgba: {len(sq24[2])} bytes (24x24, transparent bg)")
+
+    # window icon: colored square on the logo's own canvas (unchanged look)
+    sq64 = square_on_bg(emblem_img, 64, bg)
+    with open(os.path.join(outdir, "logo_64.rgba"), "wb") as f:
+        f.write(sq64[2])
+    print(f"logo_64.rgba: {len(sq64[2])} bytes (64x64)")
+
+    # transparent lockup (PNG) — README + compositing source
+    png = encode_png(lockup_t)
+    with open(os.path.join(outdir, "logo_transparent.png"), "wb") as f:
+        f.write(png)
+    print(f"logo_transparent.png: {len(png)} bytes ({lockup_t[0]}x{lockup_t[1]})")
+
+    # README hero banner: lockup composited on a canvas-colored 1280x360
+    banner = composite_on(lockup_t, (1280, 360), bg)
+    banner_png = encode_png(banner)
+    with open(os.path.join(outdir, "banner.png"), "wb") as f:
+        f.write(banner_png)
+    print(f"banner.png: {len(banner_png)} bytes (1280x360)")
+
+    # tray icon (connected): 16/32/48 emblem squares + 256 full lockup
     entries = []
     for size in (16, 32, 48, 256):
         sq = square_on_bg(emblem_img if size < 64 else lockup_img, size, bg)
         entries.append((size, ico_image(sq)))
     n = write_ico(os.path.join(outdir, "icon.ico"), entries)
     print(f"icon.ico: {n} bytes (16/32/48 emblem + 256 lockup, BMP entries)")
+
+    # tray icon (not connected): monochrome + transparent (S16)
+    mono_emblem = desaturate(emblem_t)
+    mono_lockup = desaturate(lockup_t)
+    entries = []
+    for size in (16, 32, 48, 256):
+        sq = square_on_bg(mono_emblem if size < 64 else mono_lockup, size, (0, 0, 0, 0))
+        entries.append((size, ico_image(sq)))
+    n = write_ico(os.path.join(outdir, "icon_mono.ico"), entries)
+    print(f"icon_mono.ico: {n} bytes (16/32/48 emblem + 256 lockup, mono)")
     return 0
 
 

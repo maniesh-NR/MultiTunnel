@@ -1,5 +1,9 @@
 # MultiTunnel
 
+<p align="center">
+  <img src="assets/banner.png" alt="MultiTunnel — one tunnel, every adapter" width="830">
+</p>
+
 An **all-in-one Windows proxy app with zero user-installed dependencies**:
 a Rust core supervises an Xray VLESS+REALITY tunnel to your own VM, bonds
 multiple physical uplinks, imports `vless://` share links, and manages the
@@ -302,21 +306,31 @@ bonding mode to `stream` (Advanced): the bytes of every connection are
 split across all ticked adapters and re-merged by `mt-merge-server` on
 the tunnel server — see "Stream bonding (v0.5)" above.
 
-## App identity & tray (v0.9) — logo, blended title bar, close-to-tray
+## App identity & tray (v0.9/v0.10) — logo, blended title bar, close-to-tray
 
 The window itself became a first-class part of the app (all of it in the
 GUI, no new dependencies):
+
+<img src="assets/logo_transparent.png" alt="MultiTunnel logo" width="110" align="right">
 
 - **Your logo everywhere**: the window icon, the taskbar entry, the
   title bar and the tray icon all use the attached logo image
   (re-generated at build time by `scripts/make_logo_assets.py` —
   stdlib-only PNG decode, emblem crops for the small sizes, full lockup
-  for 256 px).
+  for 256 px). Since v0.10 the title-bar emblem rides on a TRANSPARENT
+  background (flood-fill key-out with area-averaged resampling), so the
+  mark blends into the window surface instead of sitting on a colored
+  chip — same for the README banner above.
 - **Chromium-style title bar**: the native window chrome is replaced by
   an in-app strip on the SAME surface as the page — logo + app name on
   the left, minimize/maximize/close on the right, and every other pixel
   of the strip drags the window (a fast second press maximizes, like a
   double-click on a classic title bar).
+- **Title-bar right-click menu (v0.10)**: right-click anywhere on the
+  strip for the window menu — **Always on top** (checkable, persisted
+  across restarts, cross-platform via the window-manager's
+  always-above state), Minimize, Maximize/Restore and Close. The menu
+  opens at the cursor, Chromium-style.
 - **Close-to-tray toggle** (Settings → Window & tray): when ON, the ✕
   button hides the window into the tray instead of exiting — the tunnel
   keeps running. OFF (default) closing really closes.
@@ -324,6 +338,14 @@ GUI, no new dependencies):
   (Windows; raw Win32, same approach as the legacy `multitunnel-tray`
   companion): left-click reopens the window, and it survives an
   explorer.exe restart.
+- **State-aware tray icon (v0.10)**: while connected the tray shows the
+  colored logo; in every not-connected state it switches to a
+  monochrome, transparent-background version of the same mark — the
+  connection state is readable from across the room.
+- **Live speeds on hover (v0.10)**: hovering the tray icon shows the
+  current download/upload speed AND the session's total uploaded /
+  downloaded volume (e.g. `MultiTunnel — ↓9.4 MB/s ↑1.2 MB/s •
+  Σ↓3.0 GB ↑42.9 MB`).
 - **Quick Settings on right-click**: the tray menu is built fresh from
   live state — Connect/Disconnect (state-reflecting), the server list
   (radio-checked on the active profile), Open MultiTunnel and Exit.
@@ -557,12 +579,49 @@ cargo test --workspace       # full suite (321 tests)
   abrupt termination the proxy can remain set until the next connect run
   cleans it up.
 
+## Attribution
+
+MultiTunnel stands on the shoulders of several projects, and the UI's
+feature set follows two well-known tools:
+
+- **[Xray-core](https://github.com/XTLS/Xray-core)** (Apache-2.0) — the
+  VLESS + REALITY tunnel engine, fetched and SHA256-verified at runtime
+  (never redistributed inside the release archives).
+- **[iced](https://github.com/iced-rs/iced)** (MIT) — the GUI toolkit
+  behind the Material You app. Two renderer crates are vendored in
+  `vendor/` with tiny, documented damage-tracking fixes (see
+  `vendor/*/README-MULTITUNNEL.md`); every other dependency comes
+  straight from crates.io. The complete machine-generated dependency
+  manifest with licenses lives in
+  [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- **Material You / Material Design 3** — Google's design language; the
+  dynamic-color scheme is derived with the `material-colors` HCT color
+  science crate, not copied assets.
+- **[v2rayN](https://github.com/2dust/v2rayN)** — the Windows proxy
+  client whose workflow (paste a `vless://` link, pick a server, done)
+  MultiTunnel reimplements; the routing-import filter also accepts
+  v2rayN routing JSON.
+- **net-merge** — the link-bonding concept MultiTunnel generalizes into
+  the in-process `mt-bond` stream merger.
+- **BondTunnel** — this project's own predecessor (same author);
+  MultiTunnel is its Rust rewrite.
+- **The MultiTunnel logo and banner** are the project's own artwork
+  (contributed by the author); the build-time variants (transparent,
+  monochrome, ICO sizes) are derived deterministically by
+  `scripts/make_logo_assets.py`.
+
+Tooling that makes the zero-dependency cross-build possible:
+**[cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)** and
+**[Zig](https://ziglang.org/)** (the C cross-toolchain for the Windows
+builds), and the **Rust** language itself.
+
 ## Licensing
 
 MultiTunnel is MIT-licensed — see [LICENSE](LICENSE). Third-party components
 (compile-time crates including the fonts embedded in the GUI, and the
 runtime-fetched Xray-core engine, which is not redistributed) are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — see also
+[Attribution](#attribution) for the projects this app is built on.
 
 ## Development
 

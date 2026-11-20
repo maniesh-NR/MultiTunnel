@@ -8,6 +8,7 @@ Verbs (comma-separated list, executed in order):
     wait:<sec>            sleep
     shot:<name>           screenshot to <out_dir>/<name>.png (ffmpeg x11grab)
     click:<x>,<y>         XTEST button-1 press+release at LOGICAL coords
+    rclick:<x>,<y>        XTEST button-3 press+release (context menu)
     dclick:<x>,<y>        two clicks 60 ms apart
     type:<text>           XTEST typed ASCII (keymap-level shift handling)
     key:<keysym>          XTEST single keysym (e.g. Return, Escape)
@@ -127,6 +128,18 @@ def main() -> int:
         d.sync()
         time.sleep(0.15)
 
+    def rclick(x, y):
+        # S16: button-3 press+release (titlebar context menu).
+        xtest.fake_input(d, X.MotionNotify, x=int(x), y=int(y))
+        d.flush()
+        time.sleep(0.05)
+        xtest.fake_input(d, X.ButtonPress, 3)
+        d.sync()
+        time.sleep(0.06)
+        xtest.fake_input(d, X.ButtonRelease, 3)
+        d.sync()
+        time.sleep(0.15)
+
     def key(code, press):
         xtest.fake_input(d, X.KeyPress if press else X.KeyRelease, code)
         d.sync()
@@ -196,6 +209,10 @@ def main() -> int:
                 x, y = arg.split(",")
                 focus()
                 click(int(x), int(y))
+            elif op == "rclick":
+                x, y = arg.split(",")
+                focus()
+                rclick(int(x), int(y))
             elif op == "dclick":
                 x, y = arg.split(",")
                 focus()

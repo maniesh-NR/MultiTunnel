@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "63cc1f5 2026-11-20T08:07:22Z",
+  "as_of": "48bad6b 2026-11-20T08:08:08Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 241,
-  "edge_count": 250,
+  "node_count": 242,
+  "edge_count": 251,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -551,6 +551,26 @@
       "passages": [
         {
           "text": "backup(s1-implementers-fix2): 2026-11-12T15:11:05Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:48bad6b",
+      "type": "commit",
+      "title": "backup(s15-ops-gitattributes): 2026-11-20T08:08:08Z",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "48bad6b"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s15-ops-gitattributes): 2026-11-20T08:08:08Z",
           "kind": "title"
         }
       ]
@@ -4036,6 +4056,10 @@
         {
           "text": "2026-11-20T13:20Z | v0.9.0 RELEASED: tag on b13fb31 → release run 44698724161 SUCCESS (~7 min, warm cache); CI on the same commit (44698711487) ALL GREEN. Assets verified by download+unzip (staged in download/v090-verify/): multitunnel-v0.9.0-windows-x64.zip 6,241,184 B (11-entry manifest, integrity OK; multitunnel.exe PE32+ 12.88 MB + multitunnel-tray.exe PE32+ 2.95 MB — both grew ~0.3-0.6 MB from the embedded logo assets + tray/titlebar code; README carries the \"App identity & tray (v0.9)\" section, QUICKSTART the Step 2 note) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. S15 CLOSED — the user's five asks shipped: (1) the attached image is the app logo on every surface (window, taskbar, title bar, tray, both binaries' embedded ICO), (2) Chromium-style blended title bar (native chrome off, in-app strip, drag + double-press maximize), (3) close-to-tray toggle in Settings → Window & tray, (4) persistent tray icon while open or hidden (Windows), (5) Quick Settings on tray right-click (connect/disconnect, server switch, open, exit). User actions: none — Settings → Window & tray → \"keep running in the tray when closed\" turns the ✕ into hide-to-tray.",
           "kind": "body"
+        },
+        {
+          "text": "2026-11-20T13:30Z | OPS (protocol tooling fix): update_memory.py crashed with UnicodeDecodeError — `git log -p` embedded the S15 .rgba logo assets as TEXT (RGBA pixel bytes contain no NUL, so git's binary sniff missed them; 0xbc at ~7.7 MB of diff). Two-layer fix: .gitattributes marks *.rgba/*.png/*.ico binary (future diffs say \"Binary files differ\") + update_memory.py decodes git output with errors=\"replace\" (history stays readable regardless). Graph tests 18/18 still green after the rebuild.",
+          "kind": "body"
         }
       ]
     },
@@ -7165,6 +7189,12 @@
       "dst": "ledger:s1",
       "rel": "part_of",
       "evidence": "subject stage label (s1)"
+    },
+    {
+      "src": "commit:48bad6b",
+      "dst": "ledger:s15",
+      "rel": "part_of",
+      "evidence": "subject stage label (s15)"
     },
     {
       "src": "commit:56340a5",

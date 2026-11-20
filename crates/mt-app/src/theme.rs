@@ -334,6 +334,63 @@ pub fn menu_style(s: M3Scheme) -> impl Fn(&iced::Theme) -> iced::widget::overlay
 }
 
 // ---------------------------------------------------------------------------
+// S16: titlebar window menu (right-click context menu)
+// ---------------------------------------------------------------------------
+
+/// The floating menu card: high tonal surface, soft elevation shadow
+/// (level-2 menu: the one place a drop shadow earns its keep).
+pub fn menu_card(s: M3Scheme) -> impl Fn(&iced::Theme) -> container::Style {
+    move |_t| container::Style {
+        background: bg(s.surface_container_high),
+        border: border_plain(SHAPE.small),
+        shadow: Shadow {
+            offset: iced::Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+            color: Color {
+                a: 0.25,
+                ..col(s.on_surface)
+            },
+        },
+        text_color: None,
+    }
+}
+
+/// One menu row: transparent at rest, secondary-container hover/press —
+/// the same selected background the pick-list menus use.
+pub fn menu_item(s: M3Scheme) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_t, status| button::Style {
+        background: match status {
+            button::Status::Hovered | button::Status::Pressed => bg(s.secondary_container),
+            _ => None,
+        },
+        text_color: col(s.on_surface),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: SHAPE.small.into(),
+        },
+        shadow: FLAT,
+    }
+}
+
+/// The thin separator rule between menu groups (outline-variant hairline).
+pub fn menu_rule(s: M3Scheme) -> impl Fn(&iced::Theme) -> container::Style {
+    move |_t| container::Style {
+        background: Some(Background::Color(Color {
+            a: 0.45,
+            ..col(s.outline_variant)
+        })),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        shadow: FLAT,
+        text_color: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Switch (iced toggler, styled as an M3 switch)
 // ---------------------------------------------------------------------------
 
@@ -437,6 +494,7 @@ mod tests {
             probe_target: String::new(),
             exit_probe_url: String::new(),
             close_to_tray: false,
+            always_on_top: false,
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);

@@ -339,6 +339,26 @@ pub enum Message {
     CloseToTrayToggled(bool),
     /// An event from the tray icon (left click / menu selection).
     Tray(crate::tray::TrayEvent),
+    // --- S16: titlebar right-click menu + always-on-top ---
+    /// The mouse moved inside the window (anchors the context menu).
+    CursorMoved(iced::Point),
+    /// The titlebar was RIGHT-clicked (open the window menu there).
+    TitleContext,
+    /// A click landed outside the open window menu (close it).
+    TitleContextDismiss,
+    /// A window-menu entry was picked.
+    TitleMenu(TitleMenuItem),
+    /// "always on top" toggled (window menu or Settings).
+    AlwaysOnTopToggled(bool),
+}
+
+/// S16: one entry of the titlebar right-click window menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleMenuItem {
+    AlwaysOnTop,
+    Minimize,
+    Maximize,
+    Close,
 }
 
 /// Valid routing rule kinds (matches the mt-net router matcher).
@@ -441,6 +461,19 @@ pub struct App {
     pub tray_tip: String,
     /// S15: last Quick Settings model pushed to the tray (dedup).
     pub tray_model: Option<Vec<crate::tray::QuickEntry>>,
+    /// S16: last cursor position inside the window (anchors the
+    /// titlebar context menu; None until the first move).
+    pub cursor: Option<iced::Point>,
+    /// S16: current window size (clamps the context menu on screen).
+    pub window_size: Option<iced::Size>,
+    /// S16: the open titlebar window menu's anchor (None = closed).
+    pub title_menu: Option<iced::Point>,
+    /// S16: session-cumulative (up, down) bytes — the tray tooltip's
+    /// "volume so far" (reset when the tunnel leaves Connected).
+    pub session_bytes: (u64, u64),
+    /// S16: tray icon style last pushed (dedup; starts Mono — the app
+    /// boots not-connected).
+    pub tray_icon: crate::tray::TrayIcon,
 }
 
 impl App {
@@ -464,6 +497,7 @@ impl App {
             probe_target: "connectivitycheck.gstatic.com:80".to_string(),
             exit_probe_url: "http://ip-api.com/json".to_string(),
             close_to_tray: false,
+            always_on_top: false,
         };
         Self {
             theme: MtTheme::from_settings(&settings),
@@ -501,6 +535,12 @@ impl App {
             tray_rx: None,
             tray_tip: String::new(),
             tray_model: None,
+            // S16
+            cursor: None,
+            window_size: None,
+            title_menu: None,
+            session_bytes: (0, 0),
+            tray_icon: crate::tray::TrayIcon::Mono,
         }
     }
 
@@ -511,13 +551,17 @@ impl App {
     /// notification icons).
     pub fn init(service: Arc<dyn MtService>, flags: Flags) -> (Self, iced::Task<Message>) {
         let mut app = Self::new(service, flags);
+        // S16: the app boots not-connected → the monochrome tray icon.
+        let initial_icon = crate::tray::TrayIcon::Mono;
         if let Some((handle, rx)) = crate::tray::spawn(
             crate::tray::tooltip(ServiceState::Disconnected, ""),
             crate::tray::model_from(None, &[]),
+            initial_icon,
         ) {
             app.tray = Some(handle);
             app.tray_tip = crate::tray::tooltip(ServiceState::Disconnected, "");
             app.tray_model = Some(crate::tray::model_from(None, &[]));
+            app.tray_icon = initial_icon;
             app.tray_rx = Some(Arc::new(AsyncMutex::new(rx)));
         }
         let tasks = [
@@ -631,6 +675,18 @@ impl App {
                 .link_last_bytes
                 .insert(link.name.clone(), cur)
                 .unwrap_or(cur); // first sight → delta 0 (no fake spike)
+                                 // S16: session totals from the same counters — a counter
+                                 // RESET (engine respawn / reconnect inside Connected) counts
+                                 // its full value, not zero, so the totals never dip.
+            if prev != cur {
+                let (du, dd) = if cur >= prev {
+                    (cur.0 - prev.0, cur.1 - prev.1)
+                } else {
+                    cur
+                };
+                self.session_bytes.0 = self.session_bytes.0.saturating_add(du);
+                self.session_bytes.1 = self.session_bytes.1.saturating_add(dd);
+            }
             let (du, dd) = (cur.0.saturating_sub(prev.0), cur.1.saturating_sub(prev.1));
             // Map the link to every adapter row whose name it carries.
             let mut matched = false;
@@ -751,6 +807,7 @@ impl App {
                         self.rate_history.clear();
                         self.adapter_rates.clear();
                         self.link_last_bytes.clear();
+                        self.session_bytes = (0, 0);
                         self.exit = None;
                     }
                     return self.refresh_status();
@@ -1015,6 +1072,12 @@ impl App {
                 self.settings = s.clone();
                 self.seed_text = s.theme_seed.to_string();
                 self.theme.rederive(s.theme_seed, s.dark_mode);
+                // S16: honor a persisted always-on-top now that settings
+                // exist (the Opened path covers the reverse order).
+                let top = s.always_on_top;
+                if top && self.window_id.is_some() {
+                    return self.apply_window_level(true);
+                }
                 // S11: the saved bonded order may have arrived after the
                 // adapter rows (the init batch is concurrent) — re-sort
                 // UNLESS a draft is in progress (never reshuffle edits).
@@ -1249,13 +1312,21 @@ impl App {
                 if self.window_id.is_none() {
                     if let iced::window::Event::Opened { .. } = event {
                         self.window_id = Some(id);
+                        // S16: honor a persisted always-on-top once the
+                        // window exists (Settings arrive later → the
+                        // SettingsLoaded path covers the reverse order).
+                        if self.settings.always_on_top {
+                            return self.apply_window_level(true);
+                        }
                     }
                 }
                 match event {
                     iced::window::Event::CloseRequested => {
                         return self.handle_close_requested();
                     }
-                    iced::window::Event::Resized(_) => {
+                    iced::window::Event::Resized(size) => {
+                        // S16: remember the size (context-menu clamping).
+                        self.window_size = Some(size);
                         // Maximize state may have changed (OS restore,
                         // snap, our own toggle): re-query for the glyph.
                         if let Some(id) = self.window_id {
@@ -1318,6 +1389,36 @@ impl App {
                 }
                 crate::tray::TrayEvent::Exit => return self.begin_exit(),
             },
+            // --- S16: titlebar right-click window menu (D26) ---
+            Message::CursorMoved(p) => self.cursor = Some(p),
+            Message::TitleContext => {
+                // Chromium-style: the menu opens AT the cursor, dropped
+                // just below the 40 px titlebar strip; without a known
+                // cursor (keyboard/edge case) it anchors top-right.
+                let fallback =
+                    iced::Point::new(self.window_size.map_or(900.0, |s| s.width - 260.0), 44.0);
+                let raw = self.cursor.unwrap_or(fallback);
+                let (mx, my) = Self::menu_bounds();
+                let w = self.window_size.map_or(1080.0, |s| s.width);
+                let h = self.window_size.map_or(720.0, |s| s.height);
+                self.title_menu = Some(iced::Point::new(
+                    raw.x.clamp(4.0, (w - mx - 8.0).max(4.0)),
+                    raw.y.min(h - my - 8.0).max(44.0),
+                ));
+            }
+            Message::TitleContextDismiss => self.title_menu = None,
+            Message::TitleMenu(item) => {
+                self.title_menu = None;
+                return match item {
+                    TitleMenuItem::AlwaysOnTop => {
+                        self.set_always_on_top(!self.settings.always_on_top)
+                    }
+                    TitleMenuItem::Minimize => self.update(Message::TitleMinimize),
+                    TitleMenuItem::Maximize => self.update(Message::TitleMaximize),
+                    TitleMenuItem::Close => self.update(Message::TitleClose),
+                };
+            }
+            Message::AlwaysOnTopToggled(v) => return self.set_always_on_top(v),
         }
         iced::Task::none()
     }
@@ -1325,6 +1426,50 @@ impl App {
     // ------------------------------------------------------------------
     // S15: window close paths + tray sync (D25)
     // ------------------------------------------------------------------
+
+    /// S16: the window menu's (width, height) — kept in one place so the
+    /// TitleContext clamp and the screens.rs overlay agree.
+    pub fn menu_bounds() -> (f32, f32) {
+        (232.0, 196.0)
+    }
+
+    /// S16: apply the always-on-top window level (cross-platform iced
+    /// action — HWND_TOPMOST on Windows, _NET_WM_STATE_ABOVE on X11).
+    fn apply_window_level(&self, on_top: bool) -> iced::Task<Message> {
+        match self.window_id {
+            Some(id) => iced::window::change_level(
+                id,
+                if on_top {
+                    iced::window::Level::AlwaysOnTop
+                } else {
+                    iced::window::Level::Normal
+                },
+            ),
+            None => iced::Task::none(),
+        }
+    }
+
+    /// S16: the one always-on-top mutation point (window menu + Settings
+    /// both land here): persist, then apply the level.
+    fn set_always_on_top(&mut self, v: bool) -> iced::Task<Message> {
+        if self.settings.always_on_top == v {
+            return iced::Task::none();
+        }
+        self.settings.always_on_top = v;
+        util::push_log(
+            &mut self.logs,
+            format!(
+                "INFO  gui: always on top {}",
+                if v {
+                    "on — the window stays above others"
+                } else {
+                    "off"
+                }
+            ),
+        );
+        let t = self.save_settings(self.settings.clone());
+        iced::Task::batch([t, self.apply_window_level(v)])
+    }
 
     /// The one close decision point (window ✕, OS close request, tray
     /// Exit all land here after their own pre-steps). Pure decision via
@@ -1371,8 +1516,9 @@ impl App {
         iced::Task::none()
     }
 
-    /// Push tooltip + Quick Settings model to the tray when they changed
-    /// (called on tick; the tray renders the menu fresh at every open).
+    /// Push tooltip + Quick Settings model + icon style to the tray when
+    /// they changed (called on tick; the tray renders the menu fresh at
+    /// every open).
     fn sync_tray(&mut self) {
         let Some(tray) = &self.tray else { return };
         let state = self
@@ -1385,10 +1531,25 @@ impl App {
             .as_ref()
             .and_then(|s| s.active_profile.clone())
             .unwrap_or_default();
-        let tip = crate::tray::tooltip(state, &active);
+        // S16: while connected the hover tooltip carries the live speeds
+        // and session totals (the user's ask); other states keep the
+        // plain word form.
+        let tip = if state == ServiceState::Connected {
+            let (up_bps, down_bps) = self.throughput.unwrap_or((0, 0));
+            let (total_up, total_down) = self.session_bytes;
+            crate::tray::tooltip_live(up_bps, down_bps, total_up, total_down)
+        } else {
+            crate::tray::tooltip(state, &active)
+        };
         if tip != self.tray_tip {
             self.tray_tip = tip.clone();
             tray.send(crate::tray::TrayCommand::Tooltip(tip));
+        }
+        // S16: colored icon while connected, monochrome otherwise.
+        let icon = crate::tray::TrayIcon::for_state(state);
+        if icon != self.tray_icon {
+            self.tray_icon = icon;
+            tray.send(crate::tray::TrayCommand::Icon(icon));
         }
         let model = crate::tray::model_from(self.status.as_ref(), &self.profiles);
         if self.tray_model.as_ref() != Some(&model) {
@@ -1414,14 +1575,20 @@ impl App {
         let rail = screens::nav_rail(self);
         let titlebar = screens::titlebar(self);
         let s = self.theme.scheme;
-        iced::widget::container(iced::widget::column![
+        let base = iced::widget::container(iced::widget::column![
             titlebar,
             iced::widget::row![rail, content]
         ])
         .style(crate::theme::page(s))
         .width(iced::Length::Fill)
-        .height(iced::Length::Fill)
-        .into()
+        .height(iced::Length::Fill);
+        // S16: the titlebar window menu renders as a full-window layer on
+        // top of everything (stack later children draw above the base).
+        let mut stack = iced::widget::stack![base];
+        if self.title_menu.is_some() {
+            stack = stack.push(screens::title_menu_overlay(self));
+        }
+        stack.into()
     }
 
     /// The window-level iced theme (custom palette from the seed).
@@ -1489,6 +1656,13 @@ impl App {
             // S15: window events (Open/CloseRequested/Resized) + the tray
             // event stream.
             iced::window::events().map(|(id, ev)| Message::WindowEvent(id, ev)),
+            // S16: cursor tracking (anchors the titlebar window menu).
+            iced::event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::CursorMoved(position))
+                }
+                _ => None,
+            }),
             tray_events,
         ])
     }
@@ -2289,5 +2463,100 @@ mod tests {
         let mut app = App::init_async(service, Flags::default()).await;
         drop(app.begin_exit());
         drop(app.begin_exit());
+    }
+
+    // --- S16: session totals, window-menu anchor, always-on-top --------------
+
+    /// S16: session byte totals accumulate per-link deltas, count a
+    /// counter RESET as its full new value (no dip), and zero when the
+    /// tunnel leaves Connected.
+    #[test]
+    fn session_totals_accumulate_and_reset() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::new(service, Flags::default());
+        let snap = |eth: (u64, u64)| StatusSnapshot {
+            state: mt_service::ServiceState::Connected,
+            active_profile: Some("gcp-vm".into()),
+            up_since: None,
+            restarts: 0,
+            links: vec![mt_service::LinkStatus {
+                name: "gcp-vm [Ethernet]".into(),
+                ok: true,
+                latency_ms: None,
+                ewma_ms: None,
+                quarantined: false,
+                bytes_up: eth.0,
+                bytes_down: eth.1,
+            }],
+        };
+        // first sight: zero.
+        app.sample_adapter_rates(&snap((1000, 5000)));
+        assert_eq!(app.session_bytes, (0, 0));
+        // +3 KB up / +4 KB down.
+        app.sample_adapter_rates(&snap((4000, 9000)));
+        assert_eq!(app.session_bytes, (3000, 4000));
+        // counter reset (engine respawn): the full 10/10 counts.
+        app.sample_adapter_rates(&snap((10, 10)));
+        assert_eq!(app.session_bytes, (3010, 4010));
+        // leaving Connected wipes the session totals (next session is
+        // fresh, like the graphs).
+        drop(app.update(Message::Event(ServiceEvent::StateChanged(
+            ServiceState::Disconnected,
+        ))));
+        assert_eq!(app.session_bytes, (0, 0));
+    }
+
+    /// S16: the window menu anchor clamps to the window and drops below
+    /// the 40 px titlebar strip; a missing cursor falls back top-right.
+    #[test]
+    fn title_menu_anchor_clamps() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::new(service, Flags::default());
+        app.window_size = Some(iced::Size::new(1080.0, 720.0));
+
+        // Cursor near the right edge: the 232 px menu is pulled left.
+        drop(app.update(Message::CursorMoved(iced::Point::new(1070.0, 20.0))));
+        drop(app.update(Message::TitleContext));
+        let a = app.title_menu.expect("menu open");
+        assert_eq!(a.y, 44.0, "drops below the strip");
+        assert!(a.x <= 1080.0 - 232.0 - 8.0 + 0.5, "clamped right: {}", a.x);
+        assert!(a.x >= 4.0);
+
+        // No cursor at all: falls back to a sane top-right anchor.
+        app.cursor = None;
+        drop(app.update(Message::TitleContext));
+        let b = app.title_menu.expect("menu open");
+        assert!(b.x >= 700.0, "fallback anchors right: {}", b.x);
+        assert_eq!(b.y, 44.0);
+
+        // Dismiss closes it.
+        drop(app.update(Message::TitleContextDismiss));
+        assert!(app.title_menu.is_none());
+    }
+
+    /// S16: the always-on-top menu item flips the setting and closes the
+    /// menu; the Settings toggler flips it back; the view persists
+    /// through the service (the update()'s Task save is runtime-driven,
+    /// so persistence is proven directly, like the S15 twin test).
+    #[tokio::test]
+    async fn always_on_top_menu_item_roundtrips() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        assert!(!app.settings.always_on_top);
+        drop(app.update(Message::TitleMenu(TitleMenuItem::AlwaysOnTop)));
+        assert!(app.settings.always_on_top, "toggled on");
+        assert!(app.title_menu.is_none(), "menu closed after pick");
+        // Idempotent same-value path.
+        drop(app.update(Message::AlwaysOnTopToggled(true)));
+        assert!(app.settings.always_on_top);
+        // And back off via the Settings toggler.
+        drop(app.update(Message::AlwaysOnTopToggled(false)));
+        assert!(!app.settings.always_on_top);
+        // The SettingsView round-trips the field through the service.
+        let mut s = app.service.settings().await;
+        assert!(!s.always_on_top, "mock default off");
+        s.always_on_top = true;
+        app.service.set_settings(s).await.expect("save");
+        assert!(app.service.settings().await.always_on_top);
     }
 }

@@ -182,6 +182,40 @@ pub fn tooltip(state: ServiceState, active_tag: &str) -> String {
     }
 }
 
+/// S16: the hover tooltip while CONNECTED — live speeds + session totals
+/// (the user's ask: "current upload/download speed and the total
+/// upload/download volume so far"). Single line, well under the 128-unit
+/// NIF_TIP cap even with TB-scale numbers (≈70 units worst case).
+pub fn tooltip_live(up_bps: u64, down_bps: u64, total_up: u64, total_down: u64) -> String {
+    format!(
+        "MultiTunnel — ↓{} ↑{} • Σ↓{} ↑{}",
+        crate::util::fmt_bps(down_bps),
+        crate::util::fmt_bps(up_bps),
+        crate::util::fmt_bytes(total_down),
+        crate::util::fmt_bytes(total_up),
+    )
+}
+
+/// S16: which tray icon is showing — the colored logo while connected,
+/// the monochrome version in every not-connected state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayIcon {
+    Color,
+    Mono,
+}
+
+impl TrayIcon {
+    /// The icon for a service state (Connecting/Failed count as
+    /// not-connected → Mono, per the user's wording).
+    pub fn for_state(state: ServiceState) -> Self {
+        if state == ServiceState::Connected {
+            TrayIcon::Color
+        } else {
+            TrayIcon::Mono
+        }
+    }
+}
+
 /// True when the tray event stream must be wired (state derived, not
 /// cfg'd, so the decision is unit-testable on every platform).
 pub fn tray_available() -> bool {
@@ -208,6 +242,9 @@ pub enum TrayCommand {
     Tooltip(String),
     /// Replace the Quick Settings model.
     Model(Vec<QuickEntry>),
+    /// S16: swap the tray icon (colored while connected, monochrome
+    /// otherwise) — applied via NIM_MODIFY(NIF_ICON).
+    Icon(TrayIcon),
     /// Tear down (NIM_DELETE + ack on the returned channel).
     Shutdown(std::sync::mpsc::SyncSender<()>),
 }
@@ -241,8 +278,12 @@ impl From<&QuickAction> for TrayEvent {
 // (same cfg as the legacy src/tray.rs).
 #[cfg(any(windows, test))]
 pub(crate) mod ffi_helpers {
-    /// The app logo as a multi-size ICO (see `scripts/make_logo_assets.py`).
+    /// The app logo as a multi-size ICO (see `scripts/make_logo_assets.py`)
+    /// — the CONNECTED-state tray icon.
     pub(crate) static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.ico");
+
+    /// S16: the monochrome variant — the NOT-connected-state tray icon.
+    pub(crate) static ICON_MONO_BYTES: &[u8] = include_bytes!("../../../assets/icon_mono.ico");
 
     /// Preferred icon edge for the tray slot (the ICO carries 16/32/48/256).
     pub(crate) const ICON_SIZE: u32 = 32;
@@ -348,13 +389,14 @@ pub(crate) mod ffi_helpers {
 // ---- public spawn API ---------------------------------------------------------
 
 /// Spawn the tray (Windows) or report it unavailable (stub elsewhere).
-/// The tooltip/model are seeded so the icon is correct before the app's
-/// first tick lands.
+/// The tooltip/model/icon are seeded so the tray is correct before the
+/// app's first tick lands (S16: the app starts not-connected → Mono).
 pub fn spawn(
     initial_tooltip: String,
     initial_model: Vec<QuickEntry>,
+    initial_icon: TrayIcon,
 ) -> Option<(TrayHandle, tokio::sync::mpsc::UnboundedReceiver<TrayEvent>)> {
-    crate::tray_win::spawn_impl(initial_tooltip, initial_model)
+    crate::tray_win::spawn_impl(initial_tooltip, initial_model, initial_icon)
 }
 
 /// App-side handle: sends commands; joins on drop-free explicit shutdown.
@@ -481,6 +523,39 @@ mod tests {
             tooltip(ServiceState::Connecting, ""),
             "MultiTunnel — connecting…"
         );
+    }
+
+    #[test]
+    fn tooltip_live_formats_speeds_and_totals() {
+        let tip = tooltip_live(1_234_567, 9_876_543, 45_000_000, 3_200_000_000);
+        assert_eq!(tip, "MultiTunnel — ↓9.4 MB/s ↑1.2 MB/s • Σ↓3.0 GB ↑42.9 MB");
+        // Always inside the 128-unit NIF_TIP budget (127 + NUL).
+        let worst = tooltip_live(u64::MAX / 8, u64::MAX / 8, u64::MAX, u64::MAX);
+        assert!(worst.encode_utf16().count() < 128, "tip: {worst}");
+    }
+
+    #[test]
+    fn tray_icon_follows_connection_state() {
+        assert_eq!(
+            TrayIcon::for_state(ServiceState::Connected),
+            TrayIcon::Color
+        );
+        for s in [
+            ServiceState::Disconnected,
+            ServiceState::Connecting,
+            ServiceState::Failed,
+        ] {
+            assert_eq!(TrayIcon::for_state(s), TrayIcon::Mono, "state {s:?}");
+        }
+    }
+
+    #[test]
+    fn ico_embedded_mono_asset_parses_with_32_entry() {
+        let b = ico_image_bytes(super::ffi_helpers::ICON_MONO_BYTES, ICON_SIZE)
+            .expect("32px entry in icon_mono.ico");
+        assert!(b.len() > 40);
+        assert_eq!(u32::from_le_bytes(b[4..8].try_into().unwrap()), 32);
+        assert_eq!(u32::from_le_bytes(b[8..12].try_into().unwrap()), 64);
     }
 
     #[test]

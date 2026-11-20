@@ -564,6 +564,7 @@ impl Default for SettingsFile {
                 probe_target: DEFAULT_PROBE_TARGET.to_string(),
                 exit_probe_url: "http://ip-api.com/json".to_string(),
                 close_to_tray: false,
+                always_on_top: false,
             },
             // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
             // settings.json must carry private-CIDR → direct rules, mirroring
@@ -1971,6 +1972,7 @@ mod tests {
                 probe_target: DEFAULT_PROBE_TARGET.to_string(),
                 exit_probe_url: "http://ip-api.com/json".to_string(),
                 close_to_tray: false,
+                always_on_top: false,
             },
             rules: Vec::new(),
             socks_port: 0,
@@ -2312,6 +2314,7 @@ mod tests {
             probe_target: "connectivitycheck.gstatic.com:80".to_string(),
             exit_probe_url: "http://ip-api.com/json".to_string(),
             close_to_tray: false,
+            always_on_top: false,
         };
         svc.set_settings(view.clone()).await.expect("save settings");
         assert_eq!(svc.settings().await, view);

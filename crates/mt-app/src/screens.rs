@@ -14,8 +14,8 @@ use iced::{Length, Padding};
 use mt_service::{ProfileView, ServiceState};
 
 use crate::app::{
-    App, LatencyState, LogFilter, Message, RuleRow, Screen, BOND_MODES, LOG_LEVELS, MERGE_POLICIES,
-    RATE_HISTORY_LEN, RULE_ACTIONS, RULE_KINDS,
+    App, LatencyState, LogFilter, Message, RuleRow, Screen, TitleMenuItem, BOND_MODES, LOG_LEVELS,
+    MERGE_POLICIES, RATE_HISTORY_LEN, RULE_ACTIONS, RULE_KINDS,
 };
 use crate::graph::{RateGraph, RateGraphStyle};
 use crate::theme as t3;
@@ -47,14 +47,20 @@ pub fn titlebar(app: &App) -> Element<'_> {
         .spacing(10)
         .align_y(iced::Alignment::Center);
     // The whole strip (minus the buttons — inner widgets capture first)
-    // drags the window; a fast second press maximizes.
+    // drags the window; a fast second press maximizes; a RIGHT press
+    // opens the window menu (S16).
     let drag = mouse_area(
         container(identity)
             .width(Length::Fill)
             .height(Length::Fill)
+            // S16: the identity row is Shrink-height; without this it sat
+            // flush at the strip's TOP (hidden with the old opaque emblem
+            // tile, obvious with the transparent one).
+            .align_y(iced::Alignment::Center)
             .padding(Padding::new(0.0).left(14.0)),
     )
-    .on_press(Message::TitleDrag);
+    .on_press(Message::TitleDrag)
+    .on_right_press(Message::TitleContext);
     let make_ctl = |label: &str, msg: Message| {
         button(text(label.to_string()).size(ts.headline_s.size))
             .style(t3::text_button(s))
@@ -72,6 +78,112 @@ pub fn titlebar(app: &App) -> Element<'_> {
     container(row![drag, controls].height(Length::Fill))
         .height(Length::Fixed(40.0))
         .width(Length::Fill)
+        .into()
+}
+
+/// S16 (D26): the titlebar right-click window menu as a full-window
+/// overlay layer (rendered on top of the app via `iced::widget::stack`).
+///
+/// The layer is a full-size mouse_area: a click ANYWHERE closes the menu
+/// — except on the menu rows themselves, whose buttons capture the
+/// release first (child-before-parent event order in `mouse_area`), so
+/// the picked action fires exactly once. `on_release` (not `on_press`)
+/// gives native click semantics and avoids the press-outside/release-
+/// inside half-click dismissing.
+pub fn title_menu_overlay(app: &App) -> Element<'_> {
+    let s = app.theme.scheme;
+    let ts = app.theme.ts;
+    let (mw, _) = App::menu_bounds();
+    let anchor = app
+        .title_menu
+        .expect("overlay rendered only while the menu is open");
+    let on_top = app.settings.always_on_top;
+
+    let check = |on: bool| -> Element<'_> {
+        text(if on { "✓ " } else { "   " }.to_string())
+            .size(ts.body_m.size)
+            .color(s.primary)
+            .into()
+    };
+    // Local helpers with EXPLICIT lifetimes: the returned element borrows
+    // the glyph (and nothing else — labels are copied into owned text).
+    fn item<'a>(
+        glyph: Element<'a>,
+        label: &str,
+        msg: Message,
+        s: mt_m3::M3Scheme,
+        ts: &mt_m3::M3TypeScale,
+    ) -> Element<'a> {
+        button(
+            row![glyph, text(label.to_string()).size(ts.body_m.size)]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .style(t3::menu_item(s))
+        .padding(Padding::new(6.0).left(10.0).right(10.0))
+        .on_press(msg)
+        .into()
+    }
+    fn rule<'a>(s: mt_m3::M3Scheme) -> Element<'a> {
+        container(horizontal_space().width(Length::Fill))
+            .height(Length::Fixed(1.0))
+            .width(Length::Fill)
+            .style(t3::menu_rule(s))
+            .into()
+    }
+    let max_label = if app.window_maximized {
+        "Restore"
+    } else {
+        "Maximize"
+    };
+    let menu = column![
+        item(
+            check(on_top),
+            "Always on top",
+            Message::TitleMenu(TitleMenuItem::AlwaysOnTop),
+            s,
+            &ts,
+        ),
+        rule(s),
+        item(
+            check(false),
+            "Minimize",
+            Message::TitleMenu(TitleMenuItem::Minimize),
+            s,
+            &ts,
+        ),
+        item(
+            check(false),
+            max_label,
+            Message::TitleMenu(TitleMenuItem::Maximize),
+            s,
+            &ts,
+        ),
+        rule(s),
+        item(
+            check(false),
+            "Close",
+            Message::TitleMenu(TitleMenuItem::Close),
+            s,
+            &ts,
+        ),
+    ]
+    .spacing(2)
+    .padding(Padding::new(6.0))
+    .width(Length::Fixed(mw));
+
+    // Position at the clamped anchor via container padding (top/left).
+    let card = container(menu)
+        .style(t3::menu_card(s))
+        .width(Length::Fixed(mw))
+        .height(Length::Shrink);
+    let positioned = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding::new(0.0).top(anchor.y).left(anchor.x));
+    mouse_area(positioned)
+        .on_release(Message::TitleContextDismiss)
         .into()
 }
 
@@ -1538,7 +1650,7 @@ pub fn settings(app: &App) -> Element<'_> {
     ]
     .spacing(10);
 
-    // Window & tray card (S15, D25) -----------------------------------------
+    // Window & tray card (S15, D25; S16 adds always-on-top) -----------------
     let window_tray = column![
         text("Window & tray")
             .size(ts.title_m.size)
@@ -1554,6 +1666,18 @@ pub fn settings(app: &App) -> Element<'_> {
              right-click it for Quick Settings (connect, servers, exit). \
              off (default): closing really closes. Windows only — on other \
              platforms the window minimizes instead, so it stays reachable.",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
+        toggler(app.settings.always_on_top)
+            .label("keep the window always on top")
+            .size(28.0)
+            .on_toggle(Message::AlwaysOnTopToggled)
+            .style(t3::switch(s)),
+        text(
+            "on: the window floats above all other windows. Also \
+             switchable from the title bar's right-click menu. off \
+             (default): normal window stacking.",
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant),
