@@ -79,6 +79,13 @@ impl ReorderBuffer {
         self.highest_seen
     }
 
+    /// True when buffering one more `len`-byte future frame would exceed
+    /// the cap. The endpoint's S14 overflow path polls this while holding
+    /// the frame (carrier backpressure) instead of failing the session.
+    pub fn would_overflow(&self, len: usize) -> bool {
+        self.buffered + len > self.cap
+    }
+
     /// Insert one payload. Returns the in-order deliverable run starting
     /// at `expected` (possibly empty for out-of-order or duplicate input).
     /// `Err(Overflow)` when the buffered backlog would exceed the cap.

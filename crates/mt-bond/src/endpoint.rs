@@ -46,8 +46,12 @@ use mt_net::{Outbound, ProxyStream};
 use crate::frame::{self, CloseReason, Frame, Kind};
 use crate::reorder::{ReorderBuffer, ReorderError};
 
-/// Per-session reorder byte cap.
-pub const REORDER_CAP: usize = 4 * 1024 * 1024;
+/// Per-session reorder byte cap (S14: 4 → 16 MiB). Capacity-aware
+/// scheduling can briefly outrun a slow carrier during saturation
+/// shifts; the new overflow path (see [`Endpoint::session_inbound`])
+/// turns a would-be overflow into carrier backpressure instead of a
+/// hard session error, so a larger cap just buys more shift tolerance.
+pub const REORDER_CAP: usize = 16 * 1024 * 1024;
 /// Undrained inbound backlog tolerated before a session is failed.
 pub const APP_BACKLOG_CAP: usize = 16 * 1024 * 1024;
 /// No in-order delivery progress for this long (with a gap open) → stall.
@@ -58,8 +62,12 @@ pub const PING_INTERVAL: Duration = Duration::from_secs(5);
 pub const PONG_TIMEOUT: Duration = Duration::from_secs(20);
 /// Frames queued per carrier writer (16 KiB payloads → ~4 MiB in flight).
 pub const WRITER_QUEUE: usize = 256;
-/// Sweeper cadence (pings, liveness, stall + backlog checks).
-pub const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
+/// Sweeper cadence (pings, liveness, stall + backlog checks). Since S14
+/// this is ALSO the per-carrier delivery-rate report cadence: every
+/// sweep, each endpoint pings each carrier carrying its measured inbound
+/// rate, so both schedulers converge on capacity-proportional spreading
+/// within ~2–3 s.
+pub const SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 /// Daemon: dial budget for one target.
 pub const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Server: maximum concurrent sessions per bond (resource bound).
@@ -144,6 +152,17 @@ struct Carrier {
     /// the writer task decrements after each socket write. A carrier whose
     /// socket keeps up hovers near zero; a bottlenecked one grows.
     queued: AtomicU64,
+    /// S14: total bytes handed to the writer (every frame kind). The
+    /// sweeper differences this counter into an EWMA ASSIGNMENT rate —
+    /// the scheduler's offer side.
+    assigned: AtomicU64,
+    /// S14: peer-reported inbound rate on this carrier (bytes/s) — the
+    /// rate at which the far end actually RECEIVES on this path, i.e. the
+    /// carrier's measured delivery capacity. Updated from the report
+    /// piggybacked on received PINGs; 0 until the first report (an old
+    /// peer never reports — the scheduler then falls back to the S12
+    /// writer-queue scoring).
+    deliver_bps: AtomicU64,
 }
 
 impl Carrier {
@@ -159,6 +178,8 @@ impl Carrier {
             bytes_down: AtomicU64::new(0),
             last_rx_ms: AtomicU64::new(now_millis()),
             queued: AtomicU64::new(0),
+            assigned: AtomicU64::new(0),
+            deliver_bps: AtomicU64::new(0),
         })
     }
 
@@ -188,6 +209,23 @@ struct CarrierSlot {
     queued: u64,
     /// Last PING round trip in ms (0 = no sample yet).
     rtt_ms: u32,
+    /// S14: EWMA of this carrier's ASSIGNMENT rate (bytes/s) — what the
+    /// scheduler has been handing it.
+    assign_bps: f64,
+    /// S14: peer-reported DELIVERY rate (bytes/s) — what the far end
+    /// actually receives on this carrier (0 = no report yet).
+    deliver_bps: f64,
+}
+
+/// S14 relative-load score: assignment rate over delivered rate. ≈1.0
+/// means the carrier is keeping up with what it is handed; >1.0 means
+/// its path cannot drain the offered rate (over-committed). Carriers
+/// without a report are probed up to [`PROBE_BPS`] before they look
+/// busy. The equilibrium of min-score scheduling is every carrier
+/// carrying ≈ its own capacity — the aggregate throughput is the SUM of
+/// the paths instead of the pace of the slowest one.
+fn carrier_score(slot: &CarrierSlot) -> f64 {
+    slot.assign_bps / slot.deliver_bps.max(PROBE_BPS)
 }
 
 /// A carrier whose writer queue exceeds this many BYTES counts as
@@ -197,19 +235,45 @@ struct CarrierSlot {
 /// the spill decision lands within a fraction of a second at any real
 /// rate difference.
 pub const PRIORITY_QUEUE_HIGH_WATER: u64 = 512 * 1024;
+/// S14 scheduler score floor (bytes/s): while a carrier has no
+/// peer-reported delivery rate (fresh carrier, or an old peer that does
+/// not send reports), it is PROBED up to this rate before its score
+/// makes it look busy.
+pub const PROBE_BPS: f64 = 32.0 * 1024.0;
+/// S14 `Priority` spill ratio: a carrier counts as saturated once its
+/// EWMA assignment rate exceeds its peer-reported delivery rate by
+/// ≥ 15 % (a little margin avoids flapping on report jitter).
+pub const PRIORITY_SPILL_RATIO: f64 = 1.15;
+/// S14 EWMA smoothing per 1 s sweep for the assignment/inbound rates.
+pub const RATE_EWMA_ALPHA: f64 = 0.5;
+/// S14: pause granularity when an inbound frame would overflow the
+/// reorder buffer (the reader holds the frame; the carrier's TCP
+/// backpressure throttles the sender while the gap drains).
+pub const REORDER_PAUSE: Duration = Duration::from_millis(100);
+/// S14: per-frame reorder-overflow pause budget. When it expires the
+/// frame is inserted anyway (soft cap — the overshoot is at most one
+/// frame per budget window; the stall sweeper closes a truly stuck
+/// session long before this accumulates).
+pub const REORDER_PAUSE_MAX: Duration = Duration::from_secs(5);
 
-/// Pure carrier pick (the D17 round-robin, made policy-aware in S11).
-/// Returns the SLOT INDEX to send the next frame on:
+/// Pure carrier pick (the D17 round-robin, made policy-aware in S11,
+/// capacity-aware in S14). Returns the SLOT INDEX to send the next
+/// frame on:
 /// - `Failover`       — first live carrier (idx order).
 /// - `RoundRobin`     — rotate over live carriers (cursor).
 /// - `LowestLatency`  — best sampled RTT (known beats unknown, ties keep
 ///   the earlier carrier).
-/// - `Balanced`       — least queued bytes; ties rotate via the cursor.
-///   A fast adapter drains its queue quicker and naturally takes more
-///   frames — capacity-proportional even spreading.
-/// - `Priority`       — first carrier in USER ORDER whose queue is under
-///   [`PRIORITY_QUEUE_HIGH_WATER`]; when every carrier backs up, the
-///   least-queued one takes the excess.
+/// - `Balanced`       — least relative load (assignment rate ÷ the
+///   peer-reported delivery rate); ties rotate via the cursor. A fast
+///   adapter reports a high delivery rate and absorbs frames in
+///   proportion to its capacity; an adapter whose reported rate lags its
+///   assignment (a saturated uplink/downlink) is bypassed until it
+///   catches up. With NO reports at all (old peer) this degrades to the
+///   S12 least-queued-writer behavior.
+/// - `Priority`       — first carrier in USER ORDER that is neither
+///   over-reported (score < [`PRIORITY_SPILL_RATIO`]) nor writer-backed-up
+///   ([`PRIORITY_QUEUE_HIGH_WATER`]); when every carrier is saturated,
+///   the least-loaded one takes the excess.
 fn pick_carrier_index(
     policy: mt_net::MergePolicy,
     slots: &[CarrierSlot],
@@ -238,21 +302,51 @@ fn pick_carrier_index(
             Some(slots[best].idx)
         }
         mt_net::MergePolicy::Balanced => {
-            let min = slots.iter().map(|s| s.queued).min().expect("non-empty");
+            if slots.iter().all(|s| s.deliver_bps <= 0.0) {
+                // No reports (old peer): the S12 behavior — least writer
+                // backpressure, ties rotating like round-robin.
+                let min = slots.iter().map(|s| s.queued).min().expect("non-empty");
+                let tied: Vec<usize> = (0..slots.len())
+                    .filter(|&i| slots[i].queued == min)
+                    .collect();
+                let pick = tied[(*cursor % tied.len() as u64) as usize];
+                *cursor = cursor.wrapping_add(1);
+                return Some(slots[pick].idx);
+            }
+            // Capacity-aware: least relative load; ties rotate.
+            let min = slots.iter().map(carrier_score).fold(f64::INFINITY, f64::min);
             let tied: Vec<usize> = (0..slots.len())
-                .filter(|&i| slots[i].queued == min)
+                .filter(|&i| (carrier_score(&slots[i]) - min).abs() < f64::EPSILON)
                 .collect();
             let pick = tied[(*cursor % tied.len() as u64) as usize];
             *cursor = cursor.wrapping_add(1);
             Some(slots[pick].idx)
         }
         mt_net::MergePolicy::Priority => {
+            if slots.iter().all(|s| s.deliver_bps <= 0.0) {
+                // No reports (old peer): the S12 behavior.
+                for s in slots {
+                    if s.queued < PRIORITY_QUEUE_HIGH_WATER {
+                        return Some(s.idx);
+                    }
+                }
+                return slots.iter().min_by_key(|s| s.queued).map(|s| s.idx);
+            }
             for s in slots {
-                if s.queued < PRIORITY_QUEUE_HIGH_WATER {
+                if carrier_score(s) < PRIORITY_SPILL_RATIO
+                    && s.queued < PRIORITY_QUEUE_HIGH_WATER
+                {
                     return Some(s.idx);
                 }
             }
-            slots.iter().min_by_key(|s| s.queued).map(|s| s.idx) // every carrier backs up → least queued
+            slots
+                .iter()
+                .min_by(|a, b| {
+                    carrier_score(a)
+                        .partial_cmp(&carrier_score(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|s| s.idx) // every carrier saturated → least relative load
         }
     }
 }
@@ -323,6 +417,25 @@ impl Session {
 // Endpoint
 // ---------------------------------------------------------------------------
 
+/// S14 per-endpoint scheduler statistics, updated once per sweep from
+/// the carriers' monotonic counters (the hot send path only touches the
+/// atomics). Index == carrier idx; rebuilt when the carrier table
+/// changes (a respawn replaces the Carrier, resetting its counters —
+/// a counter that moves backwards is read as "reset", delta = current).
+#[derive(Default)]
+struct RateState {
+    /// Previous `assigned` snapshot per carrier idx.
+    prev_assigned: Vec<u64>,
+    /// Previous `bytes_down` snapshot per carrier idx.
+    prev_down: Vec<u64>,
+    /// EWMA assignment rate (bytes/s) per carrier idx — the scheduler's
+    /// offer side (read by [`Endpoint::pick_carrier`]).
+    assign_ewma: Vec<f64>,
+    /// EWMA inbound rate (bytes/s) per carrier idx — the value reported
+    /// to the peer in the 1 s PINGs ("this is what I receive on you").
+    inbound_ewma: Vec<f64>,
+}
+
 /// The bond endpoint shared by client and daemon.
 pub(crate) struct Endpoint {
     pub bond_id: u32,
@@ -331,8 +444,12 @@ pub(crate) struct Endpoint {
     rr: AtomicU64,
     /// S11: how `pick_carrier` spreads frames across live carriers (the
     /// user's merge policy, mapped onto carrier scheduling; the daemon
-    /// side keeps plain round-robin).
+    /// side uses `Balanced` — capacity-proportional in BOTH directions,
+    /// the user's priority order being a client concern).
     carrier_policy: mt_net::MergePolicy,
+    /// S14: assignment/inbound rate EWMA state (sweeper-written,
+    /// pick_carrier-read).
+    rates: Mutex<RateState>,
     sessions: Mutex<HashMap<u32, Arc<Session>>>,
     /// Monotonic LOCAL session id (client side; starts at 1).
     next_session_id: AtomicU32,
@@ -372,6 +489,7 @@ impl Endpoint {
             carriers: RwLock::new(Vec::new()),
             rr: AtomicU64::new(0),
             carrier_policy,
+            rates: Mutex::new(RateState::default()),
             sessions: Mutex::new(HashMap::new()),
             next_session_id: AtomicU32::new(1),
             new_session_tx: Mutex::new(None),
@@ -385,9 +503,13 @@ impl Endpoint {
         })
     }
 
-    /// Server-side endpoint (carriers are accepted connections; the
-    /// daemon keeps plain round-robin — the user's priority order is a
-    /// CLIENT-side concern).
+    /// Server-side endpoint (carriers are accepted connections). Since
+    /// S14 the daemon schedules its carriers with `Balanced` — the
+    /// DOWNLOAD direction is the fat one for most users, and a plain
+    /// round-robin paces the whole stream at the slowest adapter; the
+    /// peer-reported delivery rates make the spreading
+    /// capacity-proportional. (The user's priority order is a client
+    /// concern — the daemon cannot know it.)
     pub fn server(bond_id: u32) -> Arc<Self> {
         let (shutdown, _) = watch::channel(false);
         let (death_tx, death_rx) = mpsc::unbounded_channel();
@@ -396,7 +518,8 @@ impl Endpoint {
             is_server: true,
             carriers: RwLock::new(Vec::new()),
             rr: AtomicU64::new(0),
-            carrier_policy: mt_net::MergePolicy::RoundRobin,
+            carrier_policy: mt_net::MergePolicy::Balanced,
+            rates: Mutex::new(RateState::default()),
             sessions: Mutex::new(HashMap::new()),
             next_session_id: AtomicU32::new(1),
             new_session_tx: Mutex::new(None),
@@ -655,13 +778,28 @@ impl Endpoint {
         match frame.kind {
             Kind::Hello => { /* consumed by the daemon accept loop; ignore */ }
             Kind::Ping => {
+                // S14: a 16-byte ping payload carries [ts_ms, inbound_bps]
+                // — the PEER's measured delivery rate on THIS carrier.
+                // This is the capacity signal the scheduler scores on
+                // (both ends send these every sweep). Short/old payloads
+                // carry no report and are ignored.
+                if frame.payload.len() >= 16 {
+                    let rate = u64::from_le_bytes(
+                        frame.payload[8..16].try_into().expect("8 bytes"),
+                    );
+                    if let Some(c) = self.carrier_of(_carrier_idx) {
+                        c.deliver_bps.store(rate, Ordering::Relaxed);
+                    }
+                }
                 // Echo on the SAME carrier (cheap, path-symmetric).
                 let pong = Frame::control(Kind::Pong, self.bond_id, frame.seq, frame.payload)
                     .encode_to_vec();
                 self.schedule_bytes(pong).await?;
             }
             Kind::Pong => {
-                if frame.payload.len() == 8 {
+                // S14: payloads are >= 8 bytes (16 since the S14 rate
+                // report; older peers echoed exactly 8).
+                if frame.payload.len() >= 8 {
                     let sent = u64::from_le_bytes(frame.payload[..8].try_into().expect("8 bytes"));
                     let rtt = now_millis().saturating_sub(sent).min(u32::MAX as u64) as u32;
                     if let Some(c) = self.carrier_of(_carrier_idx) {
@@ -728,9 +866,42 @@ impl Endpoint {
         }
         // Insert under the lock, handle the result AFTER the scope — a
         // std MutexGuard must never live across an await (Send rule).
-        let insert_result = {
-            let mut reorder = lock(&session.reorder);
-            reorder.insert(frame.seq, frame.payload)
+        //
+        // S14: when the frame would overflow the reorder buffer (the
+        // fast carriers have run far ahead of a slow one), HOLD the
+        // frame instead of failing the session: this reader stops
+        // draining its carrier, TCP backpressure throttles the sender,
+        // and the gap drains via the other carriers (frames on one
+        // carrier arrive in seq order, so the missing frames can never
+        // be stuck behind THIS one on the same carrier — no deadlock).
+        // Bounded by REORDER_PAUSE_MAX (soft insert, at most one frame
+        // of overshoot per budget) and by the stall sweeper.
+        let mut payload = frame.payload;
+        let mut waited = Duration::ZERO;
+        let insert_result = loop {
+            let fits = {
+                let reorder = lock(&session.reorder);
+                !reorder.would_overflow(payload.len())
+            };
+            if fits {
+                break {
+                    let mut reorder = lock(&session.reorder);
+                    reorder.insert(frame.seq, payload)
+                };
+            }
+            if waited >= REORDER_PAUSE_MAX || session.closed() || self.is_shutting_down() {
+                tracing::warn!(
+                    session = session.id,
+                    waited_ms = waited.as_millis() as u64,
+                    "bond reorder overflow — pause budget exhausted"
+                );
+                break {
+                    let mut reorder = lock(&session.reorder);
+                    reorder.insert(frame.seq, payload)
+                };
+            }
+            tokio::time::sleep(REORDER_PAUSE).await;
+            waited += REORDER_PAUSE;
         };
         let delivered = match insert_result {
             Ok(d) => d,
@@ -934,19 +1105,36 @@ impl Endpoint {
     }
 
     /// Pick a live VERIFIED carrier under the endpoint's scheduling
-    /// policy (the D17 round-robin became policy-aware in S12 — see
-    /// [`pick_carrier_index`]). Unverified (phantom-live) carriers are
-    /// never schedulable: bytes queued into them are lost when the tunnel
-    /// never actually came up.
+    /// policy (the D17 round-robin became policy-aware in S12 and
+    /// capacity-aware in S14 — see [`pick_carrier_index`]). Unverified
+    /// (phantom-live) carriers are never schedulable: bytes queued into
+    /// them are lost when the tunnel never actually came up.
     fn pick_carrier(&self) -> Option<(usize, Arc<Carrier>)> {
         let cs = self.carriers.read().expect("carrier lock");
+        let assign: Vec<f64> = {
+            // Snapshot the assignment EWMA under the (short-held) stats
+            // lock; a missing entry (fresh carrier) reads as 0.
+            let rates = lock(&self.rates);
+            cs.iter()
+                .map(|c| {
+                    rates
+                        .assign_ewma
+                        .get(c.idx)
+                        .copied()
+                        .unwrap_or(0.0)
+                })
+                .collect()
+        };
         let slots: Vec<CarrierSlot> = cs
             .iter()
-            .filter(|c| c.usable())
-            .map(|c| CarrierSlot {
+            .enumerate()
+            .filter(|(_, c)| c.usable())
+            .map(|(i, c)| CarrierSlot {
                 idx: c.idx,
                 queued: c.queued.load(Ordering::Relaxed),
                 rtt_ms: c.rtt_ms.load(Ordering::Relaxed),
+                assign_bps: assign[i],
+                deliver_bps: c.deliver_bps.load(Ordering::Relaxed) as f64,
             })
             .collect();
         drop(cs);
@@ -977,9 +1165,14 @@ impl Endpoint {
             .filter(|c| c.usable())
             .ok_or_else(|| anyhow::anyhow!("carrier {carrier_idx} not usable"))?;
         // S12: count the bytes as queued BEFORE the send (backpressure
-        // accounting for the Balanced / Priority picks).
+        // accounting for the Balanced / Priority picks); S14: also count
+        // them as ASSIGNED (the rate the scheduler offers this carrier —
+        // differenced into an EWMA by the sweeper).
         carrier
             .queued
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        carrier
+            .assigned
             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
         if carrier
             .tx
@@ -1155,9 +1348,10 @@ impl Endpoint {
                 _ = tick.tick() => "tick",
             };
             let _ = woke;
-            // 1) Ping every live carrier (RTT + keepalive). Collect the
-            //    carrier list first — the RwLock guard never crosses an
-            //    await (Send rule).
+            // 1) S14 rate sweep: difference every carrier's assigned /
+            //    received counters into EWMA rates (the scheduler's input
+            //    on this end) and snapshot the per-carrier inbound EWMA
+            //    (the report the pings below carry to the peer).
             let carriers: Vec<Arc<Carrier>> = self
                 .carriers
                 .read()
@@ -1165,18 +1359,54 @@ impl Endpoint {
                 .iter()
                 .cloned()
                 .collect();
-            for c in carriers {
+            let reports: Vec<(usize, u64)> = {
+                let mut rates = lock(&self.rates);
+                let n = carriers.len();
+                if rates.prev_assigned.len() != n {
+                    // Table changed (first sweep / respawn / new carrier):
+                    // re-seed from the current counters — deltas start
+                    // next sweep.
+                    rates.prev_assigned = carriers.iter().map(|c| c.assigned.load(Ordering::Relaxed)).collect();
+                    rates.prev_down = carriers.iter().map(|c| c.bytes_down.load(Ordering::Relaxed)).collect();
+                    rates.assign_ewma.resize(n, 0.0);
+                    rates.inbound_ewma.resize(n, 0.0);
+                }
+                let dt = SWEEP_INTERVAL.as_secs_f64().max(0.001);
+                carriers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let cur_a = c.assigned.load(Ordering::Relaxed);
+                        let cur_d = c.bytes_down.load(Ordering::Relaxed);
+                        // saturating_sub: a respawned carrier's counters
+                        // restart at 0 — read as "reset", delta = current.
+                        let d_assigned = cur_a.saturating_sub(rates.prev_assigned[i]) as f64 / dt;
+                        let d_down = cur_d.saturating_sub(rates.prev_down[i]) as f64 / dt;
+                        rates.prev_assigned[i] = cur_a;
+                        rates.prev_down[i] = cur_d;
+                        rates.assign_ewma[i] =
+                            RATE_EWMA_ALPHA * d_assigned + (1.0 - RATE_EWMA_ALPHA) * rates.assign_ewma[i];
+                        rates.inbound_ewma[i] =
+                            RATE_EWMA_ALPHA * d_down + (1.0 - RATE_EWMA_ALPHA) * rates.inbound_ewma[i];
+                        (c.idx, rates.inbound_ewma[i].max(0.0) as u64)
+                    })
+                    .collect()
+            };
+            // 1b) Ping every live carrier (RTT + keepalive); since S14 the
+            //     payload carries [ts_ms, inbound_bps] — this end's
+            //     measured receive rate on THAT carrier, which the peer's
+            //     scheduler scores as the carrier's delivery capacity.
+            for (idx, inbound_bps) in reports {
+                let Some(c) = self.carrier_of(idx) else {
+                    continue;
+                };
                 if !c.alive() {
                     continue;
                 }
                 let seq = self.next_ping_seq.fetch_add(1, Ordering::Relaxed);
-                let ping = Frame::control(
-                    Kind::Ping,
-                    self.bond_id,
-                    seq,
-                    now_millis().to_le_bytes().to_vec(),
-                )
-                .encode_to_vec();
+                let mut payload = now_millis().to_le_bytes().to_vec();
+                payload.extend_from_slice(&inbound_bps.to_le_bytes());
+                let ping = Frame::control(Kind::Ping, self.bond_id, seq, payload).encode_to_vec();
                 if self.send_bytes(c.idx, ping).await.is_err() {
                     let _ = self.death_tx.send((c.idx, "ping send failed"));
                 }
