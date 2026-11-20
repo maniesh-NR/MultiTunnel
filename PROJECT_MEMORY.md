@@ -52,11 +52,12 @@
 
 ## Active Playbook & Todo List
 
-- **Stage**: S15 SHIPPED PENDING RELEASE (task E UI half, D25 — the
+- **Stage**: S15 CLOSED (v0.9.0 released (task E UI half, D25 — the
   user's five asks: logo, Chromium-style blended title bar,
   close-to-tray toggle, persistent tray icon, Quick Settings on tray
   right-click). All 8 verification gates green (see LEDGER s15 for the
-  full rig story); version 0.9.0; tagged for release.
+  full rig story); v0.9.0 RELEASED (run 44698724161 SUCCESS, assets
+  verified — see LEDGER s15).
 - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling
   shipped — the "one adapter maxes out, no spill" complaint fixed by
   peer-reported per-carrier delivery rates (1 s PINGs), carrier_score
