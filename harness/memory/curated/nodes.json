@@ -413,6 +413,24 @@
       ]
     },
     {
+      "id": "task:s16-repo-polish-window-menu",
+      "type": "task",
+      "title": "S16 (v0.10.0): repo About/tags, attribution, banner, transparent emblem, mono tray, tooltip speeds, titlebar right-click menu",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md s16 entries 2026-11-20T11:20Z..12:10Z; README Attribution+banner; crates/mt-app S16 code",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "S16 (D26) shipped the user's seven asks: (1) GitHub About rewritten + 20 topic tags via API (old description was a stale unrelated-project leftover; token is a fine-grained github_pat_ — the gh[pousr]_ regex misses it); (2) README Attribution section (Xray-core Apache-2.0, iced MIT + vendored patch crates, Material You via material-colors, v2rayN, net-merge, BondTunnel predecessor, own logo artwork, cargo-zigbuild/zig); (3) README banner = assets/banner.png 1280x360 (transparent lockup composited on the logo canvas color) + transparent logo in the identity section; (4) titlebar emblem TRANSPARENT: key_out_background flood-fill (dual local-tol 14 + global-tol 25 gates) + resize_area box filter with premultiplied alpha — bilinear at 20:1 downscale samples 4 of ~400 px and punched holes; ALSO fixed latent S15 top-aligned identity cluster via container align_y(Center); (5) tray icon state-aware: TrayCommand::Icon(Color|Mono), both HICONs live, NIM_MODIFY swap, TaskbarCreated re-adds current style, boots Mono (not-connected); icon_mono.ico = desaturated contrast-normalized [64,216] transparent mark; (6) tray hover tooltip = tooltip_live: live down/up speeds from the Throughput event + session_bytes totals accumulated from link-counter deltas in sample_adapter_rates (counter reset counts full value; wiped on leaving Connected); (7) titlebar RIGHT-CLICK window menu: mouse_area on_right_press + listen_with CursorMoved tracking, iced stack overlay (full-window dismiss mouse_area on_release; child buttons capture first), clamped anchor below the 40px strip, items Always on top (SettingsView.always_on_top serde-default, applied via iced window::change_level AlwaysOnTop — cross-platform, honored at startup from Opened AND SettingsLoaded) / Minimize / Maximize / Close. Gates: 429/0 workspace tests (+8), fmt, clippy host+windows-gnu, zigbuild PE32+ x4 + ELF x2, rig sf=1.0+1.5 (menu at cursor, check glyph persists, outside-click dismiss, D24 scroll invariant, x-exit). v0.10.0 release: first attempt flaked on GitHub runners (mt-bond carrier_death test: windows fail + linux hang) while CI on the same commit passed both OSes and 408 loaded local runs were green — cancelled + re-run (precedent v0.5.1).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "task:saturation-aware-split",
       "type": "task",
       "title": "Task E (core) — saturation-aware redistribution: when one adapter hits its bandwidth ceiling, spill traffic to the rest (S14, gated — release pending)",

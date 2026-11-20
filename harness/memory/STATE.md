@@ -1,56 +1,52 @@
-# STATE — rewritten at the end of every stage. Last update: S14 (memory graph + RAG protocol shipped; saturation scheduling WIP preserved)
+# STATE — rewritten at the end of every stage. Last update: S16 (repo polish + window menu + state-aware tray, v0.10.0)
 
 ## Current position
-- Stage: S14 IN FLIGHT, two tracks.
-  (a) DONE — user directive "store agentic memory as data graphs
-  accessible to all agents and use retrieval augmented generation
-  (RAG)": typed graph store harness/memory/store/memory_graph.json
-  (schema v1; 16 node types / 14 edge rels, evidence-gated; sources =
-  PM durable sections, STATE/DECISIONS/LEDGER, agent-reports,
-  consensus, git tags + full log, curated/). Retrieval = BM25
-  (k1=1.5, b=0.75, title boost 1.5) + graph-neighborhood expansion
-  (0.5^hop decay). CLIs: query_memory.py at repo root (--json,
-  --prompt paste-ready context packs); harness/memory/write_memory.py
-  --node/--edge (curated/ = agent write path, merge-last, failed
-  rebuild auto-rolls-back). update_memory.py rebuilds the store.
-  18/18 tests green (harness/memory/test_graph.py); builds
-  deterministic (byte-identical; as_of from git, no wall-clock).
-  (b) SATURATION FIX COMPILED + GATED (release pending) — capacity-
-  aware scheduling (task E core, "one adapter maxes out, no spill")
-  COMPLETE on top of the cut-off WIP (f4a26ca): peer-reported
-  per-carrier delivery rates piggybacked on 1 s PINGs, assign/deliver
-  EWMA, carrier_score = assign_bps / max(deliver_bps, PROBE_BPS
-  32 KiB/s), Balanced = least relative load (capacity-proportional),
-  Priority spills at score >= 1.15, REORDER_CAP 4 -> 16 MiB +
-  would_overflow backpressure path. Session closed the WIP gaps:
-  unused_mut fix, rustfmt, test helper S14 fields (no-report default
-  exercises the S12 fallback), 6 new tests (carrier_score incl. probe
-  floor, saturated-adapter bypass, proportional 10:1 spreading
-  crossover, priority PRIORITY_SPILL_RATIO spill, mixed-report probe,
-  would_overflow boundary). GATES: fmt clean; workspace clippy -D
-  warnings clean; 404/0 workspace tests (baseline 398 + 6). Toolchain
-  reinstalled per D2: rustc 1.100.0 + rustfmt + clippy under
-  /home/z/my-project/tools/{rustup,cargo} (persistent; env.sh updated),
-  zig 0.14.1 via python3 -m ziglang intact.
-- Task E UI half recorded as PENDING (task:e-ui-logo-titlebar-tray in
-  the graph): user's attached image as logo (file not in repo —
-  locate/re-request), Chromium-style blended title bar, close-to-tray
-  toggle, persistent tray icon, quick settings on tray right-click.
-- S13 CLOSED: v0.7.1 released + verified (run 44574748448, CI
-  44574711227 green, assets download-verified; status tab = one
-  connection frame + one page scrollable, D24).
+- Stage: S16 IN FLIGHT — implementation + gates COMPLETE, release v0.10.0
+  re-running (first attempt: two independent GitHub-runner flakes in the
+  mt-bond integration leg — `carrier_death_mid_stream_fails_over_without_
+  data_loss` failed on windows (second-half write: "no live bond carrier")
+  and the linux leg hung inside `cargo test -p mt-bond`; the SAME commit
+  passed CI on BOTH OSes (run 44717917257) minutes earlier, 25x solo +
+  12x full-suite stress runs under 8-way CPU load locally = 408 executions
+  0 failures, and the identical suite shipped S14/S15 releases — verdict
+  runner flake, precedent v0.5.1 cancel+rerun; run 44719389267 cancelled
+  + re-run).
+- S16 user asks ALL implemented (D26): (1) GitHub About section rewritten
+  (was a stale description of an unrelated project) + homepage → releases;
+  20 relevant topic tags set via API; (2) Attribution section in README
+  (Xray-core, iced + vendored patches, Material You, v2rayN, net-merge,
+  BondTunnel predecessor, own logo/banner artwork, cargo-zigbuild/zig);
+  (3) README banner (assets/banner.png, 1280x360 lockup on the logo's own
+  canvas color) + transparent logo in the identity section; (4) titlebar
+  emblem on a TRANSPARENT background (flood-fill key-out + area-averaged
+  resample with premultiplied alpha — bilinear punched holes at 20:1);
+  (5) tray icon state-aware: colored logo while connected, MONOCHROME
+  transparent variant in every not-connected state (NIM_MODIFY swap,
+  TaskbarCreated re-adds the current style, boots Mono); (6) tray hover =
+  live ↓/↑ speeds + Σ totals (session_bytes from link-counter deltas,
+  counter-reset-safe, wiped on leaving Connected; tooltip < 128 NIF_TIP
+  units); (7) titlebar RIGHT-CLICK window menu (stack overlay layer,
+  cursor-anchored + clamped, dismiss on outside release): Always on top
+  (checkable, serde-default settings field, applied cross-platform via
+  iced window::change_level, honored at startup) / Minimize / Maximize /
+  Close. ALSO FIXED: latent S15 bug — the titlebar identity cluster sat
+  flush at the strip top (container align_y(Center) added; was hidden by
+  the old opaque emblem tile).
+- Memory graph + RAG (S14) remain live: query_memory.py / write_memory.py;
+  graph rebuilt after every change (18/18 tests).
 
 ## Next actions
-1. Windows-gnu clippy gate (rustup target add x86_64-pc-windows-gnu +
-   cargo/ shims), then cargo zigbuild --release gates (PE32+ x4 + ELF),
-   then tag v0.8.0 → release.yml → verify assets → LEDGER + backup.
-2. Task E UI half after the core release (logo asset needed from user
-   — the attached image is not in the repo; locate or re-request).
-3. USER VERIFICATION of v0.7.1 still pending: wheel scrolls everything
-   below the frame; graph fills the frame; long adapter lists reachable.
-   If stream bonding fails on the VM: sudo bash
-   server/setup-xray-reality.sh + server/setup-merge-daemon.sh. After
-   v0.8.0: verify saturation spill on the real 3-adapter setup.
+1. Watch release run 44719389267 (re-run); on success verify assets by
+   download+unzip (11-entry manifest, PE32+ x2, README/QUICKSTART carried);
+   then LEDGER close entry + backup push.
+2. If the mt-bond flake recurs on the runner: do NOT blind-rerun again —
+   capture the hung job's logs FIRST (jobs API), then decide (test-harness
+   hardening: bound read_to_end with tokio timeout is the leading option,
+   but only with a reproduced defect in hand).
+3. USER VERIFICATION of v0.9/v0.10 asks on the real Windows box: tray mono
+   ↔ colored transition, hover speeds, titlebar right-click → always-on-top
+   actually floating above other windows, transparent emblem on both light
+   and dark titlebars.
 4. Backlog: subscription auto-update, vmess validation, profiles.json
    locking, engine log rotation, listener max_conns, upstream iced
    migration, S7 native REALITY core (parked).

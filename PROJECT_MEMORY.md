@@ -52,34 +52,36 @@
 
 ## Active Playbook & Todo List
 
-- **Stage**: S15 CLOSED (v0.9.0 released (task E UI half, D25 — the
-  user's five asks: logo, Chromium-style blended title bar,
-  close-to-tray toggle, persistent tray icon, Quick Settings on tray
-  right-click). All 8 verification gates green (see LEDGER s15 for the
-  full rig story); v0.9.0 RELEASED (run 44698724161 SUCCESS, assets
-  verified — see LEDGER s15).
+- **Stage**: S16 — repo polish + window menu + state-aware tray (D26),
+  implementation and ALL gates green; v0.10.0 release re-running (first
+  attempt hit two GitHub-runner flakes in the mt-bond integration leg —
+  see LEDGER s16 and Watch items). The seven asks: GitHub About + 20
+  topic tags (done via API — the About description was a stale leftover
+  of an unrelated project), README attribution section + banner +
+  transparent logo, transparent titlebar emblem (flood-fill key-out +
+  AREA resample — bilinear punches holes at 20:1), monochrome
+  not-connected tray icon (NIM_MODIFY swap, boots Mono), tray hover =
+  live speeds + Σ totals, titlebar right-click window menu with
+  always-on-top (cross-platform iced change_level, persisted setting,
+  honored at startup). Also fixed: latent S15 top-aligned identity
+  cluster (container align_y(Center)).
 - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling
   shipped — the "one adapter maxes out, no spill" complaint fixed by
   peer-reported per-carrier delivery rates (1 s PINGs), carrier_score
   relative load, Balanced capacity-proportional spreading, Priority
   spill at 1.15 + writer backlog. S14 also shipped the agentic memory
   graph + RAG (query_memory.py / write_memory.py, 18/18 tests).
-- **Prior stages**: S13 (v0.7.1, status tab: one connection frame + one
-  page scrollable, graph fills frame), S12 (v0.7.0, balanced+priority
-  scheduling + adapter ordering), S11 (v0.6.2, stream bonding finalRules +
-  verified carriers), S10/10.1 (v0.6.0/01, rendering fixes + per-adapter
-  graphs).
-- **Task E UI half (S15, DONE)**: logo assets from the user's PNG
-  (scripts/make_logo_assets.py → assets/logo_{24,64}.rgba + icon.ico);
-  in-app titlebar (decorations:false, drag + double-press maximize);
-  close_to_tray setting + close_action decision (hide via
-  window::run_with_handle on Windows, minimize elsewhere); raw-win32
-  in-app tray (tray.rs/tray_win.rs, D4 patterns, ctx-on-tray-thread);
-  Quick Settings menu = pure QuickEntry model + assign_ids.
-- **Pending — user side**: verify v0.7.1 (wheel scrolls everything
-  below the frame; graph fills the frame; all adapters reachable). If
-  stream bonding still fails on the VM: `sudo bash
-  server/setup-xray-reality.sh` (idempotent finalRules patch) and
+- **Prior stages**: S15 (v0.9.0, logo + blended titlebar + close-to-tray
+  + persistent tray + Quick Settings), S13 (v0.7.1, status tab: one
+  connection frame + one page scrollable, graph fills frame), S12
+  (v0.7.0, balanced+priority scheduling + adapter ordering), S11
+  (v0.6.2, stream bonding finalRules + verified carriers), S10/10.1
+  (v0.6.0/01, rendering fixes + per-adapter graphs).
+- **Pending — user side**: verify v0.9/v0.10 on the real Windows box —
+  tray mono↔color transition, hover speeds, right-click titlebar →
+  always-on-top actually floating, transparent emblem legible on light
+  AND dark titlebars. If stream bonding still fails on the VM: `sudo
+  bash server/setup-xray-reality.sh` (idempotent finalRules patch) and
   `sudo bash server/setup-merge-daemon.sh`.
 - **Backlog (parked)**: subscription auto-update, vmess validation,
   profiles.json locking, engine log rotation, listener max_conns, upstream iced
@@ -91,9 +93,15 @@
   to subagents, include the query one-liner so they can pull their own
   context.
 - **Watch items**: sandbox recycles (stale clone → fetch + rebase before
-  building); disk headroom (release zigbuild needs ~5G; clean
-  /tmp/mt-target/debug first); GitHub runner wedges (>45 min in cargo test
-  while a sibling passed = cancel + rerun-failed-jobs).
+  building; registry src/ wiped → rm -rf $CARGO_HOME/registry/src lets
+  cargo re-extract from cache; cargo-fmt shims missing → symlink from the
+  toolchain bin; ziglang wheel + aarch64 rust target need reinstall);
+  disk headroom (release zigbuild needs ~5G; clean /tmp/mt-target/debug
+  first; a 99%-full rootfs manifests as linker "signal 7 Bus error");
+  GitHub runner wedges (>45 min in cargo test while a sibling passed =
+  cancel + rerun; mt-bond carrier_death test flaked twice on runners
+  2026-11-20 while CI + 408 loaded local runs were green — if it recurs,
+  capture the hung job's logs BEFORE rerunning).
 
 ## Verification Contracts
 

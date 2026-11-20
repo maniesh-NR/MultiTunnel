@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "48bad6b 2026-11-20T08:08:08Z",
+  "as_of": "a5f4864 2026-11-20T10:16:58Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 242,
-  "edge_count": 251,
+  "node_count": 246,
+  "edge_count": 253,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -1171,6 +1171,26 @@
       "passages": [
         {
           "text": "backup(recovery-incident2-fixed): 2026-11-12T16:31:08Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:a5f4864",
+      "type": "commit",
+      "title": "s16: titlebar window menu + always-on-top, transparent emblem, state-aware mono tray icon, live tooltip, README banner/attribution, repo About+topics — (1) asset pipeline: key_out_background (border flood-fill, dual local+global tolerance gates), desaturate (contrast-normalized mono), area-averaging resize with premultiplied alpha (bilinear punched holes at 20:1 downscale), composite_on + stdlib PNG encoder -> assets/logo_24.rgba transparent emblem, icon_mono.ico, logo_transparent.png, banner.png 1280x360; titlebar emblem now blends (plus fix: identity cluster was top-aligned since S15 — align_y(Center) added); (2) tray: TrayCommand::Icon(Color|Mono) NIM_MODIFY swap, both HICONs live, TaskbarCreated re-adds the CURRENT style, spawn seeds Mono (boots disconnected); tooltip_live(up,down,totals) under the 128-unit NIF_TIP cap; session_bytes accumulate link-counter deltas in sample_adapter_rates (counter reset counts full, wiped on leaving Connected); (3) titlebar right-click window menu: mouse_area on_right_press + iced::event::listen_with CursorMoved tracking, stack overlay layer (full-window dismiss mouse_area on_release — child buttons capture first), clamped anchor below the strip, items Always on top (checkable)/Minimize/Maximize/Close; menu_item/menu_rule/menu_card M3 styles; (4) SettingsView.always_on_top (serde default, D8 migration, 2 tests) applied via iced::window::change_level (AlwaysOnTop cross-platform), persisted, honored at startup (Opened+SettingsLoaded paths), Settings toggler; (5) README: banner + transparent logo + Attribution section (Xray-core, iced, ",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "a5f4864"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s16: titlebar window menu + always-on-top, transparent emblem, state-aware mono tray icon, live tooltip, README banner/attribution, repo About+topics — (1) asset pipeline: key_out_background (border flood-fill, dual local+global tolerance gates), desaturate (contrast-normalized mono), area-averaging resize with premultiplied alpha (bilinear punched holes at 20:1 downscale), composite_on + stdlib PNG encoder -> assets/logo_24.rgba transparent emblem, icon_mono.ico, logo_transparent.png, banner.png 1280x360; titlebar emblem now blends (plus fix: identity cluster was top-aligned since S15 — align_y(Center) added); (2) tray: TrayCommand::Icon(Color|Mono) NIM_MODIFY swap, both HICONs live, TaskbarCreated re-adds the CURRENT style, spawn seeds Mono (boots disconnected); tooltip_live(up,down,totals) under the 128-unit NIF_TIP cap; session_bytes accumulate link-counter deltas in sample_adapter_rates (counter reset counts full, wiped on leaving Connected); (3) titlebar right-click window menu: mouse_area on_right_press + iced::event::listen_with CursorMoved tracking, stack overlay layer (full-window dismiss mouse_area on_release — child buttons capture first), clamped anchor below the strip, items Always on top (checkable)/Minimize/Maximize/Close; menu_item/menu_rule/menu_card M3 styles; (4) SettingsView.always_on_top (serde default, D8 migration, 2 tests) applied via iced::window::change_level (AlwaysOnTop cross-platform), persisted, honored at startup (Opened+SettingsLoaded paths), Settings toggler; (5) README: banner + transparent logo + Attribution section (Xray-core, iced, ",
           "kind": "title"
         }
       ]
@@ -4064,6 +4084,39 @@
       ]
     },
     {
+      "id": "ledger:s16",
+      "type": "ledger",
+      "title": "Stage s16 ledger",
+      "tags": [
+        "s16",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s16"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-20T11:20Z | S16 OPENED per user asks (D26): repo About section + relevant tags, attribution, logo + matching banner in the README, transparent-background logo on the titlebar, monochrome logo for the tray in the not-connected state, tray hover showing live up/down speed + total volumes, right-click titlebar menu incl. \"window always on top\". PRELIM: repo About was a stale leftover from an unrelated project; token is a fine-grained github_pat_ (the gh[pousr]_ extraction regex missed it); GitHub About+topics+homepage set via API (description = zero-dependency bonding proxy one-liner; 20 topics: rust proxy vpn windows gui iced material-you material-design-3 xray vless reality v2ray socks5 http-proxy multi-wan link-aggregation channel-bonding load-balancing failover tunnel).",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T11:40Z | ASSET PIPELINE (make_logo_assets.py): key_out_background = border flood-fill with DUAL gates (local continuity tol 14 handles the source's soft gradient; global tol 25 vs avg border color so a pale interior mark region can never be eaten through a soft edge; enclosed pockets stay opaque); desaturate = luminance grayscale contrast-normalized to [64,216] (legible on light AND dark taskbars); composite_on + encode_png (stdlib zlib writer) → NEW assets: logo_transparent.png (412x331), banner.png (1280x360, lockup on the logo's own canvas color), icon_mono.ico (16/32/48 mono emblem + 256 mono lockup, transparent); logo_24.rgba REGENERATED transparent. CRITICAL BUG FOUND+FIXED: bilinear resample at 20:1 downscale samples 4 of ~400 source px — punched the transparent emblem full of holes (109 washed px); resize_area = box filter with PREMULTIPLIED alpha (transparent surroundings never tint survivors) + smart_resize dispatch (>2x downscale → area). Verified: 117 solid px, true palette (lavender/pink/slate), emblem renders on-rig at x17-30 y14-25 center 19.5 (also FIXED latent S15 bug: identity cluster sat flush at the strip TOP — container needs align_y(Center); hidden by the old opaque tile).",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T11:55Z | IMPLEMENTED (D26): (1) mt-service SettingsView.always_on_top (#[serde(default)], D8 migration, 2 tests) + real_service/mock/test sites; (2) tray.rs: TrayCommand::Icon(TrayIcon{Color,Mono}) + TrayIcon::for_state (Connecting/Failed→Mono per the user's wording) + tooltip_live(up_bps,down_bps,tot_up,tot_down) \"MultiTunnel — ↓X ↑Y • Σ↓Z ↑W\" (≤70 UTF-16 units worst case, < 128 NIF_TIP cap) + ICON_MONO_BYTES embedded; (3) tray_win.rs: both HICONs loaded at spawn (colored + mono, CreateIconFromResourceEx 32px), UiState.icon_style + icon_for() (mono-missing → colored fallback), Icon cmd swaps via NIM_MODIFY(NIF_ICON), TaskbarCreated re-adds the CURRENT style, teardown destroys both, spawn seeds Mono (app boots not-connected); (4) app.rs: session_bytes (up,down) accumulate link-counter deltas inside sample_adapter_rates (counter RESET counts full new value — totals never dip; wiped on leaving Connected), tooltip = tooltip_live(self.throughput, session_bytes) while connected / word form otherwise, icon dedup via tray_icon field; (5) titlebar window menu: mouse_area .on_right_press(TitleContext) on the drag strip + iced::event::listen_with(CursorMoved) cursor tracking + window_size from Resized; anchor = cursor clamped to window minus menu_bounds (232x196) dropping below the 40px strip, fallback top-right; overlay = iced::widget::stack layer (base + full-window dismiss mouse_area on_RELEASE — child buttons capture first so a row pick fires its action exactly once and outside-clicks dismiss); items Always on top (✓ checkable)/Minimize/Maximize|Restore/Close (reuse ",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T12:10Z | RIG VERIFIED (sf=1.0 AND 1.5): transparent emblem renders (117-px cluster at strip center, pastel palette intact — was invisible before the area-resize fix); rclick on the strip opens the window menu AT THE CURSOR (22,494 card-region px differ at sf=1.0, 49,215 at sf=1.5 = exact 1.5x geometry, 0 stray px elsewhere); clicking \"Always on top\" closes the menu AND the ✓ check glyph renders on re-open (84 px in the check area differ — setting persisted through the mock service); click-outside dismisses (0 px remain); D24 scroll invariant HOLDS under the new stack wrapper (connection frame byte-identical y100-290, page below moves 134k px at sf=1.5); ✕ still exits. GATES: fmt clean; clippy host + windows-gnu (zig shims, ziglang 0.14.1 reinstalled after the recycle) --all-targets -D warnings clean; workspace tests 429/0 (+8: app session_totals/title_menu_anchor_clamps/always_on_top roundtrip, tray tooltip_live/tray_icon_for_state/mono-ICO parse, mt-service 2 migration); vendored iced 6/0; mt-app --smoke exit 0; zigbuild release PE32+ ×4 (multitunnel 18.7MB, multitunnel-tray GUI 10.0MB, mt-app 14.5MB, mt-merge-server 2.4MB) + linux ELF ×2; version 0.10.0.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "ledger:s2",
       "type": "ledger",
       "title": "Stage s2 ledger",
@@ -4863,7 +4916,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: S15 CLOSED (v0.9.0 released (task E UI half, D25 — the user's five asks: logo, Chromium-style blended title bar, close-to-tray toggle, persistent tray icon, Quick Settings on tray right-click). All 8 verification gates green (see LEDGER s15 for the full rig story); v0.9.0 RELEASED (run 44698724161 SUCCESS, assets verified — see LEDGER s15). - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling shipped — the \"one adapter maxes out, no spill\" complaint fixed by peer-reported per-carrier delivery rates (1 s PINGs), carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + writer backlog. S14 also shipped the agentic memory graph + RAG (query_memory.py / write_memory.py, 18/18 tests). - **Prior stages**: S13 (v0.7.1, status tab: one connection frame + one page scrollable, graph fills frame), S12 (v0.7.0, balanced+priority scheduling + adapter ordering), S11 (v0.6.2, stream bonding finalRules + verified carriers), S10/10.1 (v0.6.0/01, rendering fixes + per-adapter graphs). - **Task E UI half (S15, DONE)**: logo assets from the user's PNG (scripts/make_logo_assets.py → assets/logo_{24,64}.rgba + icon.ico); in-app titlebar (decorations:false, drag + double-press maximize); close_to_tray setting + close_action decision (hide via window::run_with_handle on Windows, minimize elsewhere); raw-win32 in-app tray (tray.rs/tray_win.rs, D4 patterns, ctx-on-tray-thread); Quick Settings menu = pure QuickEntry model + assign_ids.",
+          "text": "- **Stage**: S16 — repo polish + window menu + state-aware tray (D26), implementation and ALL gates green; v0.10.0 release re-running (first attempt hit two GitHub-runner flakes in the mt-bond integration leg — see LEDGER s16 and Watch items). The seven asks: GitHub About + 20 topic tags (done via API — the About description was a stale leftover of an unrelated project), README attribution section + banner + transparent logo, transparent titlebar emblem (flood-fill key-out + AREA resample — bilinear punches holes at 20:1), monochrome not-connected tray icon (NIM_MODIFY swap, boots Mono), tray hover = live speeds + Σ totals, titlebar right-click window menu with always-on-top (cross-platform iced change_level, persisted setting, honored at startup). Also fixed: latent S15 top-aligned identity cluster (container align_y(Center)). - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling shipped — the \"one adapter maxes out, no spill\" complaint fixed by peer-reported per-carrier delivery rates (1 s PINGs), carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + writer backlog. S14 also shipped the agentic memory graph + RAG (query_memory.py / write_memory.py, 18/18 tests).",
           "kind": "body"
         }
       ]
@@ -4972,6 +5025,26 @@
       "passages": [
         {
           "text": "Release v0.1.0: tag points at commit 7415aa3.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "release:v0.10.0",
+      "type": "release",
+      "title": "Release v0.10.0 (tagged a5f4864)",
+      "tags": [
+        "v0.10.0"
+      ],
+      "sources": [
+        {
+          "file": "git:tags/v0.10.0",
+          "anchor": "a5f4864"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Release v0.10.0: tag points at commit a5f4864.",
           "kind": "body"
         }
       ]
@@ -6863,7 +6936,7 @@
     {
       "id": "state:current",
       "type": "state",
-      "title": "STATE — current position (last update: S14 (memory graph + RAG protocol shipped; saturation scheduling WIP preserved)",
+      "title": "STATE — current position (last update: S16 (repo polish + window menu + state-aware tray, v0.10.0)",
       "tags": [
         "durable"
       ],
@@ -6875,15 +6948,15 @@
       ],
       "passages": [
         {
-          "text": "# STATE — rewritten at the end of every stage. Last update: S14 (memory graph + RAG protocol shipped; saturation scheduling WIP preserved)",
+          "text": "# STATE — rewritten at the end of every stage. Last update: S16 (repo polish + window menu + state-aware tray, v0.10.0)",
           "kind": "title"
         },
         {
-          "text": "## Current position - Stage: S14 IN FLIGHT, two tracks. (a) DONE — user directive \"store agentic memory as data graphs accessible to all agents and use retrieval augmented generation (RAG)\": typed graph store harness/memory/store/memory_graph.json (schema v1; 16 node types / 14 edge rels, evidence-gated; sources = PM durable sections, STATE/DECISIONS/LEDGER, agent-reports, consensus, git tags + full log, curated/). Retrieval = BM25 (k1=1.5, b=0.75, title boost 1.5) + graph-neighborhood expansion (0.5^hop decay). CLIs: query_memory.py at repo root (--json, --prompt paste-ready context packs); harness/memory/write_memory.py --node/--edge (curated/ = agent write path, merge-last, failed rebuild auto-rolls-back). update_memory.py rebuilds the store. 18/18 tests green (harness/memory/test_graph.py); builds deterministic (byte-identical; as_of from git, no wall-clock). (b) SATURATION FIX COMPILED + GATED (release pending) — capacity- aware scheduling (task E core, \"one adapter maxes out, no spill\") COMPLETE on top of the cut-off WIP (f4a26ca): peer-reported per-carrier delivery rates piggybacked on 1 s PINGs, assign/deliver EWMA, carrier_score = assign_bps / max(deliver_bps, PROBE_BPS 32 KiB/s), Balanced = least relative load (capacity-proportional), Priority spills at score >= 1.15, REORDER_CAP 4 -> 16 MiB + would_overflow backpressure path. Session closed the WIP gaps: unused_mut fix, rustfmt, test helper S14 fields (no-report default exercises the S12 fallback), 6 new tests (carrier_score incl.",
+          "text": "## Current position - Stage: S16 IN FLIGHT — implementation + gates COMPLETE, release v0.10.0 re-running (first attempt: two independent GitHub-runner flakes in the mt-bond integration leg — `carrier_death_mid_stream_fails_over_without_ data_loss` failed on windows (second-half write: \"no live bond carrier\") and the linux leg hung inside `cargo test -p mt-bond`; the SAME commit passed CI on BOTH OSes (run 44717917257) minutes earlier, 25x solo + 12x full-suite stress runs under 8-way CPU load locally = 408 executions 0 failures, and the identical suite shipped S14/S15 releases — verdict runner flake, precedent v0.5.1 cancel+rerun; run 44719389267 cancelled + re-run).",
           "kind": "title"
         },
         {
-          "text": "## Next actions 1. Windows-gnu clippy gate (rustup target add x86_64-pc-windows-gnu + cargo/ shims), then cargo zigbuild --release gates (PE32+ x4 + ELF), then tag v0.8.0 → release.yml → verify assets → LEDGER + backup. 2. Task E UI half after the core release (logo asset needed from user — the attached image is not in the repo; locate or re-request). 3. USER VERIFICATION of v0.7.1 still pending: wheel scrolls everything below the frame; graph fills the frame; long adapter lists reachable. If stream bonding fails on the VM: sudo bash server/setup-xray-reality.sh + server/setup-merge-daemon.sh. After v0.8.0: verify saturation spill on the real 3-adapter setup. 4. Backlog: subscription auto-update, vmess validation, profiles.json locking, engine log rotation, listener max_conns, upstream iced migration, S7 native REALITY core (parked).",
+          "text": "## Next actions 1. Watch release run 44719389267 (re-run); on success verify assets by download+unzip (11-entry manifest, PE32+ x2, README/QUICKSTART carried); then LEDGER close entry + backup push. 2. If the mt-bond flake recurs on the runner: do NOT blind-rerun again — capture the hung job's logs FIRST (jobs API), then decide (test-harness hardening: bound read_to_end with tokio timeout is the leading option, but only with a reproduced defect in hand). 3. USER VERIFICATION of v0.9/v0.10 asks on the real Windows box: tray mono ↔ colored transition, hover speeds, titlebar right-click → always-on-top actually floating above other windows, transparent emblem on both light and dark titlebars. 4. Backlog: subscription auto-update, vmess validation, profiles.json locking, engine log rotation, listener max_conns, upstream iced migration, S7 native REALITY core (parked).",
           "kind": "title"
         }
       ]
@@ -6987,6 +7060,24 @@
       "passages": [
         {
           "text": "User directive: store agentic memory as data graphs accessible to all agents and use retrieval-augmented generation (RAG). Implemented (S14): harness/memory/store/memory_graph.json — typed nodes (16 whitelisted types) with retrieval passages + typed evidence edges (14 whitelisted relations), ingested from PROJECT_MEMORY.md durable sections, STATE/DECISIONS/LEDGER, agent-reports, consensus, git tags + full log, and curated/ (the agent write path via write_memory.py). Retrieval = BM25 + graph-neighborhood expansion; repo-root CLI query_memory.py (--json / --prompt context packs); deterministic byte-identical rebuilds; python3 harness/memory/test_graph.py green.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "task:s16-repo-polish-window-menu",
+      "type": "task",
+      "title": "S16 (v0.10.0): repo About/tags, attribution, banner, transparent emblem, mono tray, tooltip speeds, titlebar right-click menu",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md s16 entries 2026-11-20T11:20Z..12:10Z; README Attribution+banner; crates/mt-app S16 code",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "S16 (D26) shipped the user's seven asks: (1) GitHub About rewritten + 20 topic tags via API (old description was a stale unrelated-project leftover; token is a fine-grained github_pat_ — the gh[pousr]_ regex misses it); (2) README Attribution section (Xray-core Apache-2.0, iced MIT + vendored patch crates, Material You via material-colors, v2rayN, net-merge, BondTunnel predecessor, own logo artwork, cargo-zigbuild/zig); (3) README banner = assets/banner.png 1280x360 (transparent lockup composited on the logo canvas color) + transparent logo in the identity section; (4) titlebar emblem TRANSPARENT: key_out_background flood-fill (dual local-tol 14 + global-tol 25 gates) + resize_area box filter with premultiplied alpha — bilinear at 20:1 downscale samples 4 of ~400 px and punched holes; ALSO fixed latent S15 top-aligned identity cluster via container align_y(Center); (5) tray icon state-aware: TrayCommand::Icon(Color|Mono), both HICONs live, NIM_MODIFY swap, TaskbarCreated re-adds current style, boots Mono (not-connected); icon_mono.ico = desaturated contrast-normalized [64,216] transparent mark; (6) tray hover tooltip = tooltip_live: live down/up speeds from the Throughput event + session_bytes totals accumulated from link-counter deltas in sample_adapter_rates (counter reset counts full value; wiped on leaving Connected); (7) titlebar RIGHT-CLICK window menu: mouse_area on_right_press + listen_with CursorMoved tracking, iced stack overlay (full-window dismiss mouse_area on_release; child buttons capture first), clamped anchor below the 40px strip, items Always on top (SettingsView.always_on_top serde-default, applied via iced window::change_level AlwaysOnTop — cross-platform, honored at startup from Opened AND SettingsLoaded) / Minimize / Maximize / Close. Gates: 429/0 workspace tests (+8), fmt, clippy host+windows-gnu, zigbuild PE32+ x4 + ELF x2, rig sf=1.0+1.5 (menu at cursor, check glyph persists, outside-click dismiss, D24 scroll invariant, x-exit). v0.10.0 release: first attempt flaked on GitHub runners (mt-bond carrier_death test: windows fail + linux hang) while CI on the same commit passed both OSes and 408 loaded local runs were green — cancelled + re-run (precedent v0.5.1).",
           "kind": "body"
         }
       ]
@@ -8019,6 +8110,12 @@
       "evidence": "2026-11-20T13:20Z | v0.9.0 RELEASED: tag on b13fb31 → release run 44698724161 SUCCESS (~7 min, warm cache); CI on the same commit (44698711487) ALL GREEN. Assets verified by download+unzip (staged in download/v090-verify/): multitunnel-v0.9.0-windows-x64.zip 6,241,184 B (11-entry manifest, integrity OK; multitunnel.exe PE32+ 12.88 MB + multitunnel-tray.exe PE32+ 2.95 MB — both grew ~0.3-0.6 MB from the embedded logo assets + tray/titlebar code; README carries the \"App identity & tray (v0.9)\" section, QUICKSTART the Step 2 note) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. S15 CLOSED — the user's five asks shipped: (1) the attached image is the app logo on every surface (window, taskbar, title bar, tray, both binaries' embedded ICO), (2) Chromium-style blended title bar (native chrome off, in-app strip, drag + double-press maximize), (3) close-to-tray toggle in Settings → Window & tray, (4) persistent tray icon while open or hidden (Windows), (5) Quick Settings on tray right-click (connect/disconnect, server switch, open, exit). User actions: none — Settings → Window & tray → \"keep running in the tray when closed\" turns the ✕ into hide-to-tray."
     },
     {
+      "src": "ledger:s16",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
       "src": "ledger:s2",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -8221,6 +8318,12 @@
       "dst": "commit:7415aa3",
       "rel": "built_from",
       "evidence": "git tag v0.1.0"
+    },
+    {
+      "src": "release:v0.10.0",
+      "dst": "commit:a5f4864",
+      "rel": "built_from",
+      "evidence": "git tag v0.10.0"
     },
     {
       "src": "release:v0.2.0",
