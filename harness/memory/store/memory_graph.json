@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "a5f4864 2026-11-20T10:16:58Z",
+  "as_of": "04baaf6 2026-11-20T11:07:57Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 246,
-  "edge_count": 253,
+  "node_count": 248,
+  "edge_count": 256,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -111,6 +111,26 @@
       "passages": [
         {
           "text": "backup(s5-implementers): 2026-11-16T14:53:48Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:04baaf6",
+      "type": "commit",
+      "title": "backup(s16-close-v0.10.0): 2026-11-20T11:07:57Z [no changes]",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "04baaf6"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s16-close-v0.10.0): 2026-11-20T11:07:57Z [no changes]",
           "kind": "title"
         }
       ]
@@ -851,6 +871,26 @@
       "passages": [
         {
           "text": "backup(s11-close-v0.7.0): 2026-11-19T13:38:15Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:6f38709",
+      "type": "commit",
+      "title": "s16-close: v0.10.0 released and verified; LEDGER s16 (incl. runner-flake verdict + retry protocol), STATE rewrite, PM playbook, memory-graph task node",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "6f38709"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s16-close: v0.10.0 released and verified; LEDGER s16 (incl. runner-flake verdict + retry protocol), STATE rewrite, PM playbook, memory-graph task node",
           "kind": "title"
         }
       ]
@@ -4113,6 +4153,10 @@
         {
           "text": "2026-11-20T12:10Z | RIG VERIFIED (sf=1.0 AND 1.5): transparent emblem renders (117-px cluster at strip center, pastel palette intact — was invisible before the area-resize fix); rclick on the strip opens the window menu AT THE CURSOR (22,494 card-region px differ at sf=1.0, 49,215 at sf=1.5 = exact 1.5x geometry, 0 stray px elsewhere); clicking \"Always on top\" closes the menu AND the ✓ check glyph renders on re-open (84 px in the check area differ — setting persisted through the mock service); click-outside dismisses (0 px remain); D24 scroll invariant HOLDS under the new stack wrapper (connection frame byte-identical y100-290, page below moves 134k px at sf=1.5); ✕ still exits. GATES: fmt clean; clippy host + windows-gnu (zig shims, ziglang 0.14.1 reinstalled after the recycle) --all-targets -D warnings clean; workspace tests 429/0 (+8: app session_totals/title_menu_anchor_clamps/always_on_top roundtrip, tray tooltip_live/tray_icon_for_state/mono-ICO parse, mt-service 2 migration); vendored iced 6/0; mt-app --smoke exit 0; zigbuild release PE32+ ×4 (multitunnel 18.7MB, multitunnel-tray GUI 10.0MB, mt-app 14.5MB, mt-merge-server 2.4MB) + linux ELF ×2; version 0.10.0.",
           "kind": "body"
+        },
+        {
+          "text": "2026-11-20T12:45Z | v0.10.0 RELEASED: first attempt (run 44719389267 attempt 1) hit TWO GitHub-runner flakes in the mt-bond integration leg (windows: carrier_death_mid_stream second-half write \"no live bond carrier\"; linux: hang inside cargo test -p mt-bond for 38 min with the sweeper's STALL_TIMEOUT=10s making a real product hang implausible) while the SAME commit passed CI on BOTH OSes (44717917257) minutes earlier and 25x solo + 12x full-suite stress runs under 8-way CPU load locally = 408 executions 0 failures — verdict runner flake (precedent v0.5.1), cancelled + re-run. Attempt 2: BOTH jobs green (linux-daemon success — the earlier hang did not reproduce, confirming the verdict). Assets verified by download+unzip (download/v0100-verify/): multitunnel-v0.10.0-windows-x64.zip 6,311,338 B (10 entries, integrity OK; multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI; README carries Attribution + banner + logo_transparent references, QUICKSTART the v0.10 note) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. KNOWN MINOR (not release-blocking): the ZIP's README references assets/banner.png relatively — renders on GitHub (repo path), not inside the extracted zip (no assets/ in the archive, matching S15's manifest). S16 CLOSED — all seven asks shipped: About+tags, attribution, banner+logo README, transparent titlebar emblem, monochrome not-connected tray icon, hover speeds+totals, titlebar right-click menu with always-on-top. User actions: none.",
+          "kind": "body"
         }
       ]
     },
@@ -7174,6 +7218,12 @@
       "evidence": "subject stage label (s5)"
     },
     {
+      "src": "commit:04baaf6",
+      "dst": "ledger:s16",
+      "rel": "part_of",
+      "evidence": "subject stage label (s16)"
+    },
+    {
       "src": "commit:06881a6",
       "dst": "ledger:s5-close",
       "rel": "part_of",
@@ -8114,6 +8164,18 @@
       "dst": "project:multitunnel",
       "rel": "part_of",
       "evidence": "project ledger"
+    },
+    {
+      "src": "ledger:s16",
+      "dst": "release:v0.10.0",
+      "rel": "released_in",
+      "evidence": "2026-11-20T12:45Z | v0.10.0 RELEASED: first attempt (run 44719389267 attempt 1) hit TWO GitHub-runner flakes in the mt-bond integration leg (windows: carrier_death_mid_stream second-half write \"no live bond carrier\"; linux: hang inside cargo test -p mt-bond for 38 min with the sweeper's STALL_TIMEOUT=10s making a real product hang implausible) while the SAME commit passed CI on BOTH OSes (44717917257) minutes earlier and 25x solo + 12x full-suite stress runs under 8-way CPU load locally = 408 executions 0 failures — verdict runner flake (precedent v0.5.1), cancelled + re-run. Attempt 2: BOTH jobs green (linux-daemon success — the earlier hang did not reproduce, confirming the verdict). Assets verified by download+unzip (download/v0100-verify/): multitunnel-v0.10.0-windows-x64.zip 6,311,338 B (10 entries, integrity OK; multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI; README carries Attribution + banner + logo_transparent references, QUICKSTART the v0.10 note) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. KNOWN MINOR (not release-blocking): the ZIP's README references assets/banner.png relatively — renders on GitHub (repo path), not inside the extracted zip (no assets/ in the archive, matching S15's manifest). S16 CLOSED — all seven asks shipped: About+tags, attribution, banner+logo README, transparent titlebar emblem, monochrome not-connected tray icon, hover speeds+totals, titlebar right-click menu with always-on-top. User actions: none."
+    },
+    {
+      "src": "ledger:s16",
+      "dst": "release:v0.5.1",
+      "rel": "released_in",
+      "evidence": "2026-11-20T12:45Z | v0.10.0 RELEASED: first attempt (run 44719389267 attempt 1) hit TWO GitHub-runner flakes in the mt-bond integration leg (windows: carrier_death_mid_stream second-half write \"no live bond carrier\"; linux: hang inside cargo test -p mt-bond for 38 min with the sweeper's STALL_TIMEOUT=10s making a real product hang implausible) while the SAME commit passed CI on BOTH OSes (44717917257) minutes earlier and 25x solo + 12x full-suite stress runs under 8-way CPU load locally = 408 executions 0 failures — verdict runner flake (precedent v0.5.1), cancelled + re-run. Attempt 2: BOTH jobs green (linux-daemon success — the earlier hang did not reproduce, confirming the verdict). Assets verified by download+unzip (download/v0100-verify/): multitunnel-v0.10.0-windows-x64.zip 6,311,338 B (10 entries, integrity OK; multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI; README carries Attribution + banner + logo_transparent references, QUICKSTART the v0.10 note) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. KNOWN MINOR (not release-blocking): the ZIP's README references assets/banner.png relatively — renders on GitHub (repo path), not inside the extracted zip (no assets/ in the archive, matching S15's manifest). S16 CLOSED — all seven asks shipped: About+tags, attribution, banner+logo README, transparent titlebar emblem, monochrome not-connected tray icon, hover speeds+totals, titlebar right-click menu with always-on-top. User actions: none."
     },
     {
       "src": "ledger:s2",
