@@ -109,7 +109,12 @@ from a terminal) is the first stop for clues.
   everything until its bandwidth saturates, then the overflow spills to
   #2, and so on; `round-robin` alternates by connection count;
   `failover` keeps everything on the first healthy adapter;
-  `lowest-latency` picks the lowest-RTT adapter per connection). The
+  `lowest-latency` picks the lowest-RTT adapter per connection). Since
+  v0.8 saturation is measured DIRECTLY — each carrier's 1 s PING
+  reports the bytes/s that path actually delivered, and scheduling
+  compares offered vs delivered — so when one adapter hits its maximum
+  bandwidth the excess traffic moves to the remaining adapters within
+  seconds (and comes back when the bottleneck clears). The
   legacy external net-merge tool is no longer needed; see the appendix
   if you used it with v0.2.
 - Every adapter row on the Adapters tab has an arrow (▸) that expands a
@@ -121,8 +126,7 @@ from a terminal) is the first stop for clues.
   the connection frame itself). The same two color-coded lines as the
   Status graph (down = primary, up = tertiary), so you can SEE which NIC
   carries what. The ORDER of the ticked adapters (reorder with ↑/↓) is
-  the
-  adapter priority used by the `priority` policy. Upgrading from
+  the adapter priority used by the `priority` policy. Upgrading from
   v0.6.x? The stock merge policy migrates to balanced automatically
   (Settings shows it; pick `round-robin` there if you want the old
   behavior).
@@ -213,7 +217,10 @@ direct / reject). To import a bypass list like in v2rayN:
 Which adapter carries which connection is the merge policy's job
 (Settings -> Network): `balanced` (default) sends each new connection to
 the least-loaded adapter, and `priority` fills the Adapters-tab order —
-#1 until its bandwidth saturates, then #2. To split ONE connection
+#1 until its bandwidth saturates, then #2. Since v0.8 both policies are
+capacity-aware: each carrier's measured delivery rate (reported on the
+1 s PINGs) decides when a path is full, so excess traffic spills to the
+remaining adapters within seconds. To split ONE connection
 across both adapters at the same time, use bonding mode `stream`
 (Step 5).
 

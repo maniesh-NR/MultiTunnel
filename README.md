@@ -157,10 +157,16 @@ stream granularity:
   port>`, reached through the tunnel). No new ports are exposed.
 - `mt-bond` frames the streams (24-byte headers: HELLO/OPEN/DATA/CLOSE/
   ACK/PING/PONG), spreads DATA frames across carriers under the merge
-  policy (balanced = least writer backpressure, priority = user adapter
-  order), reorders per session, and replays unacked frames on a carrier
-  that dies — a Wi-Fi drop mid-download costs zero bytes. Cumulative ACKs
-  bound the replay window; TCP-native backpressure provides flow control.
+  policy (balanced = least RELATIVE load, priority = user adapter
+  order, both saturation-aware since v0.8 — see below), reorders per
+  session, and replays unacked frames on a carrier that dies — a Wi-Fi
+  drop mid-download costs zero bytes. Cumulative ACKs bound the replay
+  window; TCP-native backpressure provides flow control. The 1 s
+  PING/PONG keepalives piggyback each carrier's measured delivery rate
+  (v0.8), so both ends share one honest picture of every path's
+  capacity; the reorder buffer is capped at 16 MiB per session with a
+  backpressure pause when a carrier stalls (its TCP throttles the
+  sender while the gap drains).
 - `mt-merge-server` (the daemon, installed by
   `server/setup-merge-daemon.sh`) accepts the carriers, re-merges each
   session in order, dials the real target, and splits the reverse
@@ -232,37 +238,64 @@ same import is available headless: `multitunnel routing import
 <file>` (plus `multitunnel routing list`). A live session picks new
 rules up on the next reconnect.
 
-## Scheduling & bonding modes (v0.7) — even spreading and adapter priority
+## Scheduling & bonding modes (v0.7/v0.8) — even spreading and adapter priority
 
 The merge policy picks which bonded adapter carries each NEW connection
 (Settings → Network), and — in stream mode — how every connection's BYTES
 are striped across the carriers:
 
-- `balanced` (default, v0.7) — each new connection goes to the adapter
-  carrying the least traffic RIGHT NOW (a 1 s byte-rate estimate plus a
-  small per-connection reserve). A fat download stops hogging one NIC and
-  the spread evens out by BYTES, not by connection count. With three or
-  more adapters this is the fix for "one adapter carries almost
-  everything, the last one rarely sees traffic".
+- `balanced` (default, v0.7; capacity-aware in v0.8) — each new
+  connection goes to the adapter carrying the least traffic RIGHT NOW
+  (a 1 s byte-rate estimate plus a small per-connection reserve). A fat
+  download stops hogging one NIC and the spread evens out by BYTES, not
+  by connection count. With three or more adapters this is the fix for
+  "one adapter carries almost everything, the last one rarely sees
+  traffic".
 - `round-robin` — connections alternate across every ticked adapter;
   even by connection count, not by bytes (one big flow still dominates
   its adapter).
-- `priority` (v0.7) — adapters fill in the priority order you set on the
-  Adapters tab (↑/↓, or tick to append): adapter #1 takes everything
-  until its measured bandwidth saturates (a ramp/plateau detector on its
-  live rate), then the overflow spills to #2, and so on. When #1's load
-  drops, it takes the traffic back automatically.
+- `priority` (v0.7; capacity-aware in v0.8) — adapters fill in the
+  priority order you set on the Adapters tab (↑/↓, or tick to append):
+  adapter #1 takes everything until its measured bandwidth saturates,
+  then the overflow spills to #2, and so on. When #1's load drops, it
+  takes the traffic back automatically.
 - `lowest-latency` — each connection takes the adapter with the best
   smoothed (EWMA) RTT.
 - `failover` — everything rides the first healthy adapter; the others
   stay idle until it dies.
 
 In stream bonding mode the same policy drives the frame scheduler:
-`balanced` sends each frame down the carrier with the least writer
-backpressure (fast NICs naturally take more), `priority` fills carriers
-in the Adapters-tab order until one backs up. Upgrading from v0.6.x? The
-stock `round-robin` setting migrates to `balanced` once; an explicit
-re-choice of `round-robin` persists.
+`balanced` sends each frame down the carrier with the least RELATIVE
+load, `priority` fills carriers in the Adapters-tab order until one
+saturates. Upgrading from v0.6.x? The stock `round-robin` setting
+migrates to `balanced` once; an explicit re-choice of `round-robin`
+persists.
+
+### Saturation-aware spreading (v0.8) — when one adapter maxes out
+
+v0.7 measured saturation indirectly (byte counters, writer-queue
+backpressure). v0.8 measures it DIRECTLY: every second each carrier's
+PING carries a report of how many bytes/s that path actually DELIVERED,
+and both ends compare it with what they OFFERED (an EWMA on each side).
+The score is relative load — offered ÷ delivered:
+
+- `balanced` picks the carrier with the LOWEST score, so a Wi-Fi link
+  pinned at its ceiling (offered 1.6 MiB/s, delivered 1.0) immediately
+  loses the next frames to the Ethernet link with headroom. Spreading
+  is proportional to capacity: a 10:1 bandwidth mismatch yields ~10:1
+  byte shares, not a 50/50 split that just overflows the slow path.
+- `priority` keeps filling adapter #1 until its score crosses 1.15
+  (offered ≥ 15% over delivered) or its writer queue backs up — then it
+  spills to #2, and takes the traffic back the moment #1's score drops
+  again.
+- A carrier with no report yet (fresh, or an older peer) is probed at
+  32 KiB/s instead of looking free, so unknown paths earn trust before
+  they attract load — and a dead path that never reports never wins a
+  frame.
+
+This is the fix for "when one adapter reaches its maximum bandwidth, the
+rest of the traffic does not split over to the remaining adapters":
+saturation is now measured per-path, per-second, at both ends.
 
 To use **every adapter for a single connection at the same time**, set
 bonding mode to `stream` (Advanced): the bytes of every connection are

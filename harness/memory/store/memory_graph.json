@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "634202b 2026-11-20T04:45:27Z",
+  "as_of": "c698c6e 2026-11-20T05:42:22Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 232,
-  "edge_count": 238,
+  "node_count": 233,
+  "edge_count": 239,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -1311,6 +1311,26 @@
       "passages": [
         {
           "text": "backup(s8-close-v0.4.0): 2026-11-18T08:11:37Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:c698c6e",
+      "type": "commit",
+      "title": "backup(s14-ci-green): 2026-11-20T05:42:21Z",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "c698c6e"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s14-ci-green): 2026-11-20T05:42:21Z",
           "kind": "title"
         }
       ]
@@ -3887,6 +3907,10 @@
         {
           "text": "2026-11-20T05:42Z | CI GREEN on pushed head 634202b (run 44676524653, attempt 2): lint + cross-check + test(windows) + test(ubuntu) all success. Attempt 1's ubuntu leg wedged >45 min in cargo test while every sibling leg had passed (windows green — the platform that matters for this push) → cancelled + rerun-failed-jobs per the S11 ops lesson; attempt 2 finished in <9 min, confirming infrastructure wedge, not code (same suite: 404/0 locally + windows CI green same commit). S14 protocol deliverable CLOSED: memory graph + RAG live on main.",
           "kind": "body"
+        },
+        {
+          "text": "2026-11-20T11:30Z | STAGE GATES COMPLETE (local, after sandbox recycle + D2 toolchain rebuild: rustup 1.100.0 + rustfmt/clippy components, zig 0.14.1 tarball at tools/zig, cargo-zigbuild 0.24.1; NOTE tools/cargo/registry was corrupted by the recycle — approx-0.5.1 partial-extract, cargo install/metadata failed with \"path source\" parse errors — wiped registry/, re-downloaded 816M): fmt clean; clippy host --all-targets clean; clippy windows-gnu (zig shims) clean; cargo test --workspace 404/0; vendored iced 6/0 (first attempt hit ld bus-error from disk pressure — freed debug artifacts, green on retry); zigbuild release: PE32+ x4 (multitunnel console, multitunnel-tray GUI, mt-app, mt-merge-server) + linux mt-merge-server ELF; mt-app --smoke exit 0. Version 0.7.1→0.8.0 + README/QUICKSTART saturation-aware scheduling docs (per-path offered-vs-delivered, PROBE_BPS 32KiB/s trust ramp, spill ratio 1.15, 16MiB reorder cap).",
+          "kind": "body"
         }
       ]
     },
@@ -4690,7 +4714,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: S14 IN FLIGHT, two tracks. (a) DONE — agentic memory as a typed data graph + RAG (user directive): harness/memory/store/ memory_graph.json (schema v1; 16 node types, 14 edge rels, evidence required); ingests PM durable sections, STATE/DECISIONS/LEDGER, agent-reports, consensus, git tags + full log, curated/; retrieval = BM25 (k1=1.5 b=0.75, title boost) + graph expansion (0.5^hop decay); CLI query_memory.py at root (--json/--prompt context packs); write path write_memory.py --node/--edge; update_memory.py rebuilds it; 18/18 tests (harness/memory/test_graph.py). (b) SATURATION FIX COMPILED + GATED (release pending) — capacity-aware scheduling (task E core, fixes \"one adapter maxes out, no spill\") now COMPLETE on top of the cut-off WIP (f4a26ca): peer-reported per-carrier delivery rates piggybacked on 1 s PINGs, assign/deliver EWMA, carrier_score = assign_bps/max(deliver_bps, 32 KiB/s probe), Balanced = least relative load, Priority spills at score ≥ 1.15, reorder cap 4→16 MiB + backpressure overflow path; completed the missing tests (carrier_score math, saturated-adapter bypass, proportional spreading, priority ratio spill, mixed-report probing, would_overflow boundary). Gates: fmt clean, workspace clippy -D warnings clean, 404/0 workspace tests (windows clippy + zigbuild + release v0.8.0 remain before stage close). Toolchain reinstalled per D2 (rustc 1.100.0, persistent under tools/{rustup,cargo}).",
+          "text": "- **Stage**: S14 CLOSED (two tracks, both shipped on main). (a) Agentic memory as a typed data graph + RAG (user directive): harness/memory/ store/memory_graph.json (schema v1; 16 node types, 14 edge rels, evidence required); BM25 + graph-expansion retrieval; CLI query_memory.py at root (--json/--prompt context packs); write path harness/memory/write_memory.py --node/--edge; 18/18 tests; CI green on 634202b. (b) Capacity-aware saturation scheduling (v0.8.0, fixes \"one adapter maxes out, no spill\"): peer-reported per-carrier delivery rates piggybacked on 1 s PINGs, assign/deliver EWMA, carrier_score = assign_bps/max(deliver_bps, 32 KiB/s probe floor), Balanced = least relative load (capacity-proportional), Priority spills at score >= 1.15 or 512 KiB writer backlog, reorder cap 16 MiB + backpressure overflow pause. All local gates green (fmt; clippy host+windows-gnu; 404/0 tests; iced 6/0; zigbuild PE32+ x4 + ELF; mt-app --smoke); tagged v0.8.0 (see LEDGER for the release-run record). - **Prior stages**: S13 (v0.7.1, status tab: one connection frame + one page scrollable, graph fills frame), S12 (v0.7.0, balanced+priority scheduling + adapter ordering), S11 (v0.6.2, stream bonding finalRules + verified carriers), S10/10.1 (v0.6.0/01, rendering fixes + per-adapter graphs).",
           "kind": "body"
         }
       ]
@@ -7138,6 +7162,12 @@
       "dst": "ledger:s8",
       "rel": "part_of",
       "evidence": "subject stage label (s8)"
+    },
+    {
+      "src": "commit:c698c6e",
+      "dst": "ledger:s14",
+      "rel": "part_of",
+      "evidence": "subject stage label (s14)"
     },
     {
       "src": "commit:c9925fd",
