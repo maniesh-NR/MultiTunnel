@@ -151,6 +151,18 @@
       "evidence": "S14 protocol upgrade, user directive"
     },
     {
+      "src": "task:s17-titlebar-logs",
+      "dst": "commit:ce6af07",
+      "rel": "released_in",
+      "evidence": "tag v0.11.0, release run 44766745650 attempt 2"
+    },
+    {
+      "src": "task:s17-titlebar-logs",
+      "dst": "component:mt-app",
+      "rel": "implements",
+      "evidence": "crates/mt-app/src/screens.rs logs()+titlebar(); app.rs messages+autoscroll_logs_now"
+    },
+    {
       "src": "task:saturation-aware-split",
       "dst": "bug:reorder-overflow",
       "rel": "fixes",

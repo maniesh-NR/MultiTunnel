@@ -431,6 +431,24 @@
       ]
     },
     {
+      "id": "task:s17-titlebar-logs",
+      "type": "task",
+      "title": "S17 titlebar version+speeds, logs viewport navigation (D27, v0.11.0)",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md#s17",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "S17 CLOSED (v0.11.0): titlebar shows the release version next to the app name (workspace version inheritance — [workspace.package] + version.workspace, one-line release bumps) and live global down/up rates on the right (self.throughput, the tray tooltip's same 1s sample). Logs screen: scaffold_fixed + dedicated viewport scrollable (id logs-lines), floating top/bottom jump buttons (26px right stand-off — RIG BUG: flush-corner placement sat in the scrollbar grab zone and the rail swallowed clicks), autoscroll toggle default ON (LogLine re-anchors via scrollable::snap_to RelativeOffset y=1.0 gated by autoscroll_logs_now()); mock gained a connect burst + deterministic 2s keepalive. Release ops: cold-cache cancel+rerun (68min leg -> 6min warm retry; rust-cache saves in post-steps even on cancellation) and CI runner-flake round 2 (carrier_death then socks_probe deadline, green on attempt 3).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "task:saturation-aware-split",
       "type": "task",
       "title": "Task E (core) — saturation-aware redistribution: when one adapter hits its bandwidth ceiling, spill traffic to the rest (S14, gated — release pending)",

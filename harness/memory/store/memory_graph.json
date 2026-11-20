@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "25f93ff 2026-11-20T15:47:04Z",
+  "as_of": "66147c6 2026-11-20T17:04:04Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 254,
-  "edge_count": 262,
+  "node_count": 256,
+  "edge_count": 265,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -811,6 +811,26 @@
       "passages": [
         {
           "text": "backup(restore-post-revert): 2026-11-12T15:05:08Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:66147c6",
+      "type": "commit",
+      "title": "backup(s17-close-v0.11.0): 2026-11-20T17:04:00Z",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "66147c6"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s17-close-v0.11.0): 2026-11-20T17:04:00Z",
           "kind": "title"
         }
       ]
@@ -7264,6 +7284,24 @@
       ]
     },
     {
+      "id": "task:s17-titlebar-logs",
+      "type": "task",
+      "title": "S17 titlebar version+speeds, logs viewport navigation (D27, v0.11.0)",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md#s17",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "S17 CLOSED (v0.11.0): titlebar shows the release version next to the app name (workspace version inheritance — [workspace.package] + version.workspace, one-line release bumps) and live global down/up rates on the right (self.throughput, the tray tooltip's same 1s sample). Logs screen: scaffold_fixed + dedicated viewport scrollable (id logs-lines), floating top/bottom jump buttons (26px right stand-off — RIG BUG: flush-corner placement sat in the scrollbar grab zone and the rail swallowed clicks), autoscroll toggle default ON (LogLine re-anchors via scrollable::snap_to RelativeOffset y=1.0 gated by autoscroll_logs_now()); mock gained a connect burst + deterministic 2s keepalive. Release ops: cold-cache cancel+rerun (68min leg -> 6min warm retry; rust-cache saves in post-steps even on cancellation) and CI runner-flake round 2 (carrier_death then socks_probe deadline, green on attempt 3).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "task:saturation-aware-split",
       "type": "task",
       "title": "Task E (core) — saturation-aware redistribution: when one adapter hits its bandwidth ceiling, spill traffic to the rest (S14, gated — release pending)",
@@ -7527,6 +7565,12 @@
       "dst": "ledger:s15",
       "rel": "part_of",
       "evidence": "subject stage label (s15)"
+    },
+    {
+      "src": "commit:66147c6",
+      "dst": "ledger:s17",
+      "rel": "part_of",
+      "evidence": "subject stage label (s17)"
     },
     {
       "src": "commit:6a4bd7c",
@@ -8829,6 +8873,18 @@
       "dst": "protocol:memory-graph",
       "rel": "implements",
       "evidence": "S14 protocol upgrade, user directive"
+    },
+    {
+      "src": "task:s17-titlebar-logs",
+      "dst": "commit:ce6af07",
+      "rel": "released_in",
+      "evidence": "tag v0.11.0, release run 44766745650 attempt 2"
+    },
+    {
+      "src": "task:s17-titlebar-logs",
+      "dst": "component:mt-app",
+      "rel": "implements",
+      "evidence": "crates/mt-app/src/screens.rs logs()+titlebar(); app.rs messages+autoscroll_logs_now"
     },
     {
       "src": "task:saturation-aware-split",
