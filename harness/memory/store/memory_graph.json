@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "f4a26ca 2026-11-20T04:08:30Z",
+  "as_of": "634202b 2026-11-20T04:45:27Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 229,
-  "edge_count": 237,
+  "node_count": 232,
+  "edge_count": 238,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -696,6 +696,26 @@
       ]
     },
     {
+      "id": "commit:634202b",
+      "type": "commit",
+      "title": "backup(s14-memory-graph-rag): 2026-11-20T04:45:27Z [no changes]",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "634202b"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s14-memory-graph-rag): 2026-11-20T04:45:27Z [no changes]",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:64e0e22",
       "type": "commit",
       "title": "backup(restore-post-revert): 2026-11-12T15:05:08Z",
@@ -1356,6 +1376,26 @@
       ]
     },
     {
+      "id": "commit:d32abde",
+      "type": "commit",
+      "title": "s14: complete capacity-aware saturation scheduling — close WIP gaps (unused_mut, rustfmt, CarrierSlot test fields), add 6 tests (carrier_score probe floor, saturated-adapter bypass, proportional 10:1 spreading, priority spill ratio, mixed-report probe, would_overflow boundary); gates: fmt clean, workspace clippy -D warnings clean, 404/0 workspace tests",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "d32abde"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s14: complete capacity-aware saturation scheduling — close WIP gaps (unused_mut, rustfmt, CarrierSlot test fields), add 6 tests (carrier_score probe floor, saturated-adapter bypass, proportional 10:1 spreading, priority spill ratio, mixed-report probe, would_overflow boundary); gates: fmt clean, workspace clippy -D warnings clean, 404/0 workspace tests",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:d345898",
       "type": "commit",
       "title": "backup(s2-recovery-merge): 2026-11-13T05:14:06Z",
@@ -1511,6 +1551,26 @@
       "passages": [
         {
           "text": "backup(s2-verified): 2026-11-13T05:57:16Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:eaaa8c3",
+      "type": "commit",
+      "title": "s14-protocol: agentic memory as a typed data graph + RAG, all-agent accessible — store (schema v1, 16 node types / 14 edge rels, evidence-gated) built from PM durable sections, STATE/DECISIONS/LEDGER, agent-reports, consensus, git tags+log, curated/; BM25 + graph-expansion retrieval; CLIs: query_memory.py (--json/--prompt context packs), write_memory.py --node/--edge (curated write path, rollback on failed rebuild); update_memory.py rebuilds the store; 18/18 tests; docs: PM blockquote+playbook, STATE, LEDGER",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "eaaa8c3"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s14-protocol: agentic memory as a typed data graph + RAG, all-agent accessible — store (schema v1, 16 node types / 14 edge rels, evidence-gated) built from PM durable sections, STATE/DECISIONS/LEDGER, agent-reports, consensus, git tags+log, curated/; BM25 + graph-expansion retrieval; CLIs: query_memory.py (--json/--prompt context packs), write_memory.py --node/--edge (curated write path, rollback on failed rebuild); update_memory.py rebuilds the store; 18/18 tests; docs: PM blockquote+playbook, STATE, LEDGER",
           "kind": "title"
         }
       ]
@@ -3822,6 +3882,10 @@
         },
         {
           "text": "2026-11-20T10:55Z | GATES (saturation, host side): cargo fmt --check clean; cargo clippy --workspace --all-targets -D warnings clean (cold iced build exceeded one 10-min window — resumed from target cache); cargo test --workspace 404/0 (baseline 398 + 6 new). FIX (protocol tooling): write_memory.py gained --curated override — the write-CLI roundtrip test had leaked fact:test-probe into the REAL curated store (test now isolates curated dir AND asserts the real store untouched); leaked node removed, curated task/bug nodes advanced wip->gated / open->fix-gated. Remaining before stage close: windows-gnu clippy, zigbuild x4 PE + ELF, tag v0.8.0, release verify, real-setup saturation check.",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T05:42Z | CI GREEN on pushed head 634202b (run 44676524653, attempt 2): lint + cross-check + test(windows) + test(ubuntu) all success. Attempt 1's ubuntu leg wedged >45 min in cargo test while every sibling leg had passed (windows green — the platform that matters for this push) → cancelled + rerun-failed-jobs per the S11 ops lesson; attempt 2 finished in <9 min, confirming infrastructure wedge, not code (same suite: 404/0 locally + windows CI green same commit). S14 protocol deliverable CLOSED: memory graph + RAG live on main.",
           "kind": "body"
         }
       ]
@@ -6930,6 +6994,12 @@
       "dst": "ledger:s10",
       "rel": "part_of",
       "evidence": "subject stage label (s10)"
+    },
+    {
+      "src": "commit:634202b",
+      "dst": "ledger:s14",
+      "rel": "part_of",
+      "evidence": "subject stage label (s14)"
     },
     {
       "src": "commit:6a4bd7c",
