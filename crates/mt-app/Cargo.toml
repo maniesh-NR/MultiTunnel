@@ -13,7 +13,7 @@ description = "MultiTunnel Material You GUI (iced 0.13, tiny-skia renderer)"
 [dependencies.iced]
 version = "0.13"
 default-features = false
-features = ["tokio", "tiny-skia", "canvas"]
+features = ["tokio", "tiny-skia", "canvas", "image-without-codecs"]
 
 [dependencies]
 mt-m3 = { path = "../mt-m3", features = ["iced"] }
@@ -28,3 +28,8 @@ thiserror = "2"
 default = ["mock"]
 # MockService: simulated backend so the GUI runs standalone (dev/CI).
 mock = []
+
+# S15 (D25): the in-app tray is raw Win32 (same windows-sys pick as the
+# root crate's legacy tray, D4) — target-gated, no new cross-platform deps.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

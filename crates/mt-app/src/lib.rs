@@ -54,6 +54,8 @@ pub mod app;
 pub mod graph;
 pub mod screens;
 pub mod theme;
+pub mod tray;
+pub mod tray_win;
 
 #[cfg(feature = "mock")]
 pub mod mock;

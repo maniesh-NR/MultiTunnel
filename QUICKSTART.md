@@ -64,6 +64,15 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > "nothing happens". v0.3.1 made the GUI the default, and any start failure
 > without a usable console now shows a MessageBox instead of dying silently.
 
+> v0.9: the window now draws its OWN title bar (Chromium-style, blended
+> into the page — no native chrome). The window/taskbar icon, the title
+> bar and the tray icon all carry your logo. A tray icon lives in the
+> notification area whenever the app runs: left-click it to reopen the
+> window, right-click it for Quick Settings (connect/disconnect, server
+> switch, exit). Want the ✕ button to hide into the tray instead of
+> quitting? Turn ON "keep running in the tray when closed" under
+> Settings → Window & tray (off by default — closing really closes).
+
 **SMOKE TEST — this is the first time the GUI binary runs on real Windows.**
 The development sandbox is Linux; the window has been cross-compiled and
 unit-tested, never displayed. Do not walk away after launching it — verify

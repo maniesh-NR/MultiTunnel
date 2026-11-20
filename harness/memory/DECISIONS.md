@@ -378,3 +378,60 @@ combined graph should use that free space.
    the last row is visible at max scroll; per-adapter expansion, the
    exit-probe verdict card and the resize round-trip all still work;
    0 panics.
+
+## D25 — S15: in-app tray + Chromium-style title bar + the user's logo (2026-11-20)
+
+User asks (task E UI half): use the attached image as the logo; title bar
+blends with the window like Chromium; toggleable close-to-tray; a
+persistent tray icon while the app is open or minimized; Quick Settings
+on tray right-click.
+
+1. LOGO PIPELINE (assets, all runtime — no exe resource embedding):
+   `scripts/make_logo_assets.py` (stdlib-only; deterministic) decodes the
+   user's PNG (zlib + unfilter, no image crate) and emits:
+   `assets/logo.png` (verbatim source, ~197 KB), `assets/logo_24.rgba`
+   (titlebar emblem, 24x24), `assets/logo_64.rgba` (window icon 64x64 —
+   iced `window::Settings::icon` via `Icon::from_rgba`), and regenerates
+   `assets/icon.ico` (BMP-format entries 16/32/48 = emblem crop, 256 =
+   full lockup — small sizes use the emblem so the mark stays legible;
+   the legacy `src/tray.rs` ICO parser and the new mt-app tray both
+   consume it). The window/taskbar icon is set at RUNTIME (Settings::icon
+   + WM_SETICON) — Explorer's .exe file icon stays default (a resource
+   object would need windres/llvm-rc, neither cross-compiles in the
+   sandbox; D4-style hand-rolled COFF .rsrc deferred until asked).
+2. TITLE BAR: `decorations: false` + an in-app strip ABOVE the nav rail
+   (emblem + "MultiTunnel" + drag area + – □ × buttons) on the SAME
+   surface color as the page (the Chromium blend). Drag = `window::drag`
+   on press; double-click-to-maximize = time-based (450 ms) second-press
+   detect (mouse_area has no double-click in iced 0.13.4); maximize glyph
+   state via `window::get_maximized`; min/max/close via window Tasks.
+3. CLOSE-TO-TRAY: `exit_on_close_request: false` ALWAYS (the app owns
+   both paths); `close_to_tray: bool` settings field (serde default
+   false — version-free migration, D8/D20 precedent). CloseRequested
+   with close_to_tray: Windows + tray alive → hide via
+   `window::run_with_handle` (HWND → ShowWindow SW_HIDE); non-Windows →
+   minimize + log line (honest fallback; a hidden window with NO tray on
+   Linux would be unreachable). Without close_to_tray → `window::close`.
+   iced 0.13 has NO hide Action — RunWithHandle is the escape hatch (no
+   vendored patch needed).
+4. IN-APP TRAY (mt-app/src/tray.rs, cfg(windows), raw Win32 per D4 —
+   the S3 patterns reused: hidden top-level STATIC window subclassed via
+   GWLP_WNDPROC (NOT message-only — TaskbarCreated must reach it),
+   Shell_NotifyIconW, TrackPopupMenuEx with TPM_RETURNCMD +
+   SetForegroundWindow, icon from the embedded ICO, TaskbarCreated
+   re-add): dedicated thread + 50 ms WM_TIMER command poll; commands
+   (tooltip/model/shutdown) via std mpsc IN, events via tokio mpsc OUT
+   (bridged into iced by the existing EVENTS_SUB_ID-style stream
+   subscription). Left click = open window; right click = menu; the
+   tray spawns in App::init (both mock and real backends — run_app is
+   shared with `multitunnel gui`), tears down (NIM_DELETE + bounded
+   join) on every real exit path. Non-Windows: stub (None) — the Linux
+   GUI keeps working, covered by the rig; the win32 half is covered by
+   windows clippy + zigbuild + the S3-proven FFI shapes.
+5. QUICK SETTINGS MENU = the tray right-click menu, built FRESH from a
+   pure, host-tested model (menu_model: Vec of items with id/label/
+   checked/disabled + submenu): Connect/Disconnect (state-reflecting),
+   Server → radio list of profiles, Open MultiTunnel, Exit. Selections
+   ride TrayEvent → existing Message paths (ConnectToggle/SetActive) —
+   no new service calls. Tooltip: "MultiTunnel — <state> [<profile>]",
+   refreshed on tick only when changed.

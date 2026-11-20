@@ -1,6 +1,6 @@
 [package]
 name = "multitunnel"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 license = "MIT"
 description = "Windows supervisor that combines an Xray VLESS+REALITY tunnel with net-merge multi-link bonding"

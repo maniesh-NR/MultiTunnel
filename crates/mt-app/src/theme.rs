@@ -436,6 +436,7 @@ mod tests {
             log_level: "warning".into(),
             probe_target: String::new(),
             exit_probe_url: String::new(),
+            close_to_tray: false,
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "c698c6e 2026-11-20T05:42:22Z",
+  "as_of": "8419d86 2026-11-20T06:45:31Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 233,
-  "edge_count": 239,
+  "node_count": 237,
+  "edge_count": 244,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -1051,6 +1051,26 @@
       "passages": [
         {
           "text": "backup(s12-close-v0.7.0): 2026-11-19T13:49:34Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:8419d86",
+      "type": "commit",
+      "title": "backup(s14-close-v0.8.0): 2026-11-20T06:45:31Z",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "8419d86"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s14-close-v0.8.0): 2026-11-20T06:45:31Z",
           "kind": "title"
         }
       ]
@@ -2684,6 +2704,30 @@
       ]
     },
     {
+      "id": "decision:D25",
+      "type": "decision",
+      "title": "D25 — S15: in-app tray + Chromium-style title bar + the user's logo (2026-11-20)",
+      "tags": [
+        "immutable"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/DECISIONS.md",
+          "anchor": "D25"
+        }
+      ],
+      "passages": [
+        {
+          "text": "User asks (task E UI half): use the attached image as the logo; title bar blends with the window like Chromium; toggleable close-to-tray; a persistent tray icon while the app is open or minimized; Quick Settings on tray right-click.",
+          "kind": "body"
+        },
+        {
+          "text": "1. LOGO PIPELINE (assets, all runtime — no exe resource embedding): `scripts/make_logo_assets.py` (stdlib-only; deterministic) decodes the user's PNG (zlib + unfilter, no image crate) and emits: `assets/logo.png` (verbatim source, ~197 KB), `assets/logo_24.rgba` (titlebar emblem, 24x24), `assets/logo_64.rgba` (window icon 64x64 — iced `window::Settings::icon` via `Icon::from_rgba`), and regenerates `assets/icon.ico` (BMP-format entries 16/32/48 = emblem crop, 256 = full lockup — small sizes use the emblem so the mark stays legible; the legacy `src/tray.rs` ICO parser and the new mt-app tray both consume it). The window/taskbar icon is set at RUNTIME (Settings::icon + WM_SETICON) — Explorer's .exe file icon stays default (a resource object would need windres/llvm-rc, neither cross-compiles in the sandbox; D4-style hand-rolled COFF .rsrc deferred until asked). 2. TITLE BAR: `decorations: false` + an in-app strip ABOVE the nav rail (emblem + \"MultiTunnel\" + drag area + – □ × buttons) on the SAME surface color as the page (the Chromium blend). Drag = `window::drag` on press; double-click-to-maximize = time-based (450 ms) second-press detect (mouse_area has no double-click in iced 0.13.4); maximize glyph state via `window::get_maximized`; min/max/close via window Tasks. 3. CLOSE-TO-TRAY: `exit_on_close_request: false` ALWAYS (the app owns both paths); `close_to_tray: bool` settings field (serde default false — version-free migration, D8/D20 precedent).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "decision:D3",
       "type": "decision",
       "title": "D3 — Single crate, two bin targets",
@@ -3911,6 +3955,43 @@
         {
           "text": "2026-11-20T11:30Z | STAGE GATES COMPLETE (local, after sandbox recycle + D2 toolchain rebuild: rustup 1.100.0 + rustfmt/clippy components, zig 0.14.1 tarball at tools/zig, cargo-zigbuild 0.24.1; NOTE tools/cargo/registry was corrupted by the recycle — approx-0.5.1 partial-extract, cargo install/metadata failed with \"path source\" parse errors — wiped registry/, re-downloaded 816M): fmt clean; clippy host --all-targets clean; clippy windows-gnu (zig shims) clean; cargo test --workspace 404/0; vendored iced 6/0 (first attempt hit ld bus-error from disk pressure — freed debug artifacts, green on retry); zigbuild release: PE32+ x4 (multitunnel console, multitunnel-tray GUI, mt-app, mt-merge-server) + linux mt-merge-server ELF; mt-app --smoke exit 0. Version 0.7.1→0.8.0 + README/QUICKSTART saturation-aware scheduling docs (per-path offered-vs-delivered, PROBE_BPS 32KiB/s trust ramp, spill ratio 1.15, 16MiB reorder cap).",
           "kind": "body"
+        },
+        {
+          "text": "2026-11-20T12:00Z | v0.8.0 RELEASED: tag on 8419d86 → release run 44690097006 SUCCESS in ~16 min; CI on the same commit (44690073233) ALL GREEN. Assets verified by download+unzip (staged in sandbox download/v080-verify/): multitunnel-v0.8.0-windows-x64.zip 6,009,639 B (11-entry manifest, integrity OK, multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI; README/QUICKSTART carry the v0.8 saturation-aware scheduling docs) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. S14 FULLY CLOSED — the user's saturation complaint (one adapter maxes out, no spill) is fixed and shipped: peer-reported per-carrier delivery rates on the 1 s PINGs, carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + 512 KiB writer backlog, 16 MiB reorder cap with backpressure. User action: none (client-side only).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "ledger:s15",
+      "type": "ledger",
+      "title": "Stage s15 ledger",
+      "tags": [
+        "s15",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s15"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-20T12:15Z | S15 OPENED per user asks (task E UI half, D25): attached image as the logo; Chromium-style blended title bar; toggleable close-to-tray; persistent tray icon while open or hidden; Quick Settings on tray right-click. LOGO: source located at ../upload/pasted_image_1795144039411.png (1024x559 RGB; emblem + wordmark on uniform light-blue canvas); scripts/make_logo_assets.py (stdlib-only: zlib+unfilter PNG decode, bilinear resize, BMP-entry ICO writer) emits assets/logo.png + logo_24.rgba (titlebar emblem) + logo_64.rgba (window icon) + regenerates assets/icon.ico (16/32/48 emblem squares + 256 lockup — the legacy tray's pinned-size test updated to the new asset shape).",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T12:30Z | IMPLEMENTED (D25): (1) decorations:false + in-app titlebar strip (screens::titlebar — logo+name left, —/□/▣/× right, whole strip drags via window::drag, 450 ms double-press maximizes); (2) exit_on_close_request:false — close decision via pure close_action(close_to_tray, tray_alive): Windows+tray → hide through window::run_with_handle(HWND→ShowWindow SW_HIDE; iced 0.13 has NO hide Action — RunWithHandle is the escape hatch, no vendored patch needed), non-Windows → minimize (honest fallback), off → real exit (tray Shutdown+ack first, then window::close); (3) close_to_tray settings field (serde default false — D8 version-free migration, old files load unchanged, 2 tests); (4) mt-app/src/tray.rs + tray_win.rs: raw-win32 in-app tray per D4/S3 patterns (hidden top-level STATIC subclassed window — NOT message-only, TaskbarCreated re-add; Shell_NotifyIconW; TrackPopupMenuEx + KB Q135788 dismissal; 50 ms WM_TIMER command poll), TrayCtx created+leaked ON the tray thread (RefCell+mpsc Receiver are !Sync — never crosses threads), left-click → Open (show+gain_focus), right-click → Quick Settings menu (header, state-reflecting Connect/Disconnect, Server submenu radio-checked by tag, Open, Exit — pure QuickEntry model + assign_ids, 10 host tests incl. surrogate-safe tip_array), selections ride existing Message paths (ConnectToggle/SetActive) — no new service calls; tooltip synced on tick when changed; (5) mt-app gains windows-sys (target-gated, same 0.61.2 as root) + iced feature image-without-codecs (the 24×24 titlebar emblem via Handle::from_rgba — no codec bloat).",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T12:45Z | RIG VERIFIED (gui_drive.py REBUILT after the sandbox recycle — Xvfb+XTEST+ffmpeg, /tmp/xkblibs re-extracted, python-xlib under tools/pypkgs-xlib; LESSONS: winit creates an UNMAPPED 'winit window' sibling — SetInputFocus on it is a BadMatch, match by WM_NAME+viewable; XTEST wheel needs 0.2 s settle + 80 ms hold + 200 ms gap or clicks get coalesced; the scroll verb's N is the 4TH part — a 3-part \"x,y,N\" silently scrolls once): titlebar renders at sf=1.0 (logo cluster x13-32, title text x45-124, three control glyph clusters x953-1063) AND sf=1.5 (window edge exactly 1619=1080*1.5-1, control clusters at exactly 1.5× positions, rail below the 60 px strip); ✕ click EXITS the app (gone-assert, default off); Settings → Window & tray card renders (VLM-verified full text), toggle flips OFF→ON (pixel: gray-knob-left → primary-fill-right), ✕ with toggle ON keeps the process ALIVE (linux minimize fallback); Status frame anchors BYTE-IDENTICAL across page scroll at sf=1.5 (60/168/198/218 transitions) with the page below moving — the D24 invariant holds under the new titlebar; --smoke exit 0; 0 panics throughout.",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-20T13:00Z | GATES ALL GREEN: fmt clean; clippy host + windows-gnu (zig shims) --all-targets -D warnings clean (first win-module compile surfaced: pub(crate) re-export shape, TrayCtx !Sync → construct-on-tray-thread, as_raw() is rwh 0.6's accessor, unused-mut/while-let nits); cargo test --workspace 421/0 (was 404; +10 tray menu/ICO/tip tests, +2 mt-service serde migration, +4 app close-action/double-click/roundtrip/begin_exit, minus legacy ICO pin rework); vendored iced 6/0; zigbuild release PE32+ ×4 (multitunnel, multitunnel-tray GUI, mt-app, mt-merge-server) + linux mt-merge-server ELF; version 0.9.0; README (\"App identity & tray (v0.9)\") + QUICKSTART (Step 2 note). DISK: workspace test + windows clippy + release zigbuild cannot coexist on the 9.9G rootfs — sequence with rm -rf /tmp/mt-target between phases; CARGO_INCREMENTAL=0 mandatory (636M incremental alone).",
+          "kind": "body"
         }
       ]
     },
@@ -4714,7 +4795,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: S14 CLOSED (two tracks, both shipped on main). (a) Agentic memory as a typed data graph + RAG (user directive): harness/memory/ store/memory_graph.json (schema v1; 16 node types, 14 edge rels, evidence required); BM25 + graph-expansion retrieval; CLI query_memory.py at root (--json/--prompt context packs); write path harness/memory/write_memory.py --node/--edge; 18/18 tests; CI green on 634202b. (b) Capacity-aware saturation scheduling (v0.8.0, fixes \"one adapter maxes out, no spill\"): peer-reported per-carrier delivery rates piggybacked on 1 s PINGs, assign/deliver EWMA, carrier_score = assign_bps/max(deliver_bps, 32 KiB/s probe floor), Balanced = least relative load (capacity-proportional), Priority spills at score >= 1.15 or 512 KiB writer backlog, reorder cap 16 MiB + backpressure overflow pause. All local gates green (fmt; clippy host+windows-gnu; 404/0 tests; iced 6/0; zigbuild PE32+ x4 + ELF; mt-app --smoke); tagged v0.8.0 (see LEDGER for the release-run record). - **Prior stages**: S13 (v0.7.1, status tab: one connection frame + one page scrollable, graph fills frame), S12 (v0.7.0, balanced+priority scheduling + adapter ordering), S11 (v0.6.2, stream bonding finalRules + verified carriers), S10/10.1 (v0.6.0/01, rendering fixes + per-adapter graphs).",
+          "text": "- **Stage**: S15 SHIPPED PENDING RELEASE (task E UI half, D25 — the user's five asks: logo, Chromium-style blended title bar, close-to-tray toggle, persistent tray icon, Quick Settings on tray right-click). All 8 verification gates green (see LEDGER s15 for the full rig story); version 0.9.0; tagged for release. - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling shipped — the \"one adapter maxes out, no spill\" complaint fixed by peer-reported per-carrier delivery rates (1 s PINGs), carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + writer backlog. S14 also shipped the agentic memory graph + RAG (query_memory.py / write_memory.py, 18/18 tests). - **Prior stages**: S13 (v0.7.1, status tab: one connection frame + one page scrollable, graph fills frame), S12 (v0.7.0, balanced+priority scheduling + adapter ordering), S11 (v0.6.2, stream bonding finalRules + verified carriers), S10/10.1 (v0.6.0/01, rendering fixes + per-adapter graphs). - **Task E UI half (S15, DONE)**: logo assets from the user's PNG (scripts/make_logo_assets.py → assets/logo_{24,64}.rgba + icon.ico); in-app titlebar (decorations:false, drag + double-press maximize); close_to_tray setting + close_action decision (hide via window::run_with_handle on Windows, minimize elsewhere); raw-win32 in-app tray (tray.rs/tray_win.rs, D4 patterns, ctx-on-tray-thread); Quick Settings menu = pure QuickEntry model + assign_ids. - **Pending — user side**: verify v0.7.1 (wheel scrolls everything below the frame; graph fills the frame; all adapters reachable).",
           "kind": "body"
         }
       ]
@@ -5043,6 +5124,26 @@
       "passages": [
         {
           "text": "Release v0.7.1: tag points at commit e38a37a.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "release:v0.8.0",
+      "type": "release",
+      "title": "Release v0.8.0 (tagged 8419d86)",
+      "tags": [
+        "v0.8.0"
+      ],
+      "sources": [
+        {
+          "file": "git:tags/v0.8.0",
+          "anchor": "8419d86"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Release v0.8.0: tag points at commit 8419d86.",
           "kind": "body"
         }
       ]
@@ -7104,6 +7205,12 @@
       "evidence": "subject stage label (s12)"
     },
     {
+      "src": "commit:8419d86",
+      "dst": "ledger:s14",
+      "rel": "part_of",
+      "evidence": "subject stage label (s14)"
+    },
+    {
       "src": "commit:87c11de",
       "dst": "ledger:s6-close",
       "rel": "part_of",
@@ -7458,6 +7565,12 @@
       "evidence": "project decision log"
     },
     {
+      "src": "decision:D25",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project decision log"
+    },
+    {
       "src": "decision:D3",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -7764,6 +7877,18 @@
       "evidence": "project ledger"
     },
     {
+      "src": "ledger:s14",
+      "dst": "release:v0.8.0",
+      "rel": "released_in",
+      "evidence": "2026-11-20T12:00Z | v0.8.0 RELEASED: tag on 8419d86 → release run 44690097006 SUCCESS in ~16 min; CI on the same commit (44690073233) ALL GREEN. Assets verified by download+unzip (staged in sandbox download/v080-verify/): multitunnel-v0.8.0-windows-x64.zip 6,009,639 B (11-entry manifest, integrity OK, multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI; README/QUICKSTART carry the v0.8 saturation-aware scheduling docs) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. S14 FULLY CLOSED — the user's saturation complaint (one adapter maxes out, no spill) is fixed and shipped: peer-reported per-carrier delivery rates on the 1 s PINGs, carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + 512 KiB writer backlog, 16 MiB reorder cap with backpressure. User action: none (client-side only)."
+    },
+    {
+      "src": "ledger:s15",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
       "src": "ledger:s2",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -8032,6 +8157,12 @@
       "dst": "commit:e38a37a",
       "rel": "built_from",
       "evidence": "git tag v0.7.1"
+    },
+    {
+      "src": "release:v0.8.0",
+      "dst": "commit:8419d86",
+      "rel": "built_from",
+      "evidence": "git tag v0.8.0"
     },
     {
       "src": "report:s1-rev-b",

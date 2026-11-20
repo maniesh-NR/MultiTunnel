@@ -1326,12 +1326,17 @@ mod tests {
         assert_eq!(i32::from_le_bytes(small[4..8].try_into().unwrap()), 16);
         assert_eq!(i32::from_le_bytes(small[8..12].try_into().unwrap()), 32);
         assert!(small.len() > 40);
-        // Pin the whole asset: scripts/make_icon.py's output is
-        // deterministic (pure geometry, stdlib only), so the total length
-        // is stable — 6 (ICONDIR) + 2*16 (ICONDIRENTRY) + 4264 (32px
-        // entry: 40-byte header + 4096 XOR + 128 AND) + 1128 (16px entry:
-        // 40-byte header + 1024 XOR + 64 AND) = 5430 bytes.
-        assert_eq!(ICON_BYTES.len(), 5430);
+        // S15 (D25): the asset is the USER'S LOGO (scripts/
+        // make_logo_assets.py) — 4 BMP entries (16/32/48 emblem squares +
+        // 256 full lockup), deterministic, well under the 256-entry DIB
+        // bound (256²·4 + masks ≈ 263 KB + headers ≈ 264 KB + 6 + 4·16).
+        let count = u16::from_le_bytes([ICON_BYTES[4], ICON_BYTES[5]]);
+        assert_eq!(count, 4, "16/32/48/256 entries");
+        assert!(
+            ICON_BYTES.len() > 6 + 4 * 16 && ICON_BYTES.len() < 300_000,
+            "asset size sane: {}",
+            ICON_BYTES.len()
+        );
     }
 
     #[test]

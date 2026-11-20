@@ -322,6 +322,23 @@ pub enum Message {
     BondModePicked(String),
     ProbeTargetChanged(String),
     ExitUrlChanged(String),
+    // --- S15: blended title bar, tray, close-to-tray (D25) ---
+    /// A window event arrived (Opened/CloseRequested/Resized…).
+    WindowEvent(iced::window::Id, iced::window::Event),
+    /// The titlebar drag strip was pressed (drag; double = maximize).
+    TitleDrag,
+    /// The titlebar minimize button.
+    TitleMinimize,
+    /// The titlebar maximize/restore button.
+    TitleMaximize,
+    /// The titlebar close button (same path as the OS close request).
+    TitleClose,
+    /// Queried maximize state arrived (drives the □/▣ glyph).
+    WindowMaximized(bool),
+    /// "close to tray" toggled in Settings.
+    CloseToTrayToggled(bool),
+    /// An event from the tray icon (left click / menu selection).
+    Tray(crate::tray::TrayEvent),
 }
 
 /// Valid routing rule kinds (matches the mt-net router matcher).
@@ -408,6 +425,22 @@ pub struct App {
     pub exit: Option<Result<ExitInfo, String>>,
     /// An exit probe is in flight.
     pub exit_probing: bool,
+    /// S15: the main window's iced id (captured from the first Opened
+    /// event; window Tasks need it).
+    pub window_id: Option<iced::window::Id>,
+    /// S15: maximize state for the titlebar restore glyph.
+    pub window_maximized: bool,
+    /// S15: last titlebar press (double-click-to-maximize detect).
+    pub last_title_press: Option<std::time::Instant>,
+    /// S15: the in-app tray handle (None on non-Windows / spawn failure).
+    pub tray: Option<crate::tray::TrayHandle>,
+    /// S15: tray event receiver bridged into the subscription.
+    pub tray_rx:
+        Option<Arc<AsyncMutex<tokio::sync::mpsc::UnboundedReceiver<crate::tray::TrayEvent>>>>,
+    /// S15: last tooltip text pushed to the tray (dedup on tick).
+    pub tray_tip: String,
+    /// S15: last Quick Settings model pushed to the tray (dedup).
+    pub tray_model: Option<Vec<crate::tray::QuickEntry>>,
 }
 
 impl App {
@@ -430,6 +463,7 @@ impl App {
             log_level: LOG_LEVELS[1].to_string(),
             probe_target: "connectivitycheck.gstatic.com:80".to_string(),
             exit_probe_url: "http://ip-api.com/json".to_string(),
+            close_to_tray: false,
         };
         Self {
             theme: MtTheme::from_settings(&settings),
@@ -460,13 +494,32 @@ impl App {
             link_last_bytes: HashMap::new(),
             exit: None,
             exit_probing: false,
+            window_id: None,
+            window_maximized: false,
+            last_title_press: None,
+            tray: None,
+            tray_rx: None,
+            tray_tip: String::new(),
+            tray_model: None,
         }
     }
 
     /// Synchronous init for the iced runtime: returns the app plus a task
-    /// batch that loads all screen data.
+    /// batch that loads all screen data. The tray is spawned here — its
+    /// lifetime is the app's (Windows; the stub returns None elsewhere),
+    /// and NEVER in `init_async` (smoke/tests must not create real
+    /// notification icons).
     pub fn init(service: Arc<dyn MtService>, flags: Flags) -> (Self, iced::Task<Message>) {
-        let app = Self::new(service, flags);
+        let mut app = Self::new(service, flags);
+        if let Some((handle, rx)) = crate::tray::spawn(
+            crate::tray::tooltip(ServiceState::Disconnected, ""),
+            crate::tray::model_from(None, &[]),
+        ) {
+            app.tray = Some(handle);
+            app.tray_tip = crate::tray::tooltip(ServiceState::Disconnected, "");
+            app.tray_model = Some(crate::tray::model_from(None, &[]));
+            app.tray_rx = Some(Arc::new(AsyncMutex::new(rx)));
+        }
         let tasks = [
             app.refresh_status(),
             app.load_profiles(),
@@ -682,7 +735,9 @@ impl App {
         match message {
             Message::Tick => {
                 self.pump_events();
-                return self.refresh_status();
+                let t = self.refresh_status();
+                self.sync_tray();
+                return t;
             }
             Message::Event(ev) => match ev {
                 ServiceEvent::StateChanged(state) => {
@@ -1189,8 +1244,157 @@ impl App {
                 self.settings.exit_probe_url = t;
                 return self.save_settings(self.settings.clone());
             }
+            // --- S15: title bar / tray / close-to-tray (D25) ---
+            Message::WindowEvent(id, event) => {
+                if self.window_id.is_none() {
+                    if let iced::window::Event::Opened { .. } = event {
+                        self.window_id = Some(id);
+                    }
+                }
+                match event {
+                    iced::window::Event::CloseRequested => {
+                        return self.handle_close_requested();
+                    }
+                    iced::window::Event::Resized(_) => {
+                        // Maximize state may have changed (OS restore,
+                        // snap, our own toggle): re-query for the glyph.
+                        if let Some(id) = self.window_id {
+                            return iced::window::get_maximized(id).map(Message::WindowMaximized);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Message::TitleDrag => {
+                let now = std::time::Instant::now();
+                let double = is_double_click(self.last_title_press.take(), now);
+                self.last_title_press = Some(now);
+                if let Some(id) = self.window_id {
+                    if double {
+                        return iced::Task::batch([
+                            iced::window::toggle_maximize(id),
+                            iced::window::get_maximized(id).map(Message::WindowMaximized),
+                        ]);
+                    }
+                    return iced::window::drag(id);
+                }
+            }
+            Message::TitleMinimize => {
+                if let Some(id) = self.window_id {
+                    return iced::window::minimize(id, true);
+                }
+            }
+            Message::TitleMaximize => {
+                if let Some(id) = self.window_id {
+                    return iced::Task::batch([
+                        iced::window::toggle_maximize(id),
+                        iced::window::get_maximized(id).map(Message::WindowMaximized),
+                    ]);
+                }
+            }
+            Message::TitleClose => return self.handle_close_requested(),
+            Message::WindowMaximized(m) => self.window_maximized = m,
+            Message::CloseToTrayToggled(v) => {
+                self.settings.close_to_tray = v;
+                return self.save_settings(self.settings.clone());
+            }
+            Message::Tray(ev) => match ev {
+                crate::tray::TrayEvent::Open => {
+                    if let Some(id) = self.window_id {
+                        return iced::Task::batch([
+                            iced::window::run_with_handle(id, show_window).map(Message::Event),
+                            iced::window::gain_focus(id),
+                        ]);
+                    }
+                }
+                crate::tray::TrayEvent::Connect => {
+                    return self.update(Message::ConnectToggle(true));
+                }
+                crate::tray::TrayEvent::Disconnect => {
+                    return self.update(Message::ConnectToggle(false));
+                }
+                crate::tray::TrayEvent::Server(id) => {
+                    return self.update(Message::SetActive(id));
+                }
+                crate::tray::TrayEvent::Exit => return self.begin_exit(),
+            },
         }
         iced::Task::none()
+    }
+
+    // ------------------------------------------------------------------
+    // S15: window close paths + tray sync (D25)
+    // ------------------------------------------------------------------
+
+    /// The one close decision point (window ✕, OS close request, tray
+    /// Exit all land here after their own pre-steps). Pure decision via
+    /// [`close_action`].
+    fn handle_close_requested(&mut self) -> iced::Task<Message> {
+        let tray_alive = self.tray.is_some();
+        match close_action(self.settings.close_to_tray, tray_alive) {
+            CloseAction::Hide => {
+                if let Some(id) = self.window_id {
+                    util::push_log(
+                        &mut self.logs,
+                        "INFO  gui: hidden to tray — reopen from the tray icon \
+                         (right-click it for Quick Settings)"
+                            .to_string(),
+                    );
+                    return iced::window::run_with_handle(id, hide_window).map(Message::Event);
+                }
+            }
+            CloseAction::Minimize => {
+                util::push_log(
+                    &mut self.logs,
+                    "INFO  gui: close-to-tray is on but this platform has no tray \
+                     — minimizing instead (the window stays reachable)"
+                        .to_string(),
+                );
+                if let Some(id) = self.window_id {
+                    return iced::window::minimize(id, true);
+                }
+            }
+            CloseAction::Exit => return self.begin_exit(),
+        }
+        iced::Task::none()
+    }
+
+    /// Real exit: tray down first (icon + thread), then close the window
+    /// (with `exit_on_close_request: false`, closing is OUR call).
+    fn begin_exit(&mut self) -> iced::Task<Message> {
+        if let Some(tray) = self.tray.take() {
+            tray.shutdown(std::time::Duration::from_millis(600));
+        }
+        if let Some(id) = self.window_id {
+            return iced::window::close(id);
+        }
+        iced::Task::none()
+    }
+
+    /// Push tooltip + Quick Settings model to the tray when they changed
+    /// (called on tick; the tray renders the menu fresh at every open).
+    fn sync_tray(&mut self) {
+        let Some(tray) = &self.tray else { return };
+        let state = self
+            .status
+            .as_ref()
+            .map(|s| s.state)
+            .unwrap_or(ServiceState::Disconnected);
+        let active = self
+            .status
+            .as_ref()
+            .and_then(|s| s.active_profile.clone())
+            .unwrap_or_default();
+        let tip = crate::tray::tooltip(state, &active);
+        if tip != self.tray_tip {
+            self.tray_tip = tip.clone();
+            tray.send(crate::tray::TrayCommand::Tooltip(tip));
+        }
+        let model = crate::tray::model_from(self.status.as_ref(), &self.profiles);
+        if self.tray_model.as_ref() != Some(&model) {
+            self.tray_model = Some(model.clone());
+            tray.send(crate::tray::TrayCommand::Model(model));
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1208,12 +1412,16 @@ impl App {
             Screen::Logs => screens::logs(self),
         };
         let rail = screens::nav_rail(self);
+        let titlebar = screens::titlebar(self);
         let s = self.theme.scheme;
-        iced::widget::container(iced::widget::row![rail, content])
-            .style(crate::theme::page(s))
-            .width(iced::Length::Fill)
-            .height(iced::Length::Fill)
-            .into()
+        iced::widget::container(iced::widget::column![
+            titlebar,
+            iced::widget::row![rail, content]
+        ])
+        .style(crate::theme::page(s))
+        .width(iced::Length::Fill)
+        .height(iced::Length::Fill)
+        .into()
     }
 
     /// The window-level iced theme (custom palette from the seed).
@@ -1251,7 +1459,38 @@ impl App {
                 }),
             )
         };
-        iced::Subscription::batch([events, tick_subscription()])
+        let tray_events = match &self.tray_rx {
+            Some(rx) => {
+                let rx = Arc::clone(rx);
+                iced::Subscription::run_with_id(
+                    TRAY_SUB_ID,
+                    iced::stream::channel(32, move |mut sender| async move {
+                        use iced::futures::SinkExt;
+                        loop {
+                            let next = {
+                                let mut guard = rx.lock().await;
+                                guard.recv().await
+                            };
+                            match next {
+                                Some(ev) => {
+                                    let _ = sender.send(Message::Tray(ev)).await;
+                                }
+                                None => break,
+                            }
+                        }
+                    }),
+                )
+            }
+            None => iced::Subscription::none(),
+        };
+        iced::Subscription::batch([
+            events,
+            tick_subscription(),
+            // S15: window events (Open/CloseRequested/Resized) + the tray
+            // event stream.
+            iced::window::events().map(|(id, ev)| Message::WindowEvent(id, ev)),
+            tray_events,
+        ])
     }
 
     /// Whether the connect switch should read "on".
@@ -1297,6 +1536,84 @@ impl App {
 
 /// Stable subscription ids (iced deduplicates by id per render).
 const EVENTS_SUB_ID: &str = "mt-app-events";
+/// S15: the tray event stream subscription id.
+const TRAY_SUB_ID: &str = "mt-app-tray";
+
+/// What a close request should do (pure decision, D25 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseAction {
+    /// Windows + tray alive: hide the window, keep the app in the tray.
+    Hide,
+    /// close-to-tray on a platform without a tray: minimize (the window
+    /// stays reachable — hiding it would orphan the app).
+    Minimize,
+    /// Really exit (tray down + window close).
+    Exit,
+}
+
+/// The close-request decision: only Windows-with-a-live-tray can truly
+/// hide; everywhere else close-to-tray degrades to minimize; off = exit.
+pub fn close_action(close_to_tray: bool, tray_alive: bool) -> CloseAction {
+    if !close_to_tray {
+        return CloseAction::Exit;
+    }
+    if tray_alive && cfg!(windows) {
+        CloseAction::Hide
+    } else {
+        CloseAction::Minimize
+    }
+}
+
+/// Titlebar double-click window (a bit above the OS default 500 ms to be
+/// forgiving over a drag that never started).
+const DOUBLE_CLICK_MS: u64 = 450;
+
+/// Pure double-press detector for the titlebar strip.
+pub fn is_double_click(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_some_and(|t| now.duration_since(t) <= std::time::Duration::from_millis(DOUBLE_CLICK_MS))
+}
+
+/// Hide the main window via its native handle (run on the iced runtime
+/// through `window::run_with_handle`; Windows-only effect — on other
+/// platforms the caller already chose Minimize).
+fn hide_window(handle: iced::window::raw_window_handle::WindowHandle<'_>) -> ServiceEvent {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        if let iced::window::raw_window_handle::RawWindowHandle::Win32(w) = handle.as_raw() {
+            // SAFETY: w.hwnd is the live main window's handle handed to us
+            // by the iced runtime; SW_HIDE is a plain visibility toggle.
+            unsafe { ShowWindow(w.hwnd.get() as _, SW_HIDE) };
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // Unreachable in practice (the caller chose Minimize on this
+        // platform); kept for cross-platform compilation of the closure.
+        let _ = &handle;
+    }
+    ServiceEvent::LogLine("INFO  gui: window hidden to tray".to_string())
+}
+
+/// Restore the main window from the tray (inverse of [`hide_window`]).
+fn show_window(handle: iced::window::raw_window_handle::WindowHandle<'_>) -> ServiceEvent {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOW};
+        if let iced::window::raw_window_handle::RawWindowHandle::Win32(w) = handle.as_raw() {
+            // SAFETY: see hide_window; SW_SHOW restores without focus
+            // stealing rules (gain_focus follows separately).
+            unsafe { ShowWindow(w.hwnd.get() as _, SW_SHOW) };
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // Unreachable in practice (the tray is Windows-only); kept for
+        // cross-platform compilation of the closure.
+        let _ = &handle;
+    }
+    ServiceEvent::LogLine("INFO  gui: window restored from tray".to_string())
+}
 
 /// 1 s refresh tick subscription.
 fn tick_subscription() -> iced::Subscription<Message> {
@@ -1366,12 +1683,26 @@ pub fn run_app(service: Arc<dyn MtService>, flags: Flags) -> Result<(), crate::E
         .window(iced::window::Settings {
             size: iced::Size::new(1080.0, 720.0),
             min_size: Some(iced::Size::new(880.0, 580.0)),
+            // S15 (D25): Chromium-style blended title bar — no native
+            // decorations; the app draws its own strip (screens::titlebar).
+            decorations: false,
+            // S15: the app OWNS the close path (close-to-tray decides
+            // between hide/minimize/exit in handle_close_requested).
+            exit_on_close_request: false,
+            icon: Some(window_icon()),
             ..Default::default()
         })
         .theme(App::theme)
         .subscription(App::subscription)
         .run_with(move || App::init(service, flags))?;
     Ok(())
+}
+
+/// The embedded 64×64 app logo (RGBA8; `scripts/make_logo_assets.py`).
+fn window_icon() -> iced::window::Icon {
+    const RGBA: &[u8] = include_bytes!("../../../assets/logo_64.rgba");
+    iced::window::icon::from_rgba(RGBA.to_vec(), 64, 64)
+        .expect("embedded logo_64.rgba is a 64x64 RGBA buffer (asset invariant)")
 }
 
 /// Headless smoke run: drives `ticks` update ticks (each pumps events,
@@ -1898,5 +2229,65 @@ mod tests {
             Some(mt_service::ServiceState::Connected)
         );
         assert!(app.is_connected());
+    }
+
+    /// S15: the close-request decision table (D25 §3). The platform arm
+    /// is compiled per-target; this test pins the reachable arms.
+    #[test]
+    fn close_action_decision() {
+        // Off (the default) always really closes.
+        assert_eq!(close_action(false, false), CloseAction::Exit);
+        assert_eq!(close_action(false, true), CloseAction::Exit);
+        // On: Windows + live tray hides; everything else minimizes.
+        if cfg!(windows) {
+            assert_eq!(close_action(true, true), CloseAction::Hide);
+        }
+        assert_eq!(close_action(true, false), CloseAction::Minimize);
+        if !cfg!(windows) {
+            assert_eq!(close_action(true, true), CloseAction::Minimize);
+        }
+    }
+
+    /// S15: titlebar double-press detection window.
+    #[test]
+    fn titlebar_double_click_window() {
+        let now = std::time::Instant::now();
+        assert!(!is_double_click(None, now), "first press is never a double");
+        assert!(is_double_click(
+            Some(now - std::time::Duration::from_millis(100)),
+            now
+        ));
+        assert!(
+            is_double_click(Some(now - std::time::Duration::from_millis(449)), now),
+            "inside the window"
+        );
+        assert!(
+            !is_double_click(Some(now - std::time::Duration::from_millis(600)), now),
+            "outside the window"
+        );
+    }
+
+    /// S15: close_to_tray persists through the service (settings roundtrip
+    /// through the mock backend, same pattern as the other toggles).
+    #[tokio::test]
+    async fn close_to_tray_settings_roundtrip() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut s = service.settings().await;
+        assert!(!s.close_to_tray, "default off");
+        s.close_to_tray = true;
+        service.set_settings(s).await.expect("save");
+        let reloaded = service.settings().await;
+        assert!(reloaded.close_to_tray);
+    }
+
+    /// S15: `begin_exit` releases the tray handle idempotently (the tray
+    /// is None on this platform's test build; the take() path must still
+    /// be safe to run twice).
+    #[tokio::test]
+    async fn begin_exit_is_idempotent_without_tray() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        drop(app.begin_exit());
+        drop(app.begin_exit());
     }
 }

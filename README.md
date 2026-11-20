@@ -302,6 +302,37 @@ bonding mode to `stream` (Advanced): the bytes of every connection are
 split across all ticked adapters and re-merged by `mt-merge-server` on
 the tunnel server — see "Stream bonding (v0.5)" above.
 
+## App identity & tray (v0.9) — logo, blended title bar, close-to-tray
+
+The window itself became a first-class part of the app (all of it in the
+GUI, no new dependencies):
+
+- **Your logo everywhere**: the window icon, the taskbar entry, the
+  title bar and the tray icon all use the attached logo image
+  (re-generated at build time by `scripts/make_logo_assets.py` —
+  stdlib-only PNG decode, emblem crops for the small sizes, full lockup
+  for 256 px).
+- **Chromium-style title bar**: the native window chrome is replaced by
+  an in-app strip on the SAME surface as the page — logo + app name on
+  the left, minimize/maximize/close on the right, and every other pixel
+  of the strip drags the window (a fast second press maximizes, like a
+  double-click on a classic title bar).
+- **Close-to-tray toggle** (Settings → Window & tray): when ON, the ✕
+  button hides the window into the tray instead of exiting — the tunnel
+  keeps running. OFF (default) closing really closes.
+- **A persistent tray icon** while the app is open or hidden
+  (Windows; raw Win32, same approach as the legacy `multitunnel-tray`
+  companion): left-click reopens the window, and it survives an
+  explorer.exe restart.
+- **Quick Settings on right-click**: the tray menu is built fresh from
+  live state — Connect/Disconnect (state-reflecting), the server list
+  (radio-checked on the active profile), Open MultiTunnel and Exit.
+  Selections ride the same paths as the GUI (switching a server from the
+  tray reconnects exactly like the Status dropdown does).
+
+On platforms without a tray the toggle degrades honestly: the window
+minimizes instead of hiding, so it stays reachable.
+
 ## Rendering fixes (v0.6, v0.6.1)
 
 v0.5.1 shipped three rendering defects, all root-caused and fixed via

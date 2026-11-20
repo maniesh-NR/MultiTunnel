@@ -134,6 +134,12 @@ pub struct SettingsView {
     /// S9: exit-IP probe URL (plain HTTP inside the tunnel, D18).
     #[serde(default = "default_exit_probe_url")]
     pub exit_probe_url: String,
+    /// S15: closing the window keeps the app running in the tray
+    /// (Windows; elsewhere the window minimizes instead). Absent in
+    /// older files → false, i.e. close really closes (D8 version-free
+    /// migration by serde default, D20 precedent).
+    #[serde(default)]
+    pub close_to_tray: bool,
 }
 
 fn default_bond_mode() -> String {
@@ -632,5 +638,69 @@ mod exclusion_tests {
             .summary()
             .starts_with("imported 2 rules from plain list"));
         assert!(out.summary().contains("skipped 1"));
+    }
+}
+
+#[cfg(test)]
+mod close_to_tray_migration_tests {
+    use super::*;
+
+    /// S15: settings.json written by v0.7/v0.8 (no `close_to_tray` key)
+    /// loads with close_to_tray = false — the serde-default migration
+    /// (D8 version-free, D20 precedent), so the toggle starts honest.
+    #[test]
+    fn old_settings_without_close_to_tray_default_off() {
+        let json = r#"{
+            "theme_seed": 42,
+            "dark_mode": false,
+            "system_proxy": true,
+            "merge_policy": "balanced",
+            "autostart": false,
+            "bonded_adapters": ["wifi"],
+            "bond_mode": "per-connection",
+            "merge_port": 7443,
+            "socks_port": 10808,
+            "http_port": 10809,
+            "allow_lan": false,
+            "log_level": "info",
+            "probe_target": "connectivitycheck.gstatic.com:80",
+            "exit_probe_url": "http://ip-api.com/json"
+        }"#;
+        let v: SettingsView = serde_json::from_str(json).expect("old settings load");
+        assert!(!v.close_to_tray);
+        assert_eq!(v.merge_policy, "balanced", "unrelated fields intact");
+    }
+
+    /// The round trip: a file written by S15 reads back the same value.
+    #[test]
+    fn close_to_tray_roundtrips() {
+        let mut v = SettingsView::default_settings_for_tests();
+        v.close_to_tray = true;
+        let json = serde_json::to_string(&v).expect("serialize");
+        assert!(json.contains("\"close_to_tray\":true"));
+        let back: SettingsView = serde_json::from_str(&json).expect("reload");
+        assert!(back.close_to_tray);
+    }
+
+    impl SettingsView {
+        fn default_settings_for_tests() -> Self {
+            Self {
+                theme_seed: 0,
+                dark_mode: false,
+                system_proxy: false,
+                merge_policy: "balanced".into(),
+                autostart: false,
+                bonded_adapters: vec![],
+                bond_mode: "per-connection".into(),
+                merge_port: 7443,
+                socks_port: 10808,
+                http_port: 10809,
+                allow_lan: false,
+                log_level: "info".into(),
+                probe_target: String::new(),
+                exit_probe_url: String::new(),
+                close_to_tray: false,
+            }
+        }
     }
 }

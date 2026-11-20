@@ -103,6 +103,7 @@ impl MockService {
             log_level: "warning".to_string(),
             probe_target: "connectivitycheck.gstatic.com:80".to_string(),
             exit_probe_url: "http://ip-api.com/json".to_string(),
+            close_to_tray: false,
         };
         let inner = Inner {
             state: ServiceState::Disconnected,

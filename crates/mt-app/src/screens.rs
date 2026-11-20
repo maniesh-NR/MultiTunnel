@@ -7,8 +7,8 @@
 //! Adapters screen).
 
 use iced::widget::{
-    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
-    text_input, toggler, vertical_space,
+    button, checkbox, column, container, horizontal_space, image, mouse_area, pick_list, row,
+    scrollable, text, text_input, toggler, vertical_space,
 };
 use iced::{Length, Padding};
 use mt_service::{ProfileView, ServiceState};
@@ -25,6 +25,55 @@ use crate::Element;
 // ---------------------------------------------------------------------------
 // Shared scaffolding
 // ---------------------------------------------------------------------------
+
+/// The embedded 24×24 titlebar emblem (RGBA8; `scripts/make_logo_assets.py`).
+const LOGO_24: &[u8] = include_bytes!("../../../assets/logo_24.rgba");
+
+/// S15 (D25): the app-drawn title bar — the window runs with
+/// `decorations: false`, so this strip IS the chrome. Chromium-style: the
+/// strip sits on the page surface (no separator, it blends), the logo +
+/// title live on the left, the window controls on the right, and every
+/// non-button pixel drags the window (double-press maximizes).
+pub fn titlebar(app: &App) -> Element<'_> {
+    let s = app.theme.scheme;
+    let ts = app.theme.ts;
+    let logo = image(image::Handle::from_rgba(24, 24, LOGO_24.to_vec()))
+        .width(Length::Fixed(20.0))
+        .height(Length::Fixed(20.0));
+    let title = text("MultiTunnel")
+        .size(ts.title_m.size)
+        .color(s.on_surface_variant);
+    let identity = row![logo, title]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+    // The whole strip (minus the buttons — inner widgets capture first)
+    // drags the window; a fast second press maximizes.
+    let drag = mouse_area(
+        container(identity)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding::new(0.0).left(14.0)),
+    )
+    .on_press(Message::TitleDrag);
+    let make_ctl = |label: &str, msg: Message| {
+        button(text(label.to_string()).size(ts.headline_s.size))
+            .style(t3::text_button(s))
+            .padding(Padding::new(0.0).left(14.0).right(14.0))
+            .height(Length::Fill)
+            .on_press(msg)
+    };
+    let max_glyph = if app.window_maximized { "▣" } else { "□" };
+    let controls = row![
+        make_ctl("—", Message::TitleMinimize),
+        make_ctl(max_glyph, Message::TitleMaximize),
+        make_ctl("×", Message::TitleClose),
+    ]
+    .height(Length::Fill);
+    container(row![drag, controls].height(Length::Fill))
+        .height(Length::Fixed(40.0))
+        .width(Length::Fill)
+        .into()
+}
 
 /// The left M3 navigation rail with the active pill indicator.
 pub fn nav_rail(app: &App) -> Element<'_> {
@@ -1489,6 +1538,28 @@ pub fn settings(app: &App) -> Element<'_> {
     ]
     .spacing(10);
 
+    // Window & tray card (S15, D25) -----------------------------------------
+    let window_tray = column![
+        text("Window & tray")
+            .size(ts.title_m.size)
+            .color(s.on_surface),
+        toggler(app.settings.close_to_tray)
+            .label("keep running in the tray when closed")
+            .size(28.0)
+            .on_toggle(Message::CloseToTrayToggled)
+            .style(t3::switch(s)),
+        text(
+            "on: the ✕ button hides the window into the tray icon — the \
+             tunnel keeps running; left-click the icon to reopen, \
+             right-click it for Quick Settings (connect, servers, exit). \
+             off (default): closing really closes. Windows only — on other \
+             platforms the window minimizes instead, so it stays reachable.",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
+    ]
+    .spacing(10);
+
     let mut col = column![
         container(appearance)
             .padding(16)
@@ -1503,6 +1574,10 @@ pub fn settings(app: &App) -> Element<'_> {
             .style(t3::card(s, s.surface_container_low))
             .width(Length::Fill),
         container(startup)
+            .padding(16)
+            .style(t3::card(s, s.surface_container_low))
+            .width(Length::Fill),
+        container(window_tray)
             .padding(16)
             .style(t3::card(s, s.surface_container_low))
             .width(Length::Fill),
