@@ -1,6 +1,8 @@
 [package]
 name = "mt-app"
-version = "0.1.0"
+# S17: inherit the release version — the titlebar shows it next to the name
+# (see `app_version()`), so it must move in lock-step with the release tag.
+version.workspace = true
 edition = "2021"
 license = "MIT"
 publish = false

@@ -78,6 +78,11 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > download/upload speeds plus the session totals. Right-clicking the
 > title bar opens a window menu with "Always on top" (also under
 > Settings → Window & tray), Minimize, Maximize/Restore and Close.
+>
+> v0.11: the title bar carries the release version next to the app name
+> and the live global download/upload speeds on its right side, and the
+> Logs screen gained floating jump-to-top/bottom buttons plus an
+> Auto-scroll toggle (on by default — it keeps the newest line in view).
 
 **SMOKE TEST — this is the first time the GUI binary runs on real Windows.**
 The development sandbox is Linux; the window has been cross-compiled and

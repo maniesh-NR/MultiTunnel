@@ -434,11 +434,44 @@ impl MtService for MockService {
                 g.links = seed_links(MockService::rng_next(&mut g));
                 let _ = tx.send(ServiceEvent::StateChanged(ServiceState::Connected));
             }
+            // S17: a realistic bring-up burst so the Logs screen (and its
+            // scroll/autoscroll rig checks) has enough volume to overflow
+            // the viewport right after connecting — same vocabulary the
+            // real service uses, clearly mock-flavored.
+            this.log("INFO", "engine: bundled core spawned (mock)");
+            this.log("INFO", "config: 3 profiles loaded, active gcp-vm");
+            this.log("INFO", "adapters: 8 enumerated, 3 bonded");
+            this.log("INFO", "routing: fail-open, private ranges direct");
+            this.log(
+                "INFO",
+                "listeners: socks 127.0.0.1:10808, http 127.0.0.1:10809",
+            );
+            this.log("INFO", "bond: balanced policy, capacity-proportional");
+            this.log("INFO", "reality: handshake ok, dest borrow accepted");
+            this.log("INFO", "merge: daemon reachable at 127.0.0.1:7443");
             this.log("INFO", "tunnel up: all links healthy");
+            // Per-link bring-up detail: name + measured latency.
+            {
+                let g = inner.lock().await;
+                for (i, l) in g.links.iter().enumerate() {
+                    this.log(
+                        "INFO",
+                        &format!(
+                            "link {}/{} up: {} (latency {} ms)",
+                            i + 1,
+                            g.links.len(),
+                            l.name,
+                            l.latency_ms.unwrap_or(0)
+                        ),
+                    );
+                }
+            }
 
             // Per-second session loop; exits when state/gen changes.
+            let mut tick: u64 = 0;
             loop {
                 tokio::time::sleep(SESSION_TICK).await;
+                tick += 1;
                 let mut g = inner.lock().await;
                 if g.state != ServiceState::Connected || g.gen != cancel {
                     break;
@@ -469,10 +502,14 @@ impl MtService for MockService {
                     up_bps: up,
                     down_bps: down,
                 });
-                match MockService::rng_below(&mut g, 10) {
-                    0 => this.log("WARN", "backup link: latency spike, staying failover"),
-                    9 => this.log("INFO", "core: keepalive ok"),
-                    _ => {}
+                // S17: deterministic heartbeat (every 2nd tick) instead of
+                // the old 1-in-10 keepalive — live logs for the Logs
+                // screen demo AND a stable autoscroll signal for the rig.
+                if tick.is_multiple_of(2) {
+                    this.log("INFO", "core: keepalive ok");
+                }
+                if MockService::rng_below(&mut g, 10) == 0 {
+                    this.log("WARN", "backup link: latency spike, staying failover");
                 }
             }
         });

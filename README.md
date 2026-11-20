@@ -306,7 +306,7 @@ bonding mode to `stream` (Advanced): the bytes of every connection are
 split across all ticked adapters and re-merged by `mt-merge-server` on
 the tunnel server — see "Stream bonding (v0.5)" above.
 
-## App identity & tray (v0.9/v0.10) — logo, blended title bar, close-to-tray
+## App identity & tray (v0.9–v0.11) — logo, blended title bar, close-to-tray
 
 The window itself became a first-class part of the app (all of it in the
 GUI, no new dependencies):
@@ -346,6 +346,18 @@ GUI, no new dependencies):
   current download/upload speed AND the session's total uploaded /
   downloaded volume (e.g. `MultiTunnel — ↓9.4 MB/s ↑1.2 MB/s •
   Σ↓3.0 GB ↑42.9 MB`).
+- **Version + live speeds in the title bar (v0.11)**: the release
+  version rides right next to the app name (it moves in lock-step with
+  the release tag — one workspace version line), and the strip's right
+  side shows the live global download/upload rates (the same 1 s
+  throughput sample the tray tooltip reports), so the current speeds
+  are readable without opening the app's Status tab.
+- **Logs screen navigation (v0.11)**: the Logs tab scrolls only the log
+  lines (toolbar stays put), with floating jump-to-top/jump-to-bottom
+  buttons over the viewport's corner and an **Auto-scroll** toggle in
+  the toolbar — ON by default, it keeps the newest line in view as
+  events land; turn it off to read back through history without the
+  view jumping to the tail.
 - **Quick Settings on right-click**: the tray menu is built fresh from
   live state — Connect/Disconnect (state-reflecting), the server list
   (radio-checked on the active profile), Open MultiTunnel and Exit.

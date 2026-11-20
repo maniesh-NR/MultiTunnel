@@ -10,4 +10,4 @@ for a in "$@"; do
   esac
 done
 shift "$n"
-exec python3 -m ziglang cc "$@"
+exec zig cc "$@"

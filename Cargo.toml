@@ -1,6 +1,9 @@
 [package]
 name = "multitunnel"
-version = "0.10.0"
+# Single source of truth for the release version (S17): crates that ship
+# (this one + mt-app's titlebar display) inherit the workspace version, so a
+# release bumps exactly one line.
+version.workspace = true
 edition = "2021"
 license = "MIT"
 description = "Windows supervisor that combines an Xray VLESS+REALITY tunnel with net-merge multi-link bonding"
@@ -13,6 +16,9 @@ publish = false
 [workspace]
 members = ["crates/*"]
 resolver = "2"
+
+[workspace.package]
+version = "0.11.0"
 
 [lib]
 name = "multitunnel"

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "04baaf6 2026-11-20T11:07:57Z",
+  "as_of": "6c7eedd 2026-11-20T11:21:55Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 248,
-  "edge_count": 256,
+  "node_count": 249,
+  "edge_count": 257,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -811,6 +811,26 @@
       "passages": [
         {
           "text": "backup(s9.1-ops-release-zip-rerun): 2026-11-18T16:21:24Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:6c7eedd",
+      "type": "commit",
+      "title": "backup(s16-verified-idle): 2026-11-20T11:21:54Z",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "6c7eedd"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s16-verified-idle): 2026-11-20T11:21:54Z",
           "kind": "title"
         }
       ]
@@ -4960,7 +4980,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: S16 — repo polish + window menu + state-aware tray (D26), implementation and ALL gates green; v0.10.0 release re-running (first attempt hit two GitHub-runner flakes in the mt-bond integration leg — see LEDGER s16 and Watch items). The seven asks: GitHub About + 20 topic tags (done via API — the About description was a stale leftover of an unrelated project), README attribution section + banner + transparent logo, transparent titlebar emblem (flood-fill key-out + AREA resample — bilinear punches holes at 20:1), monochrome not-connected tray icon (NIM_MODIFY swap, boots Mono), tray hover = live speeds + Σ totals, titlebar right-click window menu with always-on-top (cross-platform iced change_level, persisted setting, honored at startup). Also fixed: latent S15 top-aligned identity cluster (container align_y(Center)). - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling shipped — the \"one adapter maxes out, no spill\" complaint fixed by peer-reported per-carrier delivery rates (1 s PINGs), carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + writer backlog. S14 also shipped the agentic memory graph + RAG (query_memory.py / write_memory.py, 18/18 tests).",
+          "text": "- **Stage**: IDLE — all committed task chains closed and released through v0.10.0. S16 (repo polish + window menu + state-aware tray, D26) CLOSED: the seven asks shipped — GitHub About + 20 topic tags (the About description had been a stale leftover of an unrelated project), README attribution section + banner + transparent logo, transparent titlebar emblem (flood-fill key-out + AREA resample — bilinear punches holes at 20:1), monochrome not-connected tray icon (NIM_MODIFY swap, boots Mono), tray hover = live speeds + Σ totals, titlebar right-click window menu with always-on-top (cross-platform iced change_level, persisted, honored at startup); also fixed the latent S15 top-aligned identity cluster (align_y(Center)). v0.10.0 RELEASED and verified (re-run after two GitHub-runner flakes in the mt-bond leg — verdict + retry protocol in LEDGER s16; release re-confirmed live 2026-11-20 via API: 3 assets + About + 20 topics). - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling shipped — the \"one adapter maxes out, no spill\" complaint fixed by peer-reported per-carrier delivery rates (1 s PINGs), carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + writer backlog. S14 also shipped the agentic memory graph + RAG (query_memory.py / write_memory.py, 18/18 tests).",
           "kind": "body"
         }
       ]
@@ -7390,6 +7410,12 @@
       "dst": "ledger:s9.1",
       "rel": "part_of",
       "evidence": "subject stage label (s9.1)"
+    },
+    {
+      "src": "commit:6c7eedd",
+      "dst": "ledger:s16",
+      "rel": "part_of",
+      "evidence": "subject stage label (s16)"
     },
     {
       "src": "commit:6e5502e",

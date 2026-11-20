@@ -12,6 +12,8 @@ use mt_service::{ExitInfo, MtService, ServiceEvent, ServiceState, SettingsView, 
 use tokio::sync::broadcast;
 use tokio::sync::Mutex as AsyncMutex;
 
+use iced::widget::scrollable;
+
 use crate::theme::{MtTheme, SEED_SWATCHES};
 use crate::{screens, util, Element};
 
@@ -288,6 +290,13 @@ pub enum Message {
     LogFilterPicked(String),
     /// Clear the log buffer.
     LogsCleared,
+    // --- S17: logs screen navigation + autoscroll (D27) ---
+    /// Scroll the logs viewport to the very top (floating button).
+    LogsScrollTop,
+    /// Scroll the logs viewport to the very bottom (floating button).
+    LogsScrollBottom,
+    /// Toggle autoscroll-to-bottom on new log lines.
+    LogsAutoscrollToggled,
     /// Loaded the adapter list (Adapters screen).
     AdaptersLoaded(Vec<mt_service::AdapterView>),
     /// An adapter checkbox flipped (draft state, index into `adapters`).
@@ -474,6 +483,16 @@ pub struct App {
     /// S16: tray icon style last pushed (dedup; starts Mono — the app
     /// boots not-connected).
     pub tray_icon: crate::tray::TrayIcon,
+    /// S17: autoscroll the logs viewport to the bottom as new lines land
+    /// (default ON — a log viewer should track the tail until the user
+    /// opts out; the toggle lives in the Logs toolbar).
+    pub logs_autoscroll: bool,
+}
+
+/// S17: the release version shown next to the app name in the titlebar.
+/// Inherited from the workspace package version (one-line release bumps).
+pub fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 impl App {
@@ -541,6 +560,8 @@ impl App {
             title_menu: None,
             session_bytes: (0, 0),
             tray_icon: crate::tray::TrayIcon::Mono,
+            // S17
+            logs_autoscroll: true,
         }
     }
 
@@ -832,7 +853,18 @@ impl App {
                         LatencyState::Done(ms.map_or_else(|| Err(String::from("no reply")), Ok)),
                     );
                 }
-                ServiceEvent::LogLine(line) => util::push_log(&mut self.logs, line),
+                ServiceEvent::LogLine(line) => {
+                    util::push_log(&mut self.logs, line);
+                    // S17: keep the tail in view while autoscroll is on and
+                    // the Logs screen is showing (the task no-ops if the
+                    // scrollable with this id is not on screen).
+                    if self.autoscroll_logs_now() {
+                        return scrollable::snap_to(
+                            screens::logs_scroll_id(),
+                            scrollable::RelativeOffset { x: 0.5, y: 1.0 },
+                        );
+                    }
+                }
             },
             Message::Screen(s) => {
                 self.screen = s;
@@ -840,6 +872,12 @@ impl App {
                     Screen::Servers => self.load_profiles(),
                     Screen::Adapters => self.load_adapters(),
                     Screen::Routing => self.load_rules(),
+                    // S17: entering Logs with autoscroll on lands on the
+                    // tail — the natural place to start reading live logs.
+                    Screen::Logs if self.logs_autoscroll => scrollable::snap_to(
+                        screens::logs_scroll_id(),
+                        scrollable::RelativeOffset { x: 0.5, y: 1.0 },
+                    ),
                     _ => iced::Task::none(),
                 };
             }
@@ -1129,6 +1167,30 @@ impl App {
             },
             Message::LogFilterPicked(l) => self.log_filter = LogFilter::from_label(&l),
             Message::LogsCleared => self.logs.clear(),
+            // S17: floating navigation buttons + autoscroll toggle (D27).
+            Message::LogsScrollTop => {
+                return scrollable::snap_to(
+                    screens::logs_scroll_id(),
+                    scrollable::RelativeOffset { x: 0.5, y: 0.0 },
+                );
+            }
+            Message::LogsScrollBottom => {
+                return scrollable::snap_to(
+                    screens::logs_scroll_id(),
+                    scrollable::RelativeOffset { x: 0.5, y: 1.0 },
+                );
+            }
+            Message::LogsAutoscrollToggled => {
+                self.logs_autoscroll = !self.logs_autoscroll;
+                // Flipping it back ON should immediately re-anchor to the
+                // tail (the user asked to follow again).
+                if self.logs_autoscroll {
+                    return scrollable::snap_to(
+                        screens::logs_scroll_id(),
+                        scrollable::RelativeOffset { x: 0.5, y: 1.0 },
+                    );
+                }
+            }
             Message::AdaptersLoaded(views) => {
                 // Fresh enumeration: the draft resets to the persisted
                 // selection (an unsaved draft is discarded — same contract
@@ -1675,6 +1737,16 @@ impl App {
         )
     }
 
+    /// S17: should a freshly-landed log line re-anchor the logs viewport
+    /// to the bottom? Pure gating for the autoscroll task (unit-tested):
+    /// the user asked for it AND the Logs screen is the one on display
+    /// (scrolling a viewport that is not on screen is a no-op task, but
+    /// skipping it outright keeps the update path allocation-free when
+    /// the user is elsewhere).
+    pub fn autoscroll_logs_now(&self) -> bool {
+        self.logs_autoscroll && self.screen == Screen::Logs
+    }
+
     /// S11: is the Adapters draft different from what is persisted?
     /// Dirty = the selected SET differs OR the selected ORDER differs
     /// from `settings.bonded_adapters` (restricted to adapters present in
@@ -2107,6 +2179,57 @@ mod tests {
         assert!(!LogFilter::Warning.matches("INFO  core: tunnel up"));
         assert!(LogFilter::Warning.matches("WARN  core: link degraded"));
         assert!(LogFilter::Error.matches("ERROR core: handshake failed"));
+    }
+
+    /// S17: autoscroll defaults ON (a log viewer tracks the tail until the
+    /// user opts out), the toggle flips it, and re-enabling re-anchors.
+    #[test]
+    fn logs_autoscroll_default_and_toggle() {
+        let mut app = App::new(Arc::new(crate::mock::MockService::new()), Flags::default());
+        assert!(app.logs_autoscroll, "autoscroll defaults ON");
+        let _ = app.update(Message::LogsAutoscrollToggled);
+        assert!(!app.logs_autoscroll);
+        let _ = app.update(Message::LogsAutoscrollToggled);
+        assert!(app.logs_autoscroll);
+    }
+
+    /// S17: the autoscroll task is gated on the Logs screen being on
+    /// display (scrolling an off-screen viewport is pointless work).
+    #[test]
+    fn logs_autoscroll_gated_on_screen() {
+        let mut app = App::new(Arc::new(crate::mock::MockService::new()), Flags::default());
+        app.screen = Screen::Status;
+        assert!(!app.autoscroll_logs_now(), "off-screen: no task");
+        app.screen = Screen::Logs;
+        assert!(app.autoscroll_logs_now());
+        app.logs_autoscroll = false;
+        assert!(!app.autoscroll_logs_now(), "user opted out: no task");
+    }
+
+    /// S17: the titlebar version comes from the workspace-inherited
+    /// CARGO_PKG_VERSION — a bare x.y.z triplet that moves with the
+    /// release tag (guards the `version.workspace = true` wiring).
+    #[test]
+    fn app_version_is_release_triplet() {
+        let v = app_version();
+        let parts: Vec<&str> = v.split('.').collect();
+        assert_eq!(parts.len(), 3, "version '{v}' must be x.y.z");
+        assert!(
+            parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())),
+            "version '{v}' must be numeric"
+        );
+    }
+
+    /// S17: the logs scrollable id is stable across view rebuilds (the
+    /// update path's snap_to targets the id the viewport was given).
+    #[test]
+    fn logs_scroll_id_stable() {
+        assert_eq!(
+            crate::screens::logs_scroll_id(),
+            crate::screens::logs_scroll_id()
+        );
     }
 
     /// Smoke run against the mock: init → tick loop → all screen views built.

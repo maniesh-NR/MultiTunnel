@@ -8,7 +8,7 @@
 
 use iced::widget::{
     button, checkbox, column, container, horizontal_space, image, mouse_area, pick_list, row,
-    scrollable, text, text_input, toggler, vertical_space,
+    scrollable, stack, text, text_input, toggler, vertical_space,
 };
 use iced::{Length, Padding};
 use mt_service::{ProfileView, ServiceState};
@@ -43,21 +43,47 @@ pub fn titlebar(app: &App) -> Element<'_> {
     let title = text("MultiTunnel")
         .size(ts.title_m.size)
         .color(s.on_surface_variant);
+    // S17: the release version rides next to the name — the same number
+    // the release zip carries (workspace-inherited CARGO_PKG_VERSION).
+    let version = text(format!("v{}", crate::app::app_version()))
+        .size(ts.label_m.size)
+        .color(s.on_surface_variant);
     let identity = row![logo, title]
         .spacing(10)
         .align_y(iced::Alignment::Center);
+    let identity = row![identity, version]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+    // S17: live global rates on the strip's right, just before the window
+    // controls — the same 1 s throughput sample the tray tooltip reports
+    // (down in tertiary, up in primary; zeros before the first sample).
+    let (up_bps, down_bps) = app.throughput.unwrap_or((0, 0));
+    let speeds = row![
+        text(format!("↓ {}", util::fmt_bps(down_bps)))
+            .size(ts.label_m.size)
+            .color(s.tertiary),
+        text(format!("↑ {}", util::fmt_bps(up_bps)))
+            .size(ts.label_m.size)
+            .color(s.primary),
+    ]
+    .spacing(10)
+    .align_y(iced::Alignment::Center);
     // The whole strip (minus the buttons — inner widgets capture first)
     // drags the window; a fast second press maximizes; a RIGHT press
-    // opens the window menu (S16).
+    // opens the window menu (S16). The speeds cluster is plain text —
+    // it drags like the rest of the strip.
+    let strip = row![identity, horizontal_space().width(Length::Fill), speeds,]
+        .align_y(iced::Alignment::Center)
+        .width(Length::Fill);
     let drag = mouse_area(
-        container(identity)
+        container(strip)
             .width(Length::Fill)
             .height(Length::Fill)
             // S16: the identity row is Shrink-height; without this it sat
             // flush at the strip's TOP (hidden with the old opaque emblem
             // tile, obvious with the transparent one).
             .align_y(iced::Alignment::Center)
-            .padding(Padding::new(0.0).left(14.0)),
+            .padding(Padding::new(0.0).left(14.0).right(12.0)),
     )
     .on_press(Message::TitleDrag)
     .on_right_press(Message::TitleContext);
@@ -1723,7 +1749,17 @@ pub fn settings(app: &App) -> Element<'_> {
 // Logs
 // ---------------------------------------------------------------------------
 
-/// Logs screen: streaming buffer fed by ServiceEvent::LogLine + filter.
+/// Logs screen (S17, D27): fixed toolbar + a dedicated viewport that owns
+/// the page's scrolling, with floating top/bottom jump buttons and an
+/// autoscroll-to-bottom toggle. The toolbar (level filter, autoscroll,
+/// Clear) stays put — only the log lines scroll.
+///
+/// The scrollable's id is shared with `App::update` (programmatic jumps +
+/// autoscroll re-anchoring on every fresh line while the toggle is on).
+pub fn logs_scroll_id() -> scrollable::Id {
+    scrollable::Id::new("logs-lines")
+}
+
 pub fn logs(app: &App) -> Element<'_> {
     let s = app.theme.scheme;
     let ts = app.theme.ts;
@@ -1736,12 +1772,27 @@ pub fn logs(app: &App) -> Element<'_> {
     .style(t3::pick_list_style(s))
     .menu_style(t3::menu_style(s));
 
+    // S17: the autoscroll toggle doubles as its own state indicator —
+    // Tonal (filled) while following the tail, quiet Text while off.
+    let (auto_label, auto_kind) = if app.logs_autoscroll {
+        ("Auto-scroll: on", ButtonKind::Tonal)
+    } else {
+        ("Auto-scroll: off", ButtonKind::Text)
+    };
+
     let toolbar = row![
         text("level:")
             .size(ts.body_m.size)
             .color(s.on_surface_variant),
         filter,
         horizontal_space().width(Length::Fill),
+        m3_button(
+            auto_label,
+            true,
+            auto_kind,
+            Message::LogsAutoscrollToggled,
+            app,
+        ),
         m3_button("Clear", true, ButtonKind::Text, Message::LogsCleared, app),
     ]
     .spacing(8)
@@ -1771,12 +1822,66 @@ pub fn logs(app: &App) -> Element<'_> {
         );
     }
 
+    // The viewport: the ONLY scrollable on this screen (the page itself is
+    // fixed via scaffold_fixed), so wheel/keys always move the log lines.
+    let viewport = scrollable(
+        container(lines)
+            .width(Length::Fill)
+            // Right padding keeps the newest line clear of the floating
+            // jump buttons anchored over the same corner.
+            .padding(Padding::new(2.0).right(8.0)),
+    )
+    .id(logs_scroll_id())
+    .width(Length::Fill)
+    .height(Length::Fill);
+
+    // S17: floating navigation — top/bottom jumps overlaid on the
+    // viewport's bottom-right corner. The anchor is a PLAIN container
+    // (non-interactive): wheel events and clicks between the buttons pass
+    // straight through to the scrollable beneath; only the two buttons
+    // capture. Same ↑/↓ glyphs as the adapter reorder controls.
+    let jump = |glyph: &'static str, msg: Message| {
+        button(text(glyph).size(ts.body_m.size))
+            .style(t3::tonal_button(s))
+            .padding(Padding::new(4.0).left(12.0).right(12.0))
+            .on_press(msg)
+    };
+    let floating = container(
+        column![
+            jump("↑", Message::LogsScrollTop),
+            jump("↓", Message::LogsScrollBottom),
+        ]
+        .spacing(6),
+    )
+    .padding(Padding::new(6.0))
+    .style(t3::card(s, s.surface_container_high));
+    // RIG FINDING (S17): anchored flush to the corner, the card sat inside
+    // the scrollable's scrollbar hit zone (iced grabs a margin around the
+    // rail) — the rail swallowed the button clicks. Stand off the right
+    // edge by more than the rail+grab width so the buttons own their
+    // pixels; keep the bottom inset modest (the corner reads best).
+    let overlay = container(floating)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced::Alignment::End)
+        .align_y(iced::Alignment::End)
+        .padding(Padding::new(0.0).right(26.0).bottom(4.0));
+
+    let viewport = stack![viewport].push(overlay);
+
     let card = container(
-        column![toolbar, vertical_space().height(Length::Fixed(6.0)), lines].width(Length::Fill),
+        column![
+            toolbar,
+            vertical_space().height(Length::Fixed(6.0)),
+            viewport
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill),
     )
     .padding(16)
     .style(t3::card(s, s.surface_container_lowest))
-    .width(Length::Fill);
+    .width(Length::Fill)
+    .height(Length::Fill);
 
-    scaffold(app, "Logs", card.into())
+    scaffold_fixed(app, "Logs", card.into())
 }
