@@ -1,0 +1,47 @@
+{
+  "edges": [
+    {"src": "component:mt-net", "dst": "project:multitunnel", "rel": "part_of", "evidence": "workspace crate"},
+    {"src": "component:mt-bond", "dst": "project:multitunnel", "rel": "part_of", "evidence": "workspace crate"},
+    {"src": "component:mt-engine", "dst": "project:multitunnel", "rel": "part_of", "evidence": "workspace crate"},
+    {"src": "component:mt-links", "dst": "project:multitunnel", "rel": "part_of", "evidence": "workspace crate"},
+    {"src": "component:mt-platform", "dst": "project:multitunnel", "rel": "part_of", "evidence": "workspace crate"},
+    {"src": "component:mt-service", "dst": "project:multitunnel", "rel": "part_of", "evidence": "workspace crate"},
+    {"src": "component:mt-m3", "dst": "project:multitunnel", "rel": "part_of", "evidence": "workspace crate"},
+    {"src": "component:mt-app", "dst": "project:multitunnel", "rel": "part_of", "evidence": "workspace crate"},
+    {"src": "protocol:pstack", "dst": "project:multitunnel", "rel": "part_of", "evidence": "working agreement"},
+    {"src": "protocol:memory-graph", "dst": "protocol:pstack", "rel": "implements", "evidence": "S14 protocol upgrade: memory as data graph + RAG"},
+
+    {"src": "task:charts-rendering-fix", "dst": "release:v0.6.0", "rel": "released_in", "evidence": "S10 shipped as v0.6.0"},
+    {"src": "task:charts-rendering-fix", "dst": "release:v0.6.1", "rel": "released_in", "evidence": "S10.1 HiDPI follow-up shipped as v0.6.1"},
+    {"src": "task:charts-rendering-fix", "dst": "decision:D21", "rel": "implements", "evidence": "rendering fixes landed as vendored iced patches"},
+    {"src": "task:charts-rendering-fix", "dst": "component:mt-app", "rel": "relates_to", "evidence": "GUI rendering + per-adapter graphs"},
+
+    {"src": "task:stream-bonding", "dst": "release:v0.6.2", "rel": "released_in", "evidence": "S11 shipped as v0.6.2"},
+    {"src": "task:stream-bonding", "dst": "decision:D17", "rel": "implements", "evidence": "D17 stream bonding protocol"},
+    {"src": "task:stream-bonding", "dst": "bug:freedom-loopback-blackhole", "rel": "fixes", "evidence": "finalRules patch + PING/PONG verification (v0.6.2)"},
+    {"src": "task:stream-bonding", "dst": "component:mt-bond", "rel": "relates_to", "evidence": "framing + daemon live in mt-bond"},
+
+    {"src": "task:balanced-priority-scheduling", "dst": "release:v0.7.0", "rel": "released_in", "evidence": "S12 shipped as v0.7.0"},
+    {"src": "task:balanced-priority-scheduling", "dst": "decision:D23", "rel": "implements", "evidence": "D23 balanced/priority scheduling"},
+    {"src": "task:balanced-priority-scheduling", "dst": "component:mt-net", "rel": "relates_to", "evidence": "merge policies live in mt-net"},
+    {"src": "task:balanced-priority-scheduling", "dst": "bug:uneven-traffic-split", "rel": "relates_to", "evidence": "first mitigation (per-connection path); stream-mode saturation persisted"},
+
+    {"src": "task:status-page-layout", "dst": "release:v0.7.1", "rel": "released_in", "evidence": "S13 shipped as v0.7.1"},
+    {"src": "task:status-page-layout", "dst": "decision:D24", "rel": "implements", "evidence": "D24 one connection frame + one page scrollable"},
+    {"src": "task:status-page-layout", "dst": "component:mt-app", "rel": "relates_to", "evidence": "status tab restructure in mt-app"},
+
+    {"src": "task:e-ui-logo-titlebar-tray", "dst": "decision:D4", "rel": "relates_to", "evidence": "builds on the raw-win32 tray (Shell_NotifyIconW)"},
+    {"src": "task:e-ui-logo-titlebar-tray", "dst": "component:mt-app", "rel": "relates_to", "evidence": "title bar + settings UI in mt-app"},
+
+    {"src": "task:saturation-aware-split", "dst": "bug:uneven-traffic-split", "rel": "fixes", "evidence": "S14 capacity-aware scheduling (peer-reported delivery rates)"},
+    {"src": "task:saturation-aware-split", "dst": "bug:reorder-overflow", "rel": "fixes", "evidence": "S14 WIP: 16 MiB cap + backpressure overflow path"},
+    {"src": "task:saturation-aware-split", "dst": "component:mt-bond", "rel": "relates_to", "evidence": "carrier scheduler in mt-bond endpoint"},
+    {"src": "task:saturation-aware-split", "dst": "decision:D23", "rel": "implements", "evidence": "extends D23 policies with capacity awareness"},
+    {"src": "task:saturation-aware-split", "dst": "commit:f4a26ca", "rel": "relates_to", "evidence": "WIP preserved at wip(s14) commit f4a26ca"},
+
+    {"src": "task:memory-graph-rag", "dst": "protocol:memory-graph", "rel": "implements", "evidence": "S14 protocol upgrade, user directive"},
+
+    {"src": "bug:freedom-loopback-blackhole", "dst": "task:stream-bonding", "rel": "fixed_by", "evidence": "v0.6.2 finalRules + PING/PONG"},
+    {"src": "bug:uneven-traffic-split", "dst": "task:saturation-aware-split", "rel": "fixed_by", "evidence": "S14 WIP (in flight)"}
+  ]
+}

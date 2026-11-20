@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 
 MEMORY_FILE = Path("PROJECT_MEMORY.md")
@@ -64,5 +65,23 @@ def update_project_memory():
     MEMORY_FILE.write_text(updated_content, encoding="utf-8")
     print(f"[✓] Successfully updated {MEMORY_FILE} with the last {NUM_COMMITS} commit diffs.")
 
+
+def rebuild_memory_graph():
+    """Rebuild the agentic memory graph store (S14 protocol). The store is
+    the RAG source for `query_memory.py`; keeping it fresh on every ritual
+    run means all agents always retrieve current state."""
+    script = Path(__file__).parent / "harness" / "memory" / "build_graph.py"
+    if not script.exists():
+        return
+    result = subprocess.run(
+        [sys.executable, str(script), "--quiet"],
+        capture_output=True, text=True, encoding="utf-8")
+    if result.returncode != 0:
+        print(f"[!] Memory graph rebuild FAILED:\n{result.stderr.strip()}")
+        sys.exit(1)
+    print("[✓] Memory graph store rebuilt (harness/memory/store/).")
+
+
 if __name__ == "__main__":
     update_project_memory()
+    rebuild_memory_graph()

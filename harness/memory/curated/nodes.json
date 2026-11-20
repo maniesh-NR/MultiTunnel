@@ -1,0 +1,463 @@
+{
+  "nodes": [
+    {
+      "id": "bug:freedom-loopback-blackhole",
+      "type": "bug",
+      "title": "Xray 26.x freedom loopback blackhole — merge-daemon traffic swallowed at the VM (fixed v0.6.2)",
+      "tags": [
+        "fixed"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s11"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Stream bonding initially blackholed: Xray 26.x freedom outbound looping back into the merge daemon (127.0.0.1:7443) swallowed traffic. Fixed in v0.6.2 (S11) via the finalRules patch (server/setup-xray-reality.sh, idempotent) + PING/PONG carrier verification before a carrier is schedulable.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "bug:reorder-overflow",
+      "type": "bug",
+      "title": "Reorder-buffer overflow during saturation shifts — hard session error instead of backpressure (addressed in S14 WIP)",
+      "tags": [
+        "wip"
+      ],
+      "sources": [
+        {
+          "file": "crates/mt-bond/src/reorder.rs",
+          "anchor": "would_overflow"
+        }
+      ],
+      "passages": [
+        {
+          "text": "During saturation shifts the reorder buffer could overflow its 4 MiB cap and fail the whole session. S14 WIP: cap raised to 16 MiB and a backpressure path added (ReorderBuffer::would_overflow; the endpoint holds the frame up to REORDER_PAUSE_MAX 5 s — carrier TCP backpressure throttles the sender while the gap drains; soft cap afterwards).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "bug:uneven-traffic-split",
+      "type": "bug",
+      "title": "Uneven traffic split under saturation — one adapter maxes out, excess does NOT spill to remaining adapters",
+      "tags": [
+        "fix-gated",
+        "user-reported"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s14"
+        }
+      ],
+      "passages": [
+        {
+          "text": "User-reported (recurring): traffic is not being split evenly; when one adapter reaches its maximum bandwidth range, the rest of the traffic does not split over to the remaining adapters. First addressed by D23/v0.7.0 (balanced pressure + priority ramp-spill) for the per-connection path; the stream-bonding frame scheduler had no saturation signal, so a maxed-out carrier kept receiving frames. S14 fix implemented + gated (peer-reported delivery rates; see task:saturation-aware-split) — awaiting release v0.8.0 and real-setup verification before closing.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "component:mt-app",
+      "type": "component",
+      "title": "mt-app — Material You GUI (iced, vendored D21; status dashboard D19/D24)",
+      "tags": [
+        "crate"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Crates"
+        }
+      ],
+      "passages": [
+        {
+          "text": "mt-app: the iced GUI (vendored under vendor/ + [patch.crates-io], D21 — upstream 0.13.0 has 4 patched bugs: damage NaN total-order, clip mapping, fill_text bounds, HiDPI transform order). Status tab: live dashboard (D19), S13/D24 restructure = ONE fixed connection frame (state + toggler + picker in a 296px left column; combined graph in a fixed-240px panel filling the rest) + ONE page scrollable below it. GUI never dies invisibly (D15); bare launch = GUI.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "component:mt-bond",
+      "type": "component",
+      "title": "mt-bond — stream bonding framing (D17), carrier scheduling, mt-merge-server daemon",
+      "tags": [
+        "crate"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Crates"
+        }
+      ],
+      "passages": [
+        {
+          "text": "mt-bond: the stream-bonding protocol (D17 framing over N REALITY carriers), the per-endpoint carrier scheduler (policy-aware since S11/D23; capacity-aware S14 WIP: peer-reported delivery rates piggybacked on 1 s PINGs, assign/deliver EWMA, carrier_score = assign_bps / max(deliver_bps, PROBE_BPS), saturation spill in Balanced and Priority), and the mt-merge-server daemon (linux ELFs x86_64 + aarch64).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "component:mt-engine",
+      "type": "component",
+      "title": "mt-engine — ManagedEngine lifecycle (self-provisioned Xray, D14)",
+      "tags": [
+        "crate"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Crates"
+        }
+      ],
+      "passages": [
+        {
+          "text": "mt-engine: ManagedEngine lifecycle — Xray engine self-provisioned (D14), never silent; manages the embedded Xray binaries/config that provide the per-adapter VLESS+REALITY carriers via sendThrough.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "component:mt-links",
+      "type": "component",
+      "title": "mt-links — vless:// import + subscriptions (REALITY-only, strict — D10)",
+      "tags": [
+        "crate"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Crates"
+        }
+      ],
+      "passages": [
+        {
+          "text": "mt-links: vless:// link import and subscription handling. The importer is REALITY-only and strict (D10). Subscription auto-update and vmess validation remain parked backlog items.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "component:mt-m3",
+      "type": "component",
+      "title": "mt-m3 — Material You component library (iced, D13)",
+      "tags": [
+        "crate"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Crates"
+        }
+      ],
+      "passages": [
+        {
+          "text": "mt-m3: the Material You (Material 3) component/design-token library on which mt-app is built (D13).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "component:mt-net",
+      "type": "component",
+      "title": "mt-net — proxy servers (SOCKS/HTTP), net-merge, five merge policies",
+      "tags": [
+        "crate"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Crates"
+        }
+      ],
+      "passages": [
+        {
+          "text": "mt-net: local proxy servers (SOCKS/HTTP), the net-merge layer, and the five merge policies (round-robin, failover, lowest-latency EWMA, balanced, priority) introduced in D23/v0.7.0. Balanced pressure = rate_bps + active_conns x 128 KiB/s reserve; priority fills #1 until a ramp detector sees >=3 flat ticks at rate >= 0.85 x capacity (>=256 KiB/s), then spills.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "component:mt-platform",
+      "type": "component",
+      "title": "mt-platform — Win32 adapter FFI (adapter enumeration/bonding)",
+      "tags": [
+        "crate"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Crates"
+        }
+      ],
+      "passages": [
+        {
+          "text": "mt-platform: Win32 FFI for network adapter enumeration (GetAdaptersAddresses and friends) — the Windows-side source of the adapter list that bonding and the Adapters tab ordering UI (D23) consume.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "component:mt-service",
+      "type": "component",
+      "title": "mt-service — service trait + real_service wiring",
+      "tags": [
+        "crate"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Crates"
+        }
+      ],
+      "passages": [
+        {
+          "text": "mt-service: the service trait and real_service implementation that wire GUI actions to the networking core.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "project:multitunnel",
+      "type": "project",
+      "title": "MultiTunnel — Rust rewrite of BondTunnel; zero-dependency all-in-one (v2rayN import + net-merge), Material You GUI",
+      "tags": [
+        "root",
+        "hub"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Tech Stack & Architecture Rules"
+        }
+      ],
+      "passages": [
+        {
+          "text": "MultiTunnel: Rust rewrite of BondTunnel; zero-dependency all-in-one (v2rayN import + net-merge), Material You GUI. Repo: github.com/maniesh-NR/MultiTunnel. Windows client → local SOCKS/HTTP → ProxyServer → BondOutbound → N carriers (one per bonded NIC, VLESS+REALITY via Xray sendThrough, engine self-provisioned D14) → VM Xray (public 8443) → freedom → mt-merge-server (127.0.0.1:7443) → real target. Reverse symmetric. Auth at the Xray edge.",
+          "kind": "body"
+        },
+        {
+          "text": "Two bond modes: per-connection (default) and stream bonding (D17 framing, needs the VM merge daemon; carriers verified by PING/PONG before schedulable). Scheduling (D23, v0.7.0): five merge policies in mt-net — round-robin, failover, lowest-latency (EWMA), balanced (stock default), priority (user order; fills #1 until bandwidth plateaus then spills). Stream-mode frame scheduler is policy-aware too. Adapter priority == saved bonded_adapters ORDER; Adapters tab = ordering UI.",
+          "kind": "body"
+        },
+        {
+          "text": "Hard rules: config schema camelCase + versioned migrations (D8); no secrets in repo (D9) — token lives in ../upload/, backup.sh reads it; fail-open routing (D5); GUI never dies invisibly (D15); vendored iced under vendor/ + [patch.crates-io] (D21); CI timestamps UTC; rustc 1.100.0 + zig 0.14.1 + cargo-zigbuild (D2), windows target x86_64-pc-windows-gnu.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "protocol:memory-graph",
+      "type": "protocol",
+      "title": "Agentic memory graph + RAG retrieval (S14) — typed nodes/edges store, BM25 + graph expansion, all-agent accessible",
+      "tags": [
+        "protocol",
+        "s14",
+        "done"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/build_graph.py",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "The agentic memory is a typed graph store: harness/memory/store/memory_graph.json (schema v1). Nodes (whitelisted types: project, architecture, playbook, contract, state, decision, ledger, release, commit, task, bug, component, protocol, report, consensus, fact) carry retrieval passages; edges carry typed relations with evidence. Sources: PROJECT_MEMORY.md durable sections, STATE.md, DECISIONS.md, LEDGER.md (grouped per stage tag), agent-reports/, consensus/, git tags + full log, curated/.",
+          "kind": "body"
+        },
+        {
+          "text": "RAG retrieval (BM25 k1=1.5 b=0.75, title boost 1.5, plus graph-neighborhood expansion with 0.5^hop score decay): query from repo root with `python3 query_memory.py \"<topic>\"` (flags: -k N, --expand HOPS, --json, --prompt). --prompt emits a paste-ready context pack with induced subgraph links — the RAG input for any consuming agent (session start, subagent delegation, or future session).",
+          "kind": "body"
+        },
+        {
+          "text": "Agent WRITE path: `python3 harness/memory/write_memory.py --node id=... type=... title=... passage=...` or `--edge src=... dst=... rel=... evidence=...` — appends/updates harness/memory/curated/{nodes,edges}.json (merged last at build, wins on id collision) and rebuilds the store. update_memory.py rebuilds the store on every run. Rebuilds are deterministic (byte-identical while HEAD and sources are unchanged; no wall-clock in the store). Tests: python3 harness/memory/test_graph.py.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "protocol:pstack",
+      "type": "protocol",
+      "title": "pstack — persistent external memory, zero-noise compaction, deep-first investigation, playbook execution",
+      "tags": [
+        "protocol",
+        "durable"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "protocol blockquote"
+        }
+      ],
+      "passages": [
+        {
+          "text": "pstack working agreement: persistent external memory, zero-noise compaction, deep-first investigation, playbook execution. Session ritual: git fetch && git rebase origin/main, then python3 update_memory.py, then read the Active Playbook section of PROJECT_MEMORY.md. Durable sections of PROJECT_MEMORY.md are maintained BY HAND; the recent-activity section is maintained BY SCRIPT. Long-form history lives in harness/memory/ (LEDGER.md append-only, STATE.md rewritten per stage, DECISIONS.md immutable).",
+          "kind": "body"
+        },
+        {
+          "text": "Backup protocol: every roadmap stage ends with ./harness/backup.sh <label> (local commit + tag, pushes to GitHub main + tags when the token is available). Big stages use parallel adversarial agents with consensus gates (D6); agent reports land in harness/memory/agent-reports/, consensus in harness/memory/consensus/.",
+          "kind": "body"
+        },
+        {
+          "text": "Never write the exact git-activity section header string anywhere above the section itself — update_memory.py splits on its first occurrence.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "task:balanced-priority-scheduling",
+      "type": "task",
+      "title": "Task C (S12) — balanced/priority scheduling + adapter ordering UI, v0.7.0",
+      "tags": [
+        "done",
+        "user-request"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Active Playbook"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Task C: even traffic spreading (v0.7.0, S12, D23) — five merge policies in mt-net (round-robin, failover, lowest-latency EWMA, balanced default, priority with user order), stream-mode frame scheduler made policy-aware, and the Adapters tab ordering UI (selected rows first, #n chips, up/down). Balanced pressure = rate_bps + active_conns x 128 KiB/s reserve.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "task:charts-rendering-fix",
+      "type": "task",
+      "title": "Task A (S10/S10.1) — rendering fixes + per-adapter graphs, v0.6.0/v0.6.1",
+      "tags": [
+        "done",
+        "user-request"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Active Playbook"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Task A: fix the broken charts / rendering (user-reported). Shipped as v0.6.0 + v0.6.1 (S10/S10.1): rendering fixes as vendored iced patches (D21) — damage NaN total-order, clip mapping, fill_text bounds, HiDPI transform order — plus per-adapter traffic graphs.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "task:e-ui-logo-titlebar-tray",
+      "type": "task",
+      "title": "Task E (UI half) — logo image, Chromium-style blended title bar, close-to-tray toggle, persistent tray icon, quick settings on right-click — PENDING",
+      "tags": [
+        "pending",
+        "user-request"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s14"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Task E UI half (user request, not yet started): (1) use the user's attached image as the app logo; (2) title bar blends with the window like Chromium browser windows; (3) option to toggle minimize-to-tray on close; (4) persistent tray icon while the app is open or minimized to tray; (5) quick settings accessible by right-clicking the tray icon. Builds on the existing raw-win32 tray (D4, multitunnel-tray.exe) and mt-app (iced, D15). The attached logo image needs to be located/re-requested from the user (not in the repo).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "task:memory-graph-rag",
+      "type": "task",
+      "title": "Memory graph + RAG (S14 protocol) — agentic memory as a typed data graph, all-agent accessible, BM25 + graph retrieval",
+      "tags": [
+        "done",
+        "user-request",
+        "s14"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/build_graph.py",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "User directive: store agentic memory as data graphs accessible to all agents and use retrieval-augmented generation (RAG). Implemented (S14): harness/memory/store/memory_graph.json — typed nodes (16 whitelisted types) with retrieval passages + typed evidence edges (14 whitelisted relations), ingested from PROJECT_MEMORY.md durable sections, STATE/DECISIONS/LEDGER, agent-reports, consensus, git tags + full log, and curated/ (the agent write path via write_memory.py). Retrieval = BM25 + graph-neighborhood expansion; repo-root CLI query_memory.py (--json / --prompt context packs); deterministic byte-identical rebuilds; python3 harness/memory/test_graph.py green.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "task:saturation-aware-split",
+      "type": "task",
+      "title": "Task E (core) — saturation-aware redistribution: when one adapter hits its bandwidth ceiling, spill traffic to the rest (S14, gated — release pending)",
+      "tags": [
+        "gated",
+        "release-pending",
+        "user-request",
+        "s14"
+      ],
+      "sources": [
+        {
+          "file": "crates/mt-bond/src/endpoint.rs",
+          "anchor": "carrier_score"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Task E core: user reported traffic still not split evenly — when one adapter reaches its maximum bandwidth, the remaining traffic does NOT split over to the remaining adapters. v0.7.0's balanced/priority (D23) spread per-connection load but stream-mode saturation spill was missing. S14 fix (started at commit f4a26ca, completed + gated this session): each endpoint measures per-carrier inbound rate and reports it to the peer piggybacked on 1 s PINGs; scheduler keeps EWMA assignment rate per carrier; carrier_score = assign_bps / max(deliver_bps, PROBE_BPS 32 KiB/s); Balanced picks least relative load (capacity-proportional spreading — aggregate = SUM of paths); Priority spills at score >= 1.15 (PRIORITY_SPILL_RATIO); reorder cap 4->16 MiB with a backpressure overflow path (would_overflow + REORDER_PAUSE) instead of failing the session; falls back to S12 least-queued behavior when the peer sends no reports. Gates passed: fmt, workspace clippy -D warnings, 404/0 workspace tests. REMAINING: windows-gnu clippy, zigbuild, release v0.8.0, real-setup verification.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "task:status-page-layout",
+      "type": "task",
+      "title": "Task D (S13) — status tab: one connection frame + one page scrollable, graph fills frame, v0.7.1",
+      "tags": [
+        "done",
+        "user-request"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Active Playbook"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Task D (v0.7.1, S13, D24): the wheel scrolls EVERYTHING below the connection frame (exit identity, carrier links, all adapter rows — one page scrollable); toggle/dropdown dead gap removed (stacked in a compact 296px left column); the combined traffic graph fills all remaining frame space (fixed-240px panel, D22 stable-container rule intact). Mock seeds 8 adapters; rig-verified sf=1.0/1.5, 0 panics.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "task:stream-bonding",
+      "type": "task",
+      "title": "Task B (S11) — stream bonding over N carriers, v0.6.2",
+      "tags": [
+        "done",
+        "user-request"
+      ],
+      "sources": [
+        {
+          "file": "PROJECT_MEMORY.md",
+          "anchor": "Active Playbook"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Task B: stream bonding (v0.6.2, S11) — D17 framing over N REALITY carriers, merge daemon on the VM. Root-caused and fixed the Xray 26.x freedom loopback blackhole (finalRules patch in server/setup-xray-reality.sh) and added PING/PONG carrier verification (a carrier is only schedulable once verified).",
+          "kind": "body"
+        }
+      ]
+    }
+  ]
+}
