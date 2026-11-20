@@ -1,0 +1,4 @@
+# Binary assets — keep out of text diffs (git log -p chokes otherwise)
+*.rgba binary
+*.png binary
+*.ico binary

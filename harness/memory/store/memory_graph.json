@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "b13fb31 2026-11-20T07:56:52Z",
+  "as_of": "63cc1f5 2026-11-20T08:07:22Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 240,
-  "edge_count": 248,
+  "node_count": 241,
+  "edge_count": 250,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -711,6 +711,26 @@
       "passages": [
         {
           "text": "backup(s14-memory-graph-rag): 2026-11-20T04:45:27Z [no changes]",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:63cc1f5",
+      "type": "commit",
+      "title": "backup(s15-post-release): 2026-11-20T08:07:22Z",
+      "tags": [
+        "2026-11-20"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "63cc1f5"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s15-post-release): 2026-11-20T08:07:22Z",
           "kind": "title"
         }
       ]
@@ -4012,6 +4032,10 @@
         {
           "text": "2026-11-20T13:00Z | GATES ALL GREEN: fmt clean; clippy host + windows-gnu (zig shims) --all-targets -D warnings clean (first win-module compile surfaced: pub(crate) re-export shape, TrayCtx !Sync → construct-on-tray-thread, as_raw() is rwh 0.6's accessor, unused-mut/while-let nits); cargo test --workspace 421/0 (was 404; +10 tray menu/ICO/tip tests, +2 mt-service serde migration, +4 app close-action/double-click/roundtrip/begin_exit, minus legacy ICO pin rework); vendored iced 6/0; zigbuild release PE32+ ×4 (multitunnel, multitunnel-tray GUI, mt-app, mt-merge-server) + linux mt-merge-server ELF; version 0.9.0; README (\"App identity & tray (v0.9)\") + QUICKSTART (Step 2 note). DISK: workspace test + windows clippy + release zigbuild cannot coexist on the 9.9G rootfs — sequence with rm -rf /tmp/mt-target between phases; CARGO_INCREMENTAL=0 mandatory (636M incremental alone).",
           "kind": "body"
+        },
+        {
+          "text": "2026-11-20T13:20Z | v0.9.0 RELEASED: tag on b13fb31 → release run 44698724161 SUCCESS (~7 min, warm cache); CI on the same commit (44698711487) ALL GREEN. Assets verified by download+unzip (staged in download/v090-verify/): multitunnel-v0.9.0-windows-x64.zip 6,241,184 B (11-entry manifest, integrity OK; multitunnel.exe PE32+ 12.88 MB + multitunnel-tray.exe PE32+ 2.95 MB — both grew ~0.3-0.6 MB from the embedded logo assets + tray/titlebar code; README carries the \"App identity & tray (v0.9)\" section, QUICKSTART the Step 2 note) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. S15 CLOSED — the user's five asks shipped: (1) the attached image is the app logo on every surface (window, taskbar, title bar, tray, both binaries' embedded ICO), (2) Chromium-style blended title bar (native chrome off, in-app strip, drag + double-press maximize), (3) close-to-tray toggle in Settings → Window & tray, (4) persistent tray icon while open or hidden (Windows), (5) Quick Settings on tray right-click (connect/disconnect, server switch, open, exit). User actions: none — Settings → Window & tray → \"keep running in the tray when closed\" turns the ✕ into hide-to-tray.",
+          "kind": "body"
         }
       ]
     },
@@ -4815,7 +4839,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: S15 SHIPPED PENDING RELEASE (task E UI half, D25 — the user's five asks: logo, Chromium-style blended title bar, close-to-tray toggle, persistent tray icon, Quick Settings on tray right-click). All 8 verification gates green (see LEDGER s15 for the full rig story); version 0.9.0; tagged for release. - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling shipped — the \"one adapter maxes out, no spill\" complaint fixed by peer-reported per-carrier delivery rates (1 s PINGs), carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + writer backlog. S14 also shipped the agentic memory graph + RAG (query_memory.py / write_memory.py, 18/18 tests). - **Prior stages**: S13 (v0.7.1, status tab: one connection frame + one page scrollable, graph fills frame), S12 (v0.7.0, balanced+priority scheduling + adapter ordering), S11 (v0.6.2, stream bonding finalRules + verified carriers), S10/10.1 (v0.6.0/01, rendering fixes + per-adapter graphs). - **Task E UI half (S15, DONE)**: logo assets from the user's PNG (scripts/make_logo_assets.py → assets/logo_{24,64}.rgba + icon.ico); in-app titlebar (decorations:false, drag + double-press maximize); close_to_tray setting + close_action decision (hide via window::run_with_handle on Windows, minimize elsewhere); raw-win32 in-app tray (tray.rs/tray_win.rs, D4 patterns, ctx-on-tray-thread); Quick Settings menu = pure QuickEntry model + assign_ids. - **Pending — user side**: verify v0.7.1 (wheel scrolls everything below the frame; graph fills the frame; all adapters reachable).",
+          "text": "- **Stage**: S15 CLOSED (v0.9.0 released (task E UI half, D25 — the user's five asks: logo, Chromium-style blended title bar, close-to-tray toggle, persistent tray icon, Quick Settings on tray right-click). All 8 verification gates green (see LEDGER s15 for the full rig story); v0.9.0 RELEASED (run 44698724161 SUCCESS, assets verified — see LEDGER s15). - **Task E core (v0.8.0, S14, CLOSED)**: saturation-aware scheduling shipped — the \"one adapter maxes out, no spill\" complaint fixed by peer-reported per-carrier delivery rates (1 s PINGs), carrier_score relative load, Balanced capacity-proportional spreading, Priority spill at 1.15 + writer backlog. S14 also shipped the agentic memory graph + RAG (query_memory.py / write_memory.py, 18/18 tests). - **Prior stages**: S13 (v0.7.1, status tab: one connection frame + one page scrollable, graph fills frame), S12 (v0.7.0, balanced+priority scheduling + adapter ordering), S11 (v0.6.2, stream bonding finalRules + verified carriers), S10/10.1 (v0.6.0/01, rendering fixes + per-adapter graphs). - **Task E UI half (S15, DONE)**: logo assets from the user's PNG (scripts/make_logo_assets.py → assets/logo_{24,64}.rgba + icon.ico); in-app titlebar (decorations:false, drag + double-press maximize); close_to_tray setting + close_action decision (hide via window::run_with_handle on Windows, minimize elsewhere); raw-win32 in-app tray (tray.rs/tray_win.rs, D4 patterns, ctx-on-tray-thread); Quick Settings menu = pure QuickEntry model + assign_ids.",
           "kind": "body"
         }
       ]
@@ -7185,6 +7209,12 @@
       "evidence": "subject stage label (s14)"
     },
     {
+      "src": "commit:63cc1f5",
+      "dst": "ledger:s15",
+      "rel": "part_of",
+      "evidence": "subject stage label (s15)"
+    },
+    {
       "src": "commit:6a4bd7c",
       "dst": "ledger:s9.1",
       "rel": "part_of",
@@ -7951,6 +7981,12 @@
       "dst": "project:multitunnel",
       "rel": "part_of",
       "evidence": "project ledger"
+    },
+    {
+      "src": "ledger:s15",
+      "dst": "release:v0.9.0",
+      "rel": "released_in",
+      "evidence": "2026-11-20T13:20Z | v0.9.0 RELEASED: tag on b13fb31 → release run 44698724161 SUCCESS (~7 min, warm cache); CI on the same commit (44698711487) ALL GREEN. Assets verified by download+unzip (staged in download/v090-verify/): multitunnel-v0.9.0-windows-x64.zip 6,241,184 B (11-entry manifest, integrity OK; multitunnel.exe PE32+ 12.88 MB + multitunnel-tray.exe PE32+ 2.95 MB — both grew ~0.3-0.6 MB from the embedded logo assets + tray/titlebar code; README carries the \"App identity & tray (v0.9)\" section, QUICKSTART the Step 2 note) + mt-merge-server {x86_64 1,824,296 B, aarch64 1,860,432 B} ELFs. S15 CLOSED — the user's five asks shipped: (1) the attached image is the app logo on every surface (window, taskbar, title bar, tray, both binaries' embedded ICO), (2) Chromium-style blended title bar (native chrome off, in-app strip, drag + double-press maximize), (3) close-to-tray toggle in Settings → Window & tray, (4) persistent tray icon while open or hidden (Windows), (5) Quick Settings on tray right-click (connect/disconnect, server switch, open, exit). User actions: none — Settings → Window & tray → \"keep running in the tray when closed\" turns the ✕ into hide-to-tray."
     },
     {
       "src": "ledger:s2",

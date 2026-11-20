@@ -20,7 +20,10 @@ def get_recent_git_diffs():
             capture_output=True,
             text=True,
             check=True,
-            encoding="utf-8"
+            encoding="utf-8",
+            # Some history (pre-.gitattributes asset commits) embeds raw
+            # .rgba bytes in diffs; never let that break the refresh.
+            errors="replace"
         )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
