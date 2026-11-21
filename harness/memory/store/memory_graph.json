@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "4888fec 2026-11-21T08:27:47Z",
+  "as_of": "001d4e0 2026-11-21T13:50:09Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 265,
-  "edge_count": 274,
+  "node_count": 270,
+  "edge_count": 277,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -72,6 +72,26 @@
         {
           "text": "User-reported (recurring): traffic is not being split evenly; when one adapter reaches its maximum bandwidth range, the rest of the traffic does not split over to the remaining adapters. First addressed by D23/v0.7.0 (balanced pressure + priority ramp-spill) for the per-connection path; the stream-bonding frame scheduler had no saturation signal, so a maxed-out carrier kept receiving frames. S14 fix implemented + gated (peer-reported delivery rates; see task:saturation-aware-split) — awaiting release v0.8.0 and real-setup verification before closing.",
           "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "commit:001d4e0",
+      "type": "commit",
+      "title": "s19 review fixes: black-hole port OWNED while engaged, KILL SWITCH banner, edit-failure logging, chained diag-path refresh — (1) [blocker fix] the kill switch now BINDS 127.0.0.1:9 itself while engaged (spawn_blackhole accept loop swallows every connection) so a local process cannot pre-bind the black-hole port and turn it into its own proxy; bind failure falls back to the documented dead-port semantics (still fail-closed; Linux dev hosts without CAP_NET_BIND_SERVICE take the fallback); stop_blackhole wired into every proxy-restore path (both disconnect branches, the toggle-off escape hatch, connect step-0 self-heal) + owns/releases verified by test; (2) [major fix] Status shows a 'KILL SWITCH ACTIVE — traffic is blocked' error-container banner exactly when kill_switch && Failed (pure gate kill_switch_banner_visible, unit-tested) — the give_up state was previously only visible in the Logs tab; (3) [minor fix] a failed server edit ALSO lands in the Logs tab ('WARN server edit failed: …') — the dialog error was easy to dismiss and lose; (4) [minor fix] DiagnosticsToggled chains save→then(path refresh) instead of a batch (the batch could observe the pre-toggle path); (5) review findings assessed as non-issues (documented in the transcript): the speed-test 'race' (guard exists at handler entry), 'unbounded read' (per-read 5s stall + 30s budget + 64MiB cap), 'memory growth' (bytes counted, never accumulated), diagnostics mutex 'race' (no await under the lock), chunked-encoding skew (we measure received wire bytes; framing overhead ~1e-4), update_profile field coverage ",
+      "tags": [
+        "2026-11-21"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "001d4e0"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s19 review fixes: black-hole port OWNED while engaged, KILL SWITCH banner, edit-failure logging, chained diag-path refresh — (1) [blocker fix] the kill switch now BINDS 127.0.0.1:9 itself while engaged (spawn_blackhole accept loop swallows every connection) so a local process cannot pre-bind the black-hole port and turn it into its own proxy; bind failure falls back to the documented dead-port semantics (still fail-closed; Linux dev hosts without CAP_NET_BIND_SERVICE take the fallback); stop_blackhole wired into every proxy-restore path (both disconnect branches, the toggle-off escape hatch, connect step-0 self-heal) + owns/releases verified by test; (2) [major fix] Status shows a 'KILL SWITCH ACTIVE — traffic is blocked' error-container banner exactly when kill_switch && Failed (pure gate kill_switch_banner_visible, unit-tested) — the give_up state was previously only visible in the Logs tab; (3) [minor fix] a failed server edit ALSO lands in the Logs tab ('WARN server edit failed: …') — the dialog error was easy to dismiss and lose; (4) [minor fix] DiagnosticsToggled chains save→then(path refresh) instead of a batch (the batch could observe the pre-toggle path); (5) review findings assessed as non-issues (documented in the transcript): the speed-test 'race' (guard exists at handler entry), 'unbounded read' (per-read 5s stall + 30s budget + 64MiB cap), 'memory growth' (bytes counted, never accumulated), diagnostics mutex 'race' (no await under the lock), chunked-encoding skew (we measure received wire bytes; framing overhead ~1e-4), update_profile field coverage ",
+          "kind": "title"
         }
       ]
     },
@@ -251,6 +271,26 @@
       "passages": [
         {
           "text": "backup(v0.3.1-gui-default-hotfix): 2026-11-18T05:34:31Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:14e3e79",
+      "type": "commit",
+      "title": "s19: server editing, offline exit-IP + speed test, diagnostics mode, kill switch — (1) SERVER EDITING: Servers tab per-card Edit button opens a full-window modal (dim backdrop cancels on click; S16 overlay discipline); fields: name, remark, address, port, UUID + REALITY set (SNI/fingerprint/pbk/sid/spiderX, reality profiles only); mt-service ProfileDetails round-trips profile_details→update_profile; ProfileStore::update replaces BY ID in place (id, list position, active preserved; NO dedupe on explicit edit); RealService validates primitives (empty name/address/identity, port 0-65535) + capability-regression check (an edit that would break a convertible profile is rejected with the reason; a never-convertible profile edits freely); editing the active server while connected logs 'reconnect to apply'. (2) EXIT IP WHILE OFFLINE: exit_probe prefers the LIVE session, falls back to temp_link_for() — a one-shot factory link through the active profile (same engine path as test_latency); ExitInfo.via_temp_tunnel flags the path for the GUI chip ('temporary probe tunnel' vs 'live tunnel'); shared http_get()/parse_exit_info() helpers; EXIT_PROBE_MAX_BYTES 64 KiB cap.",
+      "tags": [
+        "2026-11-21"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "14e3e79"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s19: server editing, offline exit-IP + speed test, diagnostics mode, kill switch — (1) SERVER EDITING: Servers tab per-card Edit button opens a full-window modal (dim backdrop cancels on click; S16 overlay discipline); fields: name, remark, address, port, UUID + REALITY set (SNI/fingerprint/pbk/sid/spiderX, reality profiles only); mt-service ProfileDetails round-trips profile_details→update_profile; ProfileStore::update replaces BY ID in place (id, list position, active preserved; NO dedupe on explicit edit); RealService validates primitives (empty name/address/identity, port 0-65535) + capability-regression check (an edit that would break a convertible profile is rejected with the reason; a never-convertible profile edits freely); editing the active server while connected logs 'reconnect to apply'. (2) EXIT IP WHILE OFFLINE: exit_probe prefers the LIVE session, falls back to temp_link_for() — a one-shot factory link through the active profile (same engine path as test_latency); ExitInfo.via_temp_tunnel flags the path for the GUI chip ('temporary probe tunnel' vs 'live tunnel'); shared http_get()/parse_exit_info() helpers; EXIT_PROBE_MAX_BYTES 64 KiB cap.",
           "kind": "title"
         }
       ]
@@ -2051,6 +2091,26 @@
       "passages": [
         {
           "text": "backup(s6-review-fixes): 2026-11-18T04:46:30Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:fac1a42",
+      "type": "commit",
+      "title": "backup(s19-impl): 2026-11-21T13:22:22Z [no changes]",
+      "tags": [
+        "2026-11-21"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "fac1a42"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s19-impl): 2026-11-21T13:22:22Z [no changes]",
           "kind": "title"
         }
       ]
@@ -4459,6 +4519,27 @@
       ]
     },
     {
+      "id": "ledger:s19",
+      "type": "ledger",
+      "title": "Stage s19 ledger",
+      "tags": [
+        "s19",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s19"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-21T14:20Z | IMPLEMENTED (six asks, v0.13.0): (1) server editing — Servers per-card Edit → full-window modal (S16 overlay discipline; dim backdrop cancels), mt-service ProfileDetails round-trip, ProfileStore::update by id (id/position/active preserved, no dedupe on explicit edit), primitive + capability-regression validation (a never-convertible profile edits freely); (2) exit-IP while OFFLINE — temp_link_for() one-shot factory link through the active profile, ExitInfo.via_temp_tunnel chip; (3) speed test — live session for the active profile else temp tunnel, settings.speed_test_url (cloudflare __down 25MB default, plain-HTTP verified), clock starts after connect, 5s stall/30s budget/64MiB caps, ≥400 rejected, SpeedTestInfo chips; (4) diagnostics mode — src/diagnostics.rs redacted paste-ready file (header + LogLine tee + hand-rolled global tracing subscriber, no tracing-subscriber dep, engine level forced debug, redaction test-pinned), Settings card + Open log folder; (5) kill switch — give_up() fail-closed at 127.0.0.1:9, review fix: app BINDS the port while engaged (spawn_blackhole swallows connections; dead-port fallback documented), stop_blackhole on every restore path (both disconnect branches, toggle-off, connect step-0), explicit disconnect restores with no session, Status \"KILL SWITCH ACTIVE\" banner (Failed+armed, pure gate tested); (6) code review — Copilot unavailable (no entitlement → reviewer silently dropped; models.github.ai proxy-intercepted \"OK\"), 3-round discussion-based review on the strongest reachable model instead, 4 valid findings fixed (port ",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "ledger:s2",
       "type": "ledger",
       "title": "Stage s2 ledger",
@@ -5258,7 +5339,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: IDLE — S18 CLOSED, v0.12.0 released and verified (release run 44879546925 first-try SUCCESS; the ci windows leg was a 69-min cold-cache cancel with same-commit green proof from the release's own build-windows — see LEDGER 08:30Z). The six asks shipped (D28): 3-line tray tooltip (name+version / totals / speeds, CRLF), transparent-background contrast-boosted LARGER runtime icons (tray ICOs + logo_64 + logo_24), Settings accent COLOR WHEEL (HSV disc asset + inverse marker math, live re-theme, persist on release), System/Light/Dark mode (OS detection chain: MT_THEME_SYSTEM_DARK env seam → Win32 AppsUseLightTheme → gsettings/gtk; 5 s repoll; legacy dark_mode kept as the forward-compat shadow), mt-bond BLEST tie-guard + ECF completion scheduling (papers survey: docs/research/), UI changelog survey (docs/research/). 447/0 tests; rig verified sf=1.0+1.5. - **Prior stages**: S18 (v0.12.0, D28: 3-line tray tooltip; transparent contrast-boosted larger icons everywhere; Settings accent COLOR WHEEL; System/Light/Dark mode with OS detection; mt-bond BLEST tie-guard + ECF scheduling per the docs/research/ papers survey; UI changelog survey), S17 (v0.11.0, titlebar version + live speeds, logs floating jump buttons + autoscroll).",
+          "text": "- **Stage**: S19 IMPLEMENTED, gates green, v0.13.0 releasing — the six asks shipped: (1) server EDITING (Servers → per-card Edit button → full-window modal; mt-service ProfileDetails round-trip via profile_details/update_profile; ProfileStore::update replaces BY ID in place — id/position/active preserved, no dedupe on explicit edits; primitive + capability-regression validation; editing the active server logs \"reconnect to apply\"); (2) exit-IP while OFFLINE (exit_probe falls back to temp_link_for — a one-shot factory link through the active profile, same engine path as test_latency; ExitInfo.via_temp_tunnel → \"temporary probe tunnel\" chip); (3) SPEED TEST (Status card; rides the live session for the active profile else the temp tunnel; settings.speed_test_url default http://speed.cloudflare.com/__down?bytes=25000000; clock starts AFTER connect so engine spawn never pollutes the rate; 5 s stall / 30 s budget / 64 MiB caps; HTTP ≥400 rejected); (4) DIAGNOSTICS MODE (SettingsView.diagnostics; src/diagnostics.rs writes one redacted paste-ready <log_dir>/diagnostics-*.log — header + GUI LogLine tee + ALL tracing events via a hand-rolled process-global subscriber (the e2e PrintSubscriber pattern, no tracing-subscriber dep); engine log level forced debug while ON; redaction test-pinned; Settings card + Open log folder); (5) KILL SWITCH (SettingsView.kill_switch; give_up() is fail-CLOSED: system proxy → 127.0.0.1:9 via sysproxy::set (keep-first snapshot survives for the true restore); REVIEW FIX: the app BINDS port 9 itself while engaged (spawn_blackhole accept loop swallows ",
           "kind": "body"
         }
       ]
@@ -5727,6 +5808,122 @@
       "passages": [
         {
           "text": "# S1-REV-C (correctness/security) — agent-df58def3 APPROVE. 0 P0 / 2 P1 / 5 P2. Key: credential file perms (P1, fixed), on/off leniency (P1, fixed). parse_status probed adversarially via scratch crate in /tmp — no panics, UTF-8-safe, no regex blowup, CRLF fine.",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "report:s19-review-transcript",
+      "type": "report",
+      "title": "S19 code review discussion (v0.13.0)",
+      "tags": [
+        "agent-reports"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/agent-reports/s19-review-transcript.md",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "# S19 code review discussion (v0.13.0)",
+          "kind": "title"
+        },
+        {
+          "text": "Model: z-ai CLI strongest chat model (Copilot unavailable from sandbox — no account entitlement for PR review; models.github.ai proxy-blocked) Diff: 4888fec..14e3e79 (core 63.8 KB + GUI 60.3 KB chunks)",
+          "kind": "body"
+        },
+        {
+          "text": "---",
+          "kind": "body"
+        },
+        {
+          "text": "## Round 1 — service core",
+          "kind": "title"
+        },
+        {
+          "text": "## Summary of Changes This diff adds several significant features to the MultiTunnel service core: 1. Server editing functionality with profile details round-trip 2. Exit-IP probe through a temporary tunnel when disconnected 3. In-app speed test through the tunnel 4. Diagnostics mode with global logging 5. Kill switch functionality for fail-closed behavior",
+          "kind": "title"
+        },
+        {
+          "text": "Let's examine each area in detail.",
+          "kind": "body"
+        },
+        {
+          "text": "## Security Review",
+          "kind": "title"
+        },
+        {
+          "text": "### [major] Potential credential leakage in diagnostics header In `real_service.rs`, the `build_diag_header` method includes profile endpoints but correctly redacts sensitive fields. However, the `diagnostics.rs` module's `line` function appends all GUI log lines to the diagnostics file. While the header is redacted, any log line emitted by the application that might contain sensitive information (like connection errors with partial URLs) could be captured.",
+          "kind": "title"
+        },
+        {
+          "text": "**Recommendation**: Ensure all log messages are scrubbed of sensitive information before being passed to `diagnostics::line`.",
+          "kind": "body"
+        },
+        {
+          "text": "### [blocker] Kill switch black hole proxy could be manipulated The kill switch uses `127.0.0.1:9` as a black hole proxy, but this address could potentially be manipulated by a local attacker who could set up a service on that port to intercept traffic.",
+          "kind": "title"
+        },
+        {
+          "text": "**Recommendation**: Use a non-standard, high-numbered port that's unlikely to be used by other services, or implement a proper network namespace isolation for the kill switch behavior.",
+          "kind": "body"
+        },
+        {
+          "text": "## Correctness Review",
+          "kind": "title"
+        },
+        {
+          "text": "### [major] Race condition in diagnostics enable/disable The `diagnostics.rs` module uses a global static `SINK` protected by a `Mutex`. However, the `enable` and `disable` functions don't properly handle the case where multiple threads might try to enable/disable diagnostics simultaneously. The `AtomicBool` flag `ENABLED` is used for fast-path checks, but the file operations aren't atomic.",
+          "kind": "title"
+        },
+        {
+          "text": "**Recommendation**: Use a `tokio::sync::Mutex` instead of `std::sync::Mutex` to properly handle async operations and ensure thread safety.",
+          "kind": "body"
+        },
+        {
+          "text": "### [major] Potential deadlock in speed test In `real_service.rs`, the `speed_test` function uses `tokio::time::timeout` for the connection establishment, but then performs an unbounded read without any timeout after that. If the server stops sending data after the initial response, the test could hang indefinitely.",
+          "kind": "title"
+        },
+        {
+          "text": "**Recommendation**: Add a timeout for the entire download operation, not just the connection phase.",
+          "kind": "body"
+        },
+        {
+          "text": "### [minor] Memory usage in speed test The `speed_test` function reads data into a growing buffer without any size limits beyond the `SPEED_TEST_MAX_BYTES` constant. This could lead to high memory usage if the server sends more data than expected.",
+          "kind": "title"
+        },
+        {
+          "text": "**Recommendation**: Implement a fixed-size buffer with a sliding window approach to limit memory usage while still measuring throughput accurately.",
+          "kind": "body"
+        },
+        {
+          "text": "## Lifecycle Races",
+          "kind": "title"
+        },
+        {
+          "text": "### [major] Session state inconsistency in give_up The `give_up` function in `real_service.rs` has complex logic around the system proxy state. When the kill switch is enabled, it sets the proxy to the black hole but doesn't clear `sysproxy_set`. This could lead to inconsistent state if the disconnect sequence is interrupted.",
+          "kind": "title"
+        },
+        {
+          "text": "**Recommendation**: Ensure that the `sysproxy_set` flag accurately reflects the actual proxy state in all code paths.",
+          "kind": "body"
+        },
+        {
+          "text": "### [minor] Temporary link cleanup The `temp_link_for` function creates a temporary link for offline probes but doesn't have any explicit cleanup mechanism. While the engines are designed to die with the returned Arcs, there's no guarantee that this will happen in all error cases.",
+          "kind": "title"
+        },
+        {
+          "text": "**Recommendation**: Add explicit cleanup for temporary links in error cases, or ensure that the engine lifecycle is properly managed.",
+          "kind": "body"
+        },
+        {
+          "text": "## API Ergonomics",
+          "kind": "title"
+        },
+        {
+          "text": "### [minor] Profile update validation The `update_profile` function has good validation for required fields, but the error messages could be more specific. For example, the port validation just says \"port must be a number 0-65535\" without indicating which field failed validation.",
           "kind": "title"
         }
       ]
@@ -7318,7 +7515,7 @@
     {
       "id": "state:current",
       "type": "state",
-      "title": "STATE — current position (last update: S18 (tray tooltip/icon rework + color wheel + theme modes + research-driven scheduler refinements, v0.12.0)",
+      "title": "STATE — current position (last update: S19 (server editing + offline probes + speed test + diagnostics + kill switch, v0.13.0)",
       "tags": [
         "durable"
       ],
@@ -7330,19 +7527,19 @@
       ],
       "passages": [
         {
-          "text": "# STATE — rewritten at the end of every stage. Last update: S18 (tray tooltip/icon rework + color wheel + theme modes + research-driven scheduler refinements, v0.12.0)",
+          "text": "# STATE — rewritten at the end of every stage. Last update: S19 (server editing + offline probes + speed test + diagnostics + kill switch, v0.13.0)",
           "kind": "title"
         },
         {
-          "text": "## Current position - Stage: S18 IMPLEMENTED + all local gates green, releasing v0.12.0. - The user's six asks shipped (D28): (1) 3-line tray tooltip — `MultiTunnel v0.12.0` / `Total ↓x ↑y` / `↓x/s ↑y/s` (CRLF, ≤70 NIF_TIP units worst case); (2) ALL runtime icons (tray ICOs, window/taskbar logo_64, titlebar logo_24) transparent-background + hue-preserving contrast boost + tighter margin (0.08→0.04); (3) Settings accent COLOR WHEEL (256px HSV disc asset + inverse hit-test/marker math in theme.rs, live re-theme during drag, persist on release); (4) System/Light/Dark mode with OS detection (env seam → Windows AppsUseLightTheme → gsettings/gtk) re-polled every 5 s in System mode, legacy dark_mode kept as the forward-compat shadow; (5) docs/research/ bonding survey — BLEST tie-guard + ECF completion scheduling IMPLEMENTED in mt-bond (reconciled with S14: the guard only narrows the min-score tied set), redundant-mode/FEC/reinjection/delay-signal roadmap documented; (6) docs/research/ UI changelog survey (CVR/v2rayN/FlClash/Hiddify/ Speedify) with a prioritized adopt-next list. - 447/0 workspace tests; fmt/clippy host+windows-gnu; vendored iced 6/0; zigbuild PE32+ ×4 + ELF ×2; rig verified sf=1.0+1.5 (wheel pick purple→green end-to-end, mode buttons light↔dark, system env boot, emblem legibility both modes). - Sandbox recycled AGAIN before the stage (registry/rustup/zig/xkblibs gone, tools/zig tarball truncated): full D2 bootstrap re-run, env.sh rewritten; disk hit 100% twice — stale /tmp/my-project snapshots + mt-target/debug cleaned.",
+          "text": "## Current position - Stage: S19 IMPLEMENTED, all local gates green, review fixes in, releasing v0.13.0. - The user's six asks shipped: (1) SERVER EDITING — Servers tab per-card Edit button → full-window modal (name/remark/address/port/UUID + REALITY fields for reality profiles); mt-service ProfileDetails round-trip (profile_details → update_profile); ProfileStore::update replaces BY ID in place (id/position/active preserved, no dedupe on explicit edit); RealService validates primitives + a capability-regression check (an edit that would break a convertible profile is rejected with the reason). (2) EXIT IP WHILE OFFLINE — exit_probe prefers the live session, falls back to temp_link_for() (the same factory path test_latency uses); ExitInfo.via_temp_tunnel drives a \"temporary probe tunnel\" chip. (3) SPEED TEST — Status card; speed_test(None) rides the live session for the active profile (else the temp tunnel); downloads settings.speed_test_url (default http://speed.cloudflare.com/__down?bytes=25000000, plain-HTTP verified); clock starts after connect (engine spawn excluded); 5 s stall / 30 s budget / 64 MiB caps; ≥400 rejected. (4) DIAGNOSTICS MODE — src/diagnostics.rs: one redacted paste-ready <log_dir>/diagnostics-YYYYMMDD-HHMMSS.log (header + GUI LogLine tee + ALL tracing events via a hand-rolled global subscriber; engine level forced debug; UUID/pbk never written — test-pinned); Settings card with the path + \"Open log folder\".",
           "kind": "title"
         },
         {
-          "text": "## Next actions 1. Tag v0.12.0 → release.yml; watch the run; verify assets by download+unzip (PE32+ ×2 in zip, ELFs, README/QUICKSTART carried). 2. User-side Windows verification: 3-line hover tooltip, icon size/ transparency on light AND dark taskbars, wheel + System mode against the real OS theme flip (Settings → Personalization → Color). 3. Backlog candidates from the research docs when asked: redundant bond mode (calls), FEC parity frames, reinjection, per-link live status badges, exit-IP auto-refresh, empty states.",
+          "text": "## Next actions 1. Tag v0.13.0 → release.yml; watch the run; verify assets by download+unzip (PE32+ in zip, ELFs, README/QUICKSTART carried). 2. User-side Windows verification: Edit dialog against a real profile (save + reconnect-apply), speed test + offline exit IP against the real server, diagnostics file paste-readiness (turn on, connect, reproduce an issue, paste), kill switch behavior after killing the VM side. 3. Review PR #1: request Copilot from an entitled machine (`gh pr edit 1 --add-reviewer Copilot`) if the account gains a Copilot seat; otherwise close it after the release.",
           "kind": "title"
         },
         {
-          "text": "## Watch items (unchanged unless noted) - Disk: /tmp/mt-target release trees ~4.5G; clean debug trees after gate runs; the 100%-full rootfs manifests as linker \"signal 7\" or ENOSPC temp-dir panics (hit BOTH this stage). - Background processes DO NOT survive between sandbox tool calls — long builds must run in the foreground (setsid/nohup both reaped).",
+          "text": "## Watch items (unchanged unless noted) - Disk: 9.9G rootfs — the release zigbuild + debug trees TOGETHER do not fit; clean /tmp/mt-target/debug before release builds (hit ENOSPC + ld signal 7 twice this stage). Stage release binaries in ../download/v0.13.0-staging/ before wiping target trees. - Sandbox recycles cost: registry src/ wiped (rm -rf $CARGO_HOME/registry/src re-extracts), ziglang lib/std wiped (pip reinstall ziglang==0.14.1), zig symlink missing (recreate tools/zig/zig → pypkgs/ziglang/zig), /tmp/xkblibs re-extract + libxkbcommon-x11.so + libxcb-xkb1 symlinks, python-xlib pip install. - `z-ai chat --thinking` is BROKEN in the current CLI (instant exit 1) — plain mode works; VLM `z-ai vision` works. - rig coordinate discipline: derive control coords from a screenshot of the SAME scroll position before clicking (scroll-then-locate-then- click in separate runs); the app window is 1080x720 — clicks beyond x≈1080 land outside it.",
           "kind": "title"
         }
       ]
@@ -8066,6 +8263,12 @@
       "evidence": "subject stage label (s6-review)"
     },
     {
+      "src": "commit:fac1a42",
+      "dst": "ledger:s19",
+      "rel": "part_of",
+      "evidence": "subject stage label (s19)"
+    },
+    {
       "src": "commit:fe613ab",
       "dst": "ledger:s2-close",
       "rel": "part_of",
@@ -8636,6 +8839,12 @@
       "evidence": "2026-11-21T07:17Z | v0.12.0 RELEASED: push attempt-1 REJECTED by GitHub — PROJECT_MEMORY.md had crossed the 100 MB per-file hard limit (the update_memory.py self-embedding recursion: each ritual run committed its own previous section into the file, so the next diff contained it — 81 MB at S17 close → 134 MB after this session's two runs; detected via the LFS-error push message, NOTHING reached origin). FIX: update_memory.py now excludes PROJECT_MEMORY.md's own diff (pathspec :(exclude) + an elision note), local history rewritten pre-push (reset --soft to origin/main, regenerated the section → 77 KB, re-committed s18 + re-tagged v0.12.0 — the oversized blobs never left the sandbox and are now unreachable). Attempt-2 push OK → release run 44879546925 SUCCESS on the first try (no cold-cache stall this time) + ci 44879546922 running. Assets verified by download+unzip: multitunnel-v0.12.0-windows-x64.zip 6,430,469 B integrity OK (multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI + README v0.9–v0.12 section + QUICKSTART v0.12 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) and mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs."
     },
     {
+      "src": "ledger:s19",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
       "src": "ledger:s2",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -8944,6 +9153,12 @@
     {
       "src": "report:s1-rev-c",
       "dst": "ledger:s1",
+      "rel": "reports_on",
+      "evidence": "filename stage prefix"
+    },
+    {
+      "src": "report:s19-review-transcript",
+      "dst": "ledger:s19",
       "rel": "reports_on",
       "evidence": "filename stage prefix"
     },
