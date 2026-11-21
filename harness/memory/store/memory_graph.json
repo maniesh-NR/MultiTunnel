@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "001d4e0 2026-11-21T13:50:09Z",
+  "as_of": "702293b 2026-11-21T14:58:33Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 270,
-  "edge_count": 277,
+  "node_count": 273,
+  "edge_count": 279,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -536,6 +536,26 @@
       ]
     },
     {
+      "id": "commit:3da17ad",
+      "type": "commit",
+      "title": "backup(s19-review-fixes): 2026-11-21T13:51:08Z",
+      "tags": [
+        "2026-11-21"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "3da17ad"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s19-review-fixes): 2026-11-21T13:51:08Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:40ee65c",
       "type": "commit",
       "title": "backup(s5-pre-review): 2026-11-16T14:54:18Z",
@@ -1011,6 +1031,26 @@
       "passages": [
         {
           "text": "s16-close: v0.10.0 released and verified; LEDGER s16 (incl. runner-flake verdict + retry protocol), STATE rewrite, PM playbook, memory-graph task node",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:702293b",
+      "type": "commit",
+      "title": "s19: runner-flake hardening — mt-bond integration tests carrier_death_mid_stream + domain_targets_dial wrapped in hard deadlines (90 s / 60 s). Evidence: today's ubuntu CI leg failed on carrier_death (the same-commit PR + release runs green, local 466/0 repeatedly — the documented S17/S18 runner flake, third occurrence) and the rerun leg then WEDGED 54 minutes inside domain_targets_dial AFTER carrier_death passed (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 'running 6 tests', five ok, domain_targets 'over 60 seconds', cargo + integration orphan killed at cancel). A deadline converts the silent hourly hang into a loud one-minute failure with the LEDGER pointer in the message; zero behavior change to the code under test (bodies untouched inside the timeout wrapper). Local: mt-bond 32+6/0, clippy clean.",
+      "tags": [
+        "2026-11-21"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "702293b"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s19: runner-flake hardening — mt-bond integration tests carrier_death_mid_stream + domain_targets_dial wrapped in hard deadlines (90 s / 60 s). Evidence: today's ubuntu CI leg failed on carrier_death (the same-commit PR + release runs green, local 466/0 repeatedly — the documented S17/S18 runner flake, third occurrence) and the rerun leg then WEDGED 54 minutes inside domain_targets_dial AFTER carrier_death passed (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 'running 6 tests', five ok, domain_targets 'over 60 seconds', cargo + integration orphan killed at cancel). A deadline converts the silent hourly hang into a loud one-minute failure with the LEDGER pointer in the message; zero behavior change to the code under test (bodies untouched inside the timeout wrapper). Local: mt-bond 32+6/0, clippy clean.",
           "kind": "title"
         }
       ]
@@ -5513,6 +5553,26 @@
       ]
     },
     {
+      "id": "release:v0.13.0",
+      "type": "release",
+      "title": "Release v0.13.0 (tagged 3da17ad)",
+      "tags": [
+        "v0.13.0"
+      ],
+      "sources": [
+        {
+          "file": "git:tags/v0.13.0",
+          "anchor": "3da17ad"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Release v0.13.0: tag points at commit 3da17ad.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "release:v0.2.0",
       "type": "release",
       "title": "Release v0.2.0 (tagged 06881a6)",
@@ -7885,6 +7945,12 @@
       "evidence": "subject stage label (s2)"
     },
     {
+      "src": "commit:3da17ad",
+      "dst": "ledger:s19",
+      "rel": "part_of",
+      "evidence": "subject stage label (s19)"
+    },
+    {
       "src": "commit:40ee65c",
       "dst": "ledger:s5",
       "rel": "part_of",
@@ -9065,6 +9131,12 @@
       "dst": "commit:784569f",
       "rel": "built_from",
       "evidence": "git tag v0.12.0"
+    },
+    {
+      "src": "release:v0.13.0",
+      "dst": "commit:3da17ad",
+      "rel": "built_from",
+      "evidence": "git tag v0.13.0"
     },
     {
       "src": "release:v0.2.0",
