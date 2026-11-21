@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "9d4111b 2026-11-21T07:17:18Z",
+  "as_of": "7203362 2026-11-21T08:27:44Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 263,
-  "edge_count": 272,
+  "node_count": 264,
+  "edge_count": 273,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -971,6 +971,26 @@
       "passages": [
         {
           "text": "backup(s11-close-v0.7.0): 2026-11-19T13:38:15Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:7203362",
+      "type": "commit",
+      "title": "backup(s18-close-v0.12.0): 2026-11-21T08:27:44Z",
+      "tags": [
+        "2026-11-21"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "7203362"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s18-close-v0.12.0): 2026-11-21T08:27:44Z",
           "kind": "title"
         }
       ]
@@ -5218,7 +5238,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: S18 (v0.12.0) — implementation + local gates COMPLETE, release running. The six asks shipped (D28): 3-line tray tooltip (name+version / totals / speeds, CRLF), transparent-background contrast-boosted LARGER runtime icons (tray ICOs + logo_64 + logo_24), Settings accent COLOR WHEEL (HSV disc asset + inverse marker math, live re-theme, persist on release), System/Light/Dark mode (OS detection chain: MT_THEME_SYSTEM_DARK env seam → Win32 AppsUseLightTheme → gsettings/gtk; 5 s repoll; legacy dark_mode kept as the forward-compat shadow), mt-bond BLEST tie-guard + ECF completion scheduling (papers survey: docs/research/), UI changelog survey (docs/research/). 447/0 tests; rig verified sf=1.0+1.5. - **Prior stage**: S17 (v0.11.0, titlebar version + live speeds, logs floating jump buttons + autoscroll). The three asks shipped: release version next to the app name in the titlebar (workspace version inheritance — one-line release bumps; mt-app.exe PE metadata now carries the release version), live global ↓/↑ rates on the strip's right (the tray tooltip's same 1 s sample), Logs tab = fixed toolbar + dedicated viewport with floating top/bottom jump buttons (26px right stand-off — the rig caught the scrollbar grab-zone swallowing flush-corner clicks) + autoscroll toggle (default ON, follows the tail; re-enabling re-anchors). All 8 gates green; rig verified sf=1.0+1.5 (VLM content reads + pixel diffs); 433/0 tests.",
+          "text": "- **Stage**: IDLE — S18 CLOSED, v0.12.0 released and verified (release run 44879546925 first-try SUCCESS; the ci windows leg was a 69-min cold-cache cancel with same-commit green proof from the release's own build-windows — see LEDGER 08:30Z). The six asks shipped (D28): 3-line tray tooltip (name+version / totals / speeds, CRLF), transparent-background contrast-boosted LARGER runtime icons (tray ICOs + logo_64 + logo_24), Settings accent COLOR WHEEL (HSV disc asset + inverse marker math, live re-theme, persist on release), System/Light/Dark mode (OS detection chain: MT_THEME_SYSTEM_DARK env seam → Win32 AppsUseLightTheme → gsettings/gtk; 5 s repoll; legacy dark_mode kept as the forward-compat shadow), mt-bond BLEST tie-guard + ECF completion scheduling (papers survey: docs/research/), UI changelog survey (docs/research/). 447/0 tests; rig verified sf=1.0+1.5. - **Prior stages**: S18 (v0.12.0, D28: 3-line tray tooltip; transparent contrast-boosted larger icons everywhere; Settings accent COLOR WHEEL; System/Light/Dark mode with OS detection; mt-bond BLEST tie-guard + ECF scheduling per the docs/research/ papers survey; UI changelog survey), S17 (v0.11.0, titlebar version + live speeds, logs floating jump buttons + autoscroll).",
           "kind": "body"
         }
       ]
@@ -7760,6 +7780,12 @@
       "dst": "ledger:s11",
       "rel": "part_of",
       "evidence": "subject stage label (s11)"
+    },
+    {
+      "src": "commit:7203362",
+      "dst": "ledger:s18",
+      "rel": "part_of",
+      "evidence": "subject stage label (s18)"
     },
     {
       "src": "commit:723ec6e",
