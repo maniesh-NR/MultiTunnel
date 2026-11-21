@@ -56,8 +56,10 @@
 
 ## Active Playbook & Todo List
 
-- **Stage**: S19 IMPLEMENTED, gates green, v0.13.0 releasing — the six
-  asks shipped: (1) server EDITING (Servers → per-card Edit button →
+- **Stage**: S19 CLOSED — v0.13.0 released and verified (tag run
+  44910934439 SUCCESS ~7 min; CI all-green on the rerun after the
+  documented mt-bond runner-flake round — LEDGER 15:10Z). The six asks
+  shipped: (1) server EDITING (Servers → per-card Edit button →
   full-window modal; mt-service ProfileDetails round-trip via
   profile_details/update_profile; ProfileStore::update replaces BY ID in
   place — id/position/active preserved, no dedupe on explicit edits;
@@ -97,6 +99,16 @@
   machine. 466/0 tests (+19); rig verified sf=1.0+1.5 (VLM: 52.0 Mbps
   chips, offline exit-IP chip, modal fields, rename→save, Cancel +
   backdrop dismissal, both toggles).
+- **S19 CI lessons**: mt-bond carrier_death + domain_targets are
+  runner-only timing-flaky (GitHub I/O scheduling; local 2-core taskset
+  stress 0/8); BOTH now carry hard 60-90 s deadlines (a wedge fails in
+  a minute with a LEDGER pointer instead of hanging an hour — log
+  captured in harness/memory/agent-reports/s19-ci-wedge-*.log).
+  BACKLOG (top): root-cause the carrier-lifecycle race — 'no live bond
+  carrier' at half2 means usable() went EMPTY (Wi-Fi dead + LTE
+  momentarily !alive mid-death-replay) in PRE-EXISTING S11/S18
+  mt-bond code; investigate the death handler's replay path + the
+  alive-flag transitions on a runner-like environment.
 - **Prior stages**: S18 (v0.12.0, D28: 3-line tray tooltip; transparent
   contrast-boosted larger icons everywhere; Settings accent COLOR WHEEL;
   System/Light/Dark mode with OS detection; mt-bond BLEST tie-guard +
@@ -182,6 +194,138 @@ Every change closes only after ALL of these (CI runs them too):
 ## Recent Progress & Git Activity
 
 ```diff
+### Commit: 666bc16 - backup(s19-ci-hardening): 2026-11-21T14:58:33Z (Z User, 2026-11-21)
+diff --git a/harness/memory/store/memory_graph.json b/harness/memory/store/memory_graph.json
+index ae089af..14882ff 100644
+--- a/harness/memory/store/memory_graph.json
++++ b/harness/memory/store/memory_graph.json
+@@ -1,6 +1,6 @@
+ {
+   "schema_version": 1,
+-  "as_of": "001d4e0 2026-11-21T13:50:09Z",
++  "as_of": "702293b 2026-11-21T14:58:33Z",
+   "sources": [
+     "PROJECT_MEMORY.md",
+     "harness/memory/STATE.md",
+@@ -11,8 +11,8 @@
+     "git (tags + full log)",
+     "harness/memory/curated/"
+   ],
+-  "node_count": 270,
+-  "edge_count": 277,
++  "node_count": 273,
++  "edge_count": 279,
+   "nodes": [
+     {
+       "id": "bug:freedom-loopback-blackhole",
+@@ -535,6 +535,26 @@
+         }
+       ]
+     },
++    {
++      "id": "commit:3da17ad",
++      "type": "commit",
++      "title": "backup(s19-review-fixes): 2026-11-21T13:51:08Z",
++      "tags": [
++        "2026-11-21"
++      ],
++      "sources": [
++        {
++          "file": "git:log",
++          "anchor": "3da17ad"
++        }
++      ],
++      "passages": [
++        {
++          "text": "backup(s19-review-fixes): 2026-11-21T13:51:08Z",
++          "kind": "title"
++        }
++      ]
++    },
+     {
+       "id": "commit:40ee65c",
+       "type": "commit",
+@@ -1015,6 +1035,26 @@
+         }
+       ]
+     },
++    {
++      "id": "commit:702293b",
++      "type": "commit",
++      "title": "s19: runner-flake hardening — mt-bond integration tests carrier_death_mid_stream + domain_targets_dial wrapped in hard deadlines (90 s / 60 s). Evidence: today's ubuntu CI leg failed on carrier_death (the same-commit PR + release runs green, local 466/0 repeatedly — the documented S17/S18 runner flake, third occurrence) and the rerun leg then WEDGED 54 minutes inside domain_targets_dial AFTER carrier_death passed (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 'running 6 tests', five ok, domain_targets 'over 60 seconds', cargo + integration orphan killed at cancel). A deadline converts the silent hourly hang into a loud one-minute failure with the LEDGER pointer in the message; zero behavior change to the code under test (bodies untouched inside the timeout wrapper). Local: mt-bond 32+6/0, clippy clean.",
++      "tags": [
++        "2026-11-21"
++      ],
++      "sources": [
++        {
++          "file": "git:log",
++          "anchor": "702293b"
++        }
++      ],
++      "passages": [
++        {
++          "text": "s19: runner-flake hardening — mt-bond integration tests carrier_death_mid_stream + domain_targets_dial wrapped in hard deadlines (90 s / 60 s). Evidence: today's ubuntu CI leg failed on carrier_death (the same-commit PR + release runs green, local 466/0 repeatedly — the documented S17/S18 runner flake, third occurrence) and the rerun leg then WEDGED 54 minutes inside domain_targets_dial AFTER carrier_death passed (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 'running 6 tests', five ok, domain_targets 'over 60 seconds', cargo + integration orphan killed at cancel). A deadline converts the silent hourly hang into a loud one-minute failure with the LEDGER pointer in the message; zero behavior change to the code under test (bodies untouched inside the timeout wrapper). Local: mt-bond 32+6/0, clippy clean.",
++          "kind": "title"
++        }
++      ]
++    },
+     {
+       "id": "commit:7073762",
+       "type": "commit",
+@@ -5512,6 +5552,26 @@
+         }
+       ]
+     },
++    {
++      "id": "release:v0.13.0",
++      "type": "release",
++      "title": "Release v0.13.0 (tagged 3da17ad)",
++      "tags": [
++        "v0.13.0"
++      ],
++      "sources": [
++        {
++          "file": "git:tags/v0.13.0",
++          "anchor": "3da17ad"
++        }
++      ],
++      "passages": [
++        {
++          "text": "Release v0.13.0: tag points at commit 3da17ad.",
++          "kind": "body"
++        }
++      ]
++    },
+     {
+       "id": "release:v0.2.0",
+       "type": "release",
+@@ -7884,6 +7944,12 @@
+       "rel": "part_of",
+       "evidence": "subject stage label (s2)"
+     },
++    {
++      "src": "commit:3da17ad",
++      "dst": "ledger:s19",
++      "rel": "part_of",
++      "evidence": "subject stage label (s19)"
++    },
+     {
+       "src": "commit:40ee65c",
+       "dst": "ledger:s5",
+@@ -9066,6 +9132,12 @@
+       "rel": "built_from",
+       "evidence": "git tag v0.12.0"
+     },
++    {
++      "src": "release:v0.13.0",
++      "dst": "commit:3da17ad",
++      "rel": "built_from",
++      "evidence": "git tag v0.13.0"
++    },
+     {
+       "src": "release:v0.2.0",
+       "dst": "commit:06881a6",
+
 ### Commit: 702293b - s19: runner-flake hardening — mt-bond integration tests carrier_death_mid_stream + domain_targets_dial wrapped in hard deadlines (90 s / 60 s). Evidence: today's ubuntu CI leg failed on carrier_death (the same-commit PR + release runs green, local 466/0 repeatedly — the documented S17/S18 runner flake, third occurrence) and the rerun leg then WEDGED 54 minutes inside domain_targets_dial AFTER carrier_death passed (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 'running 6 tests', five ok, domain_targets 'over 60 seconds', cargo + integration orphan killed at cancel). A deadline converts the silent hourly hang into a loud one-minute failure with the LEDGER pointer in the message; zero behavior change to the code under test (bodies untouched inside the timeout wrapper). Local: mt-bond 32+6/0, clippy clean. (Z User, 2026-11-21)
 diff --git a/crates/mt-bond/tests/integration.rs b/crates/mt-bond/tests/integration.rs
 index f823e4b..31f0513 100755
@@ -1648,324 +1792,6 @@ index 829d397..ae089af 100644
      {
        "src": "report:s2-rev-b",
        "dst": "ledger:s2",
-
-### Commit: 001d4e0 - s19 review fixes: black-hole port OWNED while engaged, KILL SWITCH banner, edit-failure logging, chained diag-path refresh — (1) [blocker fix] the kill switch now BINDS 127.0.0.1:9 itself while engaged (spawn_blackhole accept loop swallows every connection) so a local process cannot pre-bind the black-hole port and turn it into its own proxy; bind failure falls back to the documented dead-port semantics (still fail-closed; Linux dev hosts without CAP_NET_BIND_SERVICE take the fallback); stop_blackhole wired into every proxy-restore path (both disconnect branches, the toggle-off escape hatch, connect step-0 self-heal) + owns/releases verified by test; (2) [major fix] Status shows a 'KILL SWITCH ACTIVE — traffic is blocked' error-container banner exactly when kill_switch && Failed (pure gate kill_switch_banner_visible, unit-tested) — the give_up state was previously only visible in the Logs tab; (3) [minor fix] a failed server edit ALSO lands in the Logs tab ('WARN server edit failed: …') — the dialog error was easy to dismiss and lose; (4) [minor fix] DiagnosticsToggled chains save→then(path refresh) instead of a batch (the batch could observe the pre-toggle path); (5) review findings assessed as non-issues (documented in the transcript): the speed-test 'race' (guard exists at handler entry), 'unbounded read' (per-read 5s stall + 30s budget + 64MiB cap), 'memory growth' (bytes counted, never accumulated), diagnostics mutex 'race' (no await under the lock), chunked-encoding skew (we measure received wire bytes; framing overhead ~1e-4), update_profile field coverage (non-edited fields cannot change — the capability check covers the result). Review transcript: /tmp/s19-review-transcript.md (3-round discussion; Copilot channels unavailable — no account entitlement, models.github.ai proxy-blocked; z-ai strongest model used per the fallback instruction). TESTS: 466/0 (+3); gates fmt/clippy host+windows-gnu clean; rig: Edit modal open/cancel re-verified after the changes (nonwhite 1.000→0.949 pattern + VLM field read) (Z User, 2026-11-21)
-diff --git a/crates/mt-app/src/app.rs b/crates/mt-app/src/app.rs
-index fc23329..4cb0442 100755
---- a/crates/mt-app/src/app.rs
-+++ b/crates/mt-app/src/app.rs
-@@ -642,6 +642,13 @@ pub fn app_version() -> &'static str {
-     env!("CARGO_PKG_VERSION")
- }
- 
-+/// S19 (review fix): should the Status screen show the KILL SWITCH banner?
-+/// Pure gate (unit-tested): the switch is armed AND the tunnel FAILED —
-+/// the give_up path engages the black hole exactly in that state.
-+pub fn kill_switch_banner_visible(state: ServiceState, kill_switch: bool) -> bool {
-+    kill_switch && state == ServiceState::Failed
-+}
-+
- impl App {
-     /// Bare constructor with empty state (service loads fill it).
-     pub fn new(service: Arc<dyn MtService>, flags: Flags) -> Self {
-@@ -1682,6 +1689,9 @@ impl App {
-                     return self.load_profiles();
-                 }
-                 Err(e) => {
-+                    // Review fix: surface the failure in the Logs tab too —
-+                    // the dialog error is easy to dismiss and lose.
-+                    util::push_log(&mut self.logs, format!("WARN  server edit failed: {e}"));
-                     if let Some(d) = self.edit.as_mut() {
-                         d.saving = false;
-                         d.error = Some(e);
-@@ -1713,10 +1723,17 @@ impl App {
-             }
-             Message::DiagnosticsToggled(v) => {
-                 self.settings.diagnostics = v;
-+                // Review fix: CHAIN the path refresh after the save — a
-+                // batch could observe the pre-toggle path (stale caption).
-                 let save = self.save_settings(self.settings.clone());
--                // The service creates/closes the file during the save;
--                // refresh the displayed path right after.
--                return iced::Task::batch([save, self.fetch_diag_path()]);
-+                let svc = Arc::clone(&self.service);
-+                return save.then(move |_| {
-+                    let svc = Arc::clone(&svc);
-+                    iced::Task::perform(
-+                        async move { svc.diagnostics_path().await },
-+                        Message::DiagPath,
-+                    )
-+                });
-             }
-             Message::DiagPath(p) => self.diag_path = p,
-             Message::OpenLogsFolder => {
-@@ -3274,4 +3291,39 @@ mod tests {
-         drop(app.update(Message::DiagPath(Some("/tmp/x.log".into()))));
-         assert_eq!(app.diag_path.as_deref(), Some("/tmp/x.log"));
-     }
-+
-+    /// S19 (review fix): the KILL SWITCH banner gate — visible exactly
-+    /// when the switch is armed AND the tunnel FAILED (the give_up state).
-+    #[test]
-+    fn kill_switch_banner_gate() {
-+        use mt_service::ServiceState as St;
-+        assert!(crate::app::kill_switch_banner_visible(St::Failed, true));
-+        assert!(!crate::app::kill_switch_banner_visible(St::Failed, false));
-+        assert!(!crate::app::kill_switch_banner_visible(St::Connected, true));
-+        assert!(!crate::app::kill_switch_banner_visible(
-+            St::Disconnected,
-+            true
-+        ));
-+        assert!(!crate::app::kill_switch_banner_visible(
-+            St::Connecting,
-+            true
-+        ));
-+    }
-+
-+    /// S19 (review fix): a failed server edit ALSO lands in the Logs tab.
-+    #[cfg(feature = "mock")]
-+    #[tokio::test]
-+    async fn edit_save_failure_is_logged() {
-+        let service = Arc::new(crate::mock::MockService::new());
-+        let mut app = App::init_async(service, Flags::default()).await;
-+        let id = app.profiles[0].id.clone();
-+        let details = app.service.profile_details(&id).await.expect("details");
-+        drop(app.update(Message::EditLoaded(id, Ok(details))));
-+        drop(app.update(Message::EditSaved(Err("boom".into()))));
-+        assert!(app
-+            .logs
-+            .iter()
-+            .any(|l| l.contains("server edit failed: boom")));
-+        assert!(app.edit.is_some(), "dialog stays open with the error");
-+    }
- }
-diff --git a/crates/mt-app/src/screens.rs b/crates/mt-app/src/screens.rs
-index f967f77..1a2d355 100755
---- a/crates/mt-app/src/screens.rs
-+++ b/crates/mt-app/src/screens.rs
-@@ -802,6 +802,32 @@ pub fn status(app: &App) -> Element<'_> {
- 
-     // --- ONE page scrollable below the frame (S13) ---------------------
-     let mut below = column![].spacing(12).width(Length::Fill);
-+    // S19 (review fix): a KILL SWITCH banner when the tunnel FAILED with
-+    // the switch armed — the state give_up() leaves the machine in.
-+    if crate::app::kill_switch_banner_visible(
-+        snap.as_ref()
-+            .map_or(ServiceState::Disconnected, |s| s.state),
-+        app.settings.kill_switch,
-+    ) {
-+        below = below.push(
-+            container(
-+                column![
-+                    text("KILL SWITCH ACTIVE — traffic is blocked")
-+                        .size(ts.title_s.size)
-+                        .color(s.on_error_container),
-+                    text(
-+                        "the tunnel died on its own, so system traffic is being blocked \n                         (fail-closed) instead of leaking outside the tunnel. Connect again \n                         to resume, or turn the kill switch off in Settings → Network.",
-+                    )
-+                    .size(ts.body_s.size)
-+                    .color(s.on_error_container),
-+                ]
-+                .spacing(4),
-+            )
-+            .padding(14)
-+            .style(t3::card(s, s.error_container))
-+            .width(Length::Fill),
-+        );
-+    }
-     below = below.push(exit_card);
-     below = below.push(speed_card);
-     below = below.push(bottom_card);
-diff --git a/src/real_service.rs b/src/real_service.rs
-index 4e42ff5..65e2703 100755
---- a/src/real_service.rs
-+++ b/src/real_service.rs
-@@ -166,8 +166,15 @@ const SPEED_TEST_STALL: Duration = Duration::from_secs(5);
- /// pointed here, WinINET consumers get instant connection-refused
- /// instead of silently going DIRECT after a spontaneous tunnel death
- /// (fail-closed). Reuses `sysproxy::set` so the ORIGINAL pre-tunnel
--/// snapshot stays intact for the eventual restore.
-+/// snapshot stays intact for the eventual restore. While engaged the
-+/// app also BINDS the port (see [`spawn_blackhole`]) so a local process
-+/// cannot pre-bind it and turn the black hole into its own proxy.
- const KILL_SWITCH_BLACKHOLE_PROXY: &str = "127.0.0.1:9";
-+/// S19 (review fix): the port [`KILL_SWITCH_BLACKHOLE_PROXY`] names.
-+/// Windows does not reserve ports < 1024 for admins, so an unprivileged
-+/// app can own it; on hosts where the bind fails the dead-port semantics
-+/// (instant connection-refused) still hold.
-+const KILL_SWITCH_BLACKHOLE_PORT: u16 = 9;
- 
- /// Filesystem locations the service works with (injected in tests).
- #[derive(Debug, Clone)]
-@@ -762,6 +769,11 @@ struct Core {
-     /// Per-link `(up, down)` byte totals accrued from `ConnClosed` events.
-     bytes: Mutex<HashMap<String, (u64, u64)>>,
-     sysproxy_set: AtomicBool,
-+    /// S19 (review fix): the kill switch's black-hole listener — while
-+    /// engaged we OWN [`KILL_SWITCH_BLACKHOLE_PORT`] so a local process
-+    /// cannot pre-bind it and turn the black hole into its own proxy.
-+    /// Accept loop drops every connection; the watch sender stops it.
-+    blackhole: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
-     disconnect_requested: AtomicBool,
-     restarts: AtomicU32,
- }
-@@ -855,6 +867,7 @@ impl RealService {
-                 session: Mutex::new(None),
-                 bytes: Mutex::new(HashMap::new()),
-                 sysproxy_set: AtomicBool::new(false),
-+                blackhole: Mutex::new(None),
-                 disconnect_requested: AtomicBool::new(false),
-                 restarts: AtomicU32::new(0),
-             }),
-@@ -903,8 +916,10 @@ impl RealService {
-         // 0. Stale sysproxy self-heal (v0.2 connect step 0 / D5,
-         //    S6-REV-C P1-3b): a previous run that died without disconnecting
-         //    may have left the registry pointing at a dead local listener.
--        //    Best-effort — a failure never blocks connecting.
-+        //    Best-effort — a failure never blocks connecting. This also
-+        //    clears any KILL SWITCH black-hole from a previous session.
-         let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
-+        stop_blackhole(&self.core);
- 
-         let settings = SettingsFile::load(&self.core.paths.settings_file());
-         // S9: refresh the engine log level BEFORE links are built.
-@@ -1266,6 +1281,56 @@ async fn pump(
-     }
- }
- 
-+/// S19 (review fix): bind + OWN the black-hole port while the kill
-+/// switch is engaged. The accept loop drops every connection the moment
-+/// it lands — nothing legible ever flows. A bind failure is non-fatal:
-+/// the unbound port still refuses connections (dead-port semantics, still
-+/// fail-closed); only the local pre-bind guarantee is lost. On Windows an
-+/// unprivileged process may bind port 9; dev hosts without that right
-+/// simply take the fallback.
-+async fn spawn_blackhole(core: &Core) {
-+    let addr = SocketAddr::from(([127, 0, 0, 1], KILL_SWITCH_BLACKHOLE_PORT));
-+    let listener = match tokio::net::TcpListener::bind(addr).await {
-+        Ok(l) => l,
-+        Err(e) => {
-+            tracing::warn!(
-+                "kill switch: could not own the black-hole port {addr} ({e}) \
-+                 — dead-port fallback (still fail-closed)"
-+            );
-+            return;
-+        }
-+    };
-+    let (tx, mut rx) = tokio::sync::watch::channel(false);
-+    tokio::spawn(async move {
-+        loop {
-+            tokio::select! {
-+                changed = rx.changed() => {
-+                    if changed.is_err() || *rx.borrow() {
-+                        break;
-+                    }
-+                }
-+                accepted = listener.accept() => {
-+                    if accepted.is_err() {
-+                        break;
-+                    }
-+                    // The accepted socket drops here BY DESIGN — the
-+                    // connection is swallowed, never read, never answered.
-+                }
-+            }
-+        }
-+    });
-+    *lock(&core.blackhole) = Some(tx);
-+}
-+
-+/// S19 (review fix): stop the black-hole listener (every proxy-restore
-+/// path: explicit disconnect, the kill-switch toggle-off escape hatch,
-+/// and the connect step-0 self-heal).
-+fn stop_blackhole(core: &Core) {
-+    if let Some(tx) = lock(&core.blackhole).take() {
-+        let _ = tx.send(true);
-+    }
-+}
-+
- /// D5 fail-open give-up (v0.2 supervisor semantics for restart exhaustion):
- /// retire the session, mark `Failed`, and stop the server. The system
- /// proxy hand-off depends on the S19 kill switch:
-@@ -1301,6 +1366,10 @@ async fn give_up(core: &Core, shutdown: &tokio::sync::watch::Sender<bool>) {
-                 &core.paths.state_dir,
-             ) {
-                 Ok(()) => {
-+                    // Review fix: OWN the port so a local process cannot
-+                    // pre-bind it and turn the black hole into a proxy of
-+                    // its own (the accept loop swallows connections).
-+                    spawn_blackhole(core).await;
-                     core.emit(ServiceEvent::LogLine(
-                         "KILL SWITCH engaged: the tunnel died on its own — system traffic is \
-                          now BLOCKED (fail-closed) instead of leaking direct. Connect again \
-@@ -1548,6 +1617,7 @@ impl MtService for RealService {
-                 if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
-                     tracing::warn!("system proxy restore failed: {e}");
-                 }
-+                stop_blackhole(&self.core);
-                 self.core
-                     .emit(ServiceEvent::LogLine("system proxy restored".into()));
-             }
-@@ -1565,6 +1635,7 @@ impl MtService for RealService {
-             if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
-                 tracing::warn!("system proxy restore failed: {e}");
-             }
-+            stop_blackhole(&self.core);
-         }
-         self.core.bytes_reset();
-         self.core.set_state(ServiceState::Disconnected);
-@@ -1789,6 +1860,7 @@ impl MtService for RealService {
-             && self.core.sysproxy_set.swap(false, Ordering::SeqCst)
-         {
-             let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
-+            stop_blackhole(&self.core);
-             self.core.emit(ServiceEvent::LogLine(
-                 "kill switch disabled — system proxy restored".into(),
-             ));
-@@ -3027,6 +3099,44 @@ mod tests {
-         assert!(saw_restore, "the restore is announced in the GUI log");
-     }
- 
-+    /// S19 (review fix): spawn_blackhole OWNS the port while engaged (a
-+    /// local process cannot pre-bind it) and stop_blackhole releases it —
-+    /// the accept loop swallows connections (an open TCP dial to it lands
-+    /// and closes immediately instead of being answered by anyone else).
-+    /// On hosts where binding port 9 is not permitted the spawn is a
-+    /// documented no-op fallback (dev/linux root-only port).
-+    #[tokio::test]
-+    async fn blackhole_listener_owns_and_releases_the_port() {
-+        let exit = spawn_exit_echo("127.0.0.1").await;
-+        let paths = scratch("blackhole");
-+        write_settings(&paths, exit.port(), false);
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(FakeFactory {
-+                echo: exit,
-+                fail: false,
-+            }),
-+        );
-+        // Engage.
-+        spawn_blackhole(&svc.core).await;
-+        let guard_taken = svc.core.blackhole.lock().unwrap().is_some();
-+        if guard_taken {
-+            // The port answers to US: a connect lands (accepted + dropped).
-+            let dial = tokio::net::TcpStream::connect("127.0.0.1:9").await;
-+            assert!(dial.is_ok(), "our own listener owns the port");
-+            // Release: the next connect is refused again.
-+            stop_blackhole(&svc.core);
-+            tokio::time::sleep(Duration::from_millis(150)).await;
-+            let refused = tokio::net::TcpStream::connect("127.0.0.1:9").await;
-+            assert!(refused.is_err(), "port released after stop");
-+        } else {
-+            // Documented fallback host (e.g. Linux without CAP_NET_BIND_SERVICE):
-+            // dead-port semantics — nothing listens, connects are refused.
-+            let refused = tokio::net::TcpStream::connect("127.0.0.1:9").await;
-+            assert!(refused.is_err(), "fallback keeps the port dead");
-+        }
-+    }
-+
-     #[tokio::test]
-     async fn stream_bond_mode_connects_and_carries_traffic() {
-         let (daemon, _guard) = spawn_merge_daemon().await;
 
 ( PROJECT_MEMORY.md's own diff is elided here — the durable
   sections above are hand-maintained; see harness/memory/LEDGER.md
