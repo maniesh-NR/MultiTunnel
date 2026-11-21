@@ -78,6 +78,8 @@ impl MockService {
         let settings = SettingsView {
             theme_seed: 0x6750A4,
             dark_mode: false,
+            // S18: follow the OS (mirrors the service default).
+            theme_mode: "system".to_string(),
             system_proxy: false,
             // D23: mirror the service default (balanced — live byte-load
             // spreading; round-robin's connection-count evenness let one
@@ -653,8 +655,8 @@ impl MtService for MockService {
         self.log(
             "INFO",
             &format!(
-                "settings saved (seed {}, dark {})",
-                settings.theme_seed, settings.dark_mode
+                "settings saved (seed {}, mode {})",
+                settings.theme_seed, settings.theme_mode
             ),
         );
         Ok(())
@@ -811,10 +813,10 @@ mod tests {
         let svc = MockService::new();
         let mut s = svc.settings().await;
         s.theme_seed = 0x4285F4;
-        s.dark_mode = true;
+        s.theme_mode = "dark".to_string();
         svc.set_settings(s).await.expect("save ok");
         let s2 = svc.settings().await;
-        assert!(s2.dark_mode);
+        assert_eq!(s2.theme_mode, "dark");
         assert_eq!(s2.theme_seed, 0x4285F4);
 
         let rules = svc.routing_rules().await;

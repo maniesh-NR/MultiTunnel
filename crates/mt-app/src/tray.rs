@@ -166,8 +166,21 @@ pub fn action_for_id(ids: &[(u16, QuickAction)], id: u16) -> Option<QuickAction>
     ids.iter().find(|(i, _)| *i == id).map(|(_, a)| a.clone())
 }
 
+/// The release version carried in tray tooltips (workspace-inherited —
+/// the same number the titlebar shows and the release zip carries).
+fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Line separator inside NIF_TIP tooltips: Windows' tooltip control
+/// breaks lines on CR/LF (the classic SpeedFan/qBittorrent multi-line
+/// tray tooltips). Counted against the 128-unit budget by the tests.
+const TIP_EOL: &str = "\r\n";
+
 /// Tray tooltip (NIF_TIP caps at 128 UTF-16 units incl. NUL; the caller
 /// may pass any string — the FFI side truncates safely).
+///
+/// S18 format: line 1 = app name + version, line 2 = the state word.
 pub fn tooltip(state: ServiceState, active_tag: &str) -> String {
     let word = match state {
         ServiceState::Connected => "connected",
@@ -176,23 +189,27 @@ pub fn tooltip(state: ServiceState, active_tag: &str) -> String {
         ServiceState::Disconnected => "disconnected",
     };
     if active_tag.is_empty() {
-        format!("MultiTunnel — {word}")
+        format!("MultiTunnel v{}{TIP_EOL}{word}", app_version())
     } else {
-        format!("MultiTunnel — {word} [{active_tag}]")
+        format!(
+            "MultiTunnel v{}{TIP_EOL}{word} [{active_tag}]",
+            app_version()
+        )
     }
 }
 
-/// S16: the hover tooltip while CONNECTED — live speeds + session totals
-/// (the user's ask: "current upload/download speed and the total
-/// upload/download volume so far"). Single line, well under the 128-unit
-/// NIF_TIP cap even with TB-scale numbers (≈70 units worst case).
+/// S18: the hover tooltip while CONNECTED — the user's exact 3-line ask:
+/// line 1 the app name with the version, line 2 the total transferred
+/// volume, line 3 the current download/upload speed. Well under the
+/// 128-unit NIF_TIP cap even with TB-scale numbers (≈70 units worst case).
 pub fn tooltip_live(up_bps: u64, down_bps: u64, total_up: u64, total_down: u64) -> String {
     format!(
-        "MultiTunnel — ↓{} ↑{} • Σ↓{} ↑{}",
-        crate::util::fmt_bps(down_bps),
-        crate::util::fmt_bps(up_bps),
+        "MultiTunnel v{}{TIP_EOL}Total ↓{} ↑{}{TIP_EOL}↓{} ↑{}",
+        app_version(),
         crate::util::fmt_bytes(total_down),
         crate::util::fmt_bytes(total_up),
+        crate::util::fmt_bps(down_bps),
+        crate::util::fmt_bps(up_bps),
     )
 }
 
@@ -511,24 +528,43 @@ mod tests {
 
     #[test]
     fn tooltip_states() {
+        let v = env!("CARGO_PKG_VERSION");
         assert_eq!(
             tooltip(ServiceState::Connected, "VM-1"),
-            "MultiTunnel — connected [VM-1]"
+            format!("MultiTunnel v{v}\r\nconnected [VM-1]")
         );
         assert_eq!(
             tooltip(ServiceState::Disconnected, ""),
-            "MultiTunnel — disconnected"
+            format!("MultiTunnel v{v}\r\ndisconnected")
         );
         assert_eq!(
             tooltip(ServiceState::Connecting, ""),
-            "MultiTunnel — connecting…"
+            format!("MultiTunnel v{v}\r\nconnecting…")
         );
+        // Every state stays inside the 128-unit NIF_TIP budget.
+        for (st, tag) in [
+            (ServiceState::Connected, "a-very-long-profile-tag-name"),
+            (ServiceState::Failed, ""),
+        ] {
+            let tip = tooltip(st, tag);
+            assert!(tip.encode_utf16().count() < 128, "tip: {tip:?}");
+        }
     }
 
     #[test]
     fn tooltip_live_formats_speeds_and_totals() {
+        let v = env!("CARGO_PKG_VERSION");
         let tip = tooltip_live(1_234_567, 9_876_543, 45_000_000, 3_200_000_000);
-        assert_eq!(tip, "MultiTunnel — ↓9.4 MB/s ↑1.2 MB/s • Σ↓3.0 GB ↑42.9 MB");
+        assert_eq!(
+            tip,
+            format!("MultiTunnel v{v}\r\nTotal ↓3.0 GB ↑42.9 MB\r\n↓9.4 MB/s ↑1.2 MB/s")
+        );
+        // The user's exact 3-line shape: name+version / totals / speeds.
+        let lines: Vec<&str> = tip.split("\r\n").collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("MultiTunnel v"));
+        assert!(lines[1].starts_with("Total ↓"));
+        assert!(lines[2].starts_with("↓") && lines[2].ends_with("/s"));
         // Always inside the 128-unit NIF_TIP budget (127 + NUL).
         let worst = tooltip_live(u64::MAX / 8, u64::MAX / 8, u64::MAX, u64::MAX);
         assert!(worst.encode_utf16().count() < 128, "tip: {worst}");

@@ -361,6 +361,39 @@ def desaturate(img, lo=64, hi=216):
     return (w, h, bytes(out))
 
 
+def contrast_boost(img, lo=56, hi=240):
+    """S18: HUE-PRESERVING luminance contrast boost for the transparent
+    tray/taskbar icons. The source emblem is pale pastel (median luminance
+    ≈200/255, nothing darker than ≈146) — fine on the logo's own canvas,
+    near-invisible on a light taskbar once the background is keyed out.
+
+    Each opaque pixel's luminance is remapped through a percentile-
+    normalized curve onto [lo, hi] (like `desaturate`, but the RGB channels
+    are scaled by the luminance ratio, so hue and relative chroma survive).
+    Alpha is untouched."""
+    w, h, buf = img
+    out = bytearray(buf)
+    lums = []
+    for i in range(w * h):
+        o = i * 4
+        if buf[o + 3] > 0:
+            lums.append(0.299 * buf[o] + 0.587 * buf[o + 1] + 0.114 * buf[o + 2])
+    if not lums:
+        return img
+    lums.sort()
+    p2, p98 = lums[len(lums) // 50], lums[49 * len(lums) // 50]
+    span = max(p98 - p2, 1e-6)
+    for i in range(w * h):
+        o = i * 4
+        if buf[o + 3] > 0:
+            lum = 0.299 * buf[o] + 0.587 * buf[o + 1] + 0.114 * buf[o + 2]
+            target = lo + (min(max(lum, p2), p98) - p2) * (hi - lo) / span
+            scale = max(target / max(lum, 1.0), 0.0)
+            for c in range(3):
+                out[o + c] = int(round(min(255.0, buf[o + c] * scale)))
+    return (w, h, bytes(out))
+
+
 def composite_on(img, size_wh, bg, margin=0.14):
     """Alpha-composite a transparent RGBA raster centered on a solid
     `bg` canvas of size_wh (w, h), with a symmetric margin."""
@@ -500,18 +533,23 @@ def main() -> int:
     opaque = sum(1 for i in range(len(emblem_t[2])) if i % 4 == 3 and emblem_t[2][i] > 0)
     print(f"transparent emblem: {opaque} opaque px of {emblem_t[0]*emblem_t[1]}")
 
-    # titlebar emblem: TRANSPARENT background (S16 ask), padded to a square
-    # so the mark stays centered at 20x20 draw size.
-    sq24 = square_on_bg(emblem_t, 24, (0, 0, 0, 0))
+    # S18: titlebar emblem: TRANSPARENT background with a contrast boost
+    # (the pale pastel mark would wash out on LIGHT titlebars — light mode
+    # shipped the same day), tight margin so the mark fills more of the
+    # 24px tile (0.08 → 0.04: the glyph grows ~8%).
+    emblem_boosted = contrast_boost(emblem_t)
+    sq24 = square_on_bg(emblem_boosted, 24, (0, 0, 0, 0), margin=0.04)
     with open(os.path.join(outdir, "logo_24.rgba"), "wb") as f:
         f.write(sq24[2])
-    print(f"logo_24.rgba: {len(sq24[2])} bytes (24x24, transparent bg)")
+    print(f"logo_24.rgba: {len(sq24[2])} bytes (24x24, transparent bg, contrast-boosted)")
 
-    # window icon: colored square on the logo's own canvas (unchanged look)
-    sq64 = square_on_bg(emblem_img, 64, bg)
+    # S18: window/taskbar icon: TRANSPARENT background + the same boost
+    # (was the emblem on the opaque canvas color — a hard tile in the
+    # taskbar). Tight margin, same as the tray entries.
+    sq64 = square_on_bg(emblem_boosted, 64, (0, 0, 0, 0), margin=0.04)
     with open(os.path.join(outdir, "logo_64.rgba"), "wb") as f:
         f.write(sq64[2])
-    print(f"logo_64.rgba: {len(sq64[2])} bytes (64x64)")
+    print(f"logo_64.rgba: {len(sq64[2])} bytes (64x64, transparent bg, contrast-boosted)")
 
     # transparent lockup (PNG) — README + compositing source
     png = encode_png(lockup_t)
@@ -526,23 +564,40 @@ def main() -> int:
         f.write(banner_png)
     print(f"banner.png: {len(banner_png)} bytes (1280x360)")
 
-    # tray icon (connected): 16/32/48 emblem squares + 256 full lockup
+    # S18 tray icon (connected): CLEAR (transparent) background + contrast
+    # boost + tighter margin (0.08 → 0.04) so the mark is larger and reads
+    # on light AND dark taskbars. 16/32/48 = boosted emblem; 256 = the full
+    # lockup, transparent (was the opaque canvas tile).
+    lockup_boosted = contrast_boost(lockup_t)
     entries = []
     for size in (16, 32, 48, 256):
-        sq = square_on_bg(emblem_img if size < 64 else lockup_img, size, bg)
+        src = emblem_boosted if size < 64 else lockup_boosted
+        sq = square_on_bg(src, size, (0, 0, 0, 0), margin=0.04 if size < 64 else 0.10)
         entries.append((size, ico_image(sq)))
     n = write_ico(os.path.join(outdir, "icon.ico"), entries)
-    print(f"icon.ico: {n} bytes (16/32/48 emblem + 256 lockup, BMP entries)")
+    print(
+        f"icon.ico: {n} bytes (16/32/48 boosted emblem + 256 lockup, "
+        "transparent, BMP entries)"
+    )
 
-    # tray icon (not connected): monochrome + transparent (S16)
+    # S18 tray icon (not connected): monochrome + transparent, the same
+    # tighter margin (0.08 → 0.04).
     mono_emblem = desaturate(emblem_t)
     mono_lockup = desaturate(lockup_t)
     entries = []
     for size in (16, 32, 48, 256):
-        sq = square_on_bg(mono_emblem if size < 64 else mono_lockup, size, (0, 0, 0, 0))
+        sq = square_on_bg(
+            mono_emblem if size < 64 else mono_lockup,
+            size,
+            (0, 0, 0, 0),
+            margin=0.04 if size < 64 else 0.10,
+        )
         entries.append((size, ico_image(sq)))
     n = write_ico(os.path.join(outdir, "icon_mono.ico"), entries)
-    print(f"icon_mono.ico: {n} bytes (16/32/48 emblem + 256 lockup, mono)")
+    print(
+        f"icon_mono.ico: {n} bytes (16/32/48 emblem + 256 lockup, mono, "
+        "transparent, tighter margin)"
+    )
     return 0
 
 

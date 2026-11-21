@@ -15,7 +15,9 @@
 //!   switches, text fields, cards on tonal surfaces; all styling derived from
 //!   [`mt_m3`] tokens (colors, type scale, shape radii, state layers).
 //! * Live re-theme: the whole palette is re-derived from
-//!   `SettingsView::theme_seed` (+ `dark_mode`) on every change.
+//!   `SettingsView::theme_seed` (+ the S18 appearance mode —
+//!   system/light/dark, `System` resolving through the OS preference) on
+//!   every change.
 //! * Screens: Status (state card, connect switch, links with latency chips,
 //!   throughput), Servers (add-by-paste with parse preview via
 //!   [`mt_links::parse_share_link`], set active, latency test, delete,

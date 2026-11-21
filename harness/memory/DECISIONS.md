@@ -435,3 +435,80 @@ on tray right-click.
    ride TrayEvent → existing Message paths (ConnectToggle/SetActive) —
    no new service calls. Tooltip: "MultiTunnel — <state> [<profile>]",
    refreshed on tick only when changed.
+
+## D28 — S18: tray tooltip/icon rework, color wheel + theme modes, literature-driven scheduler refinements (2026-11-21)
+
+User asks: (1) tray hover = name+version / total volume / current speeds,
+three lines; (2) tray+taskbar icons with CLEAR backgrounds and a larger
+mark; (3) a color wheel in Settings for custom accent colors; (4) system /
+light / dark mode selection; (5) explore bonding performance from
+prominent scientific papers; (6) explore UI improvements from comparable
+apps' changelogs.
+
+1. TOOLTIP = 3 lines with CRLF separators (the Win32 tooltip control
+   breaks lines on \r\n — the SpeedFan/qBittorrent multi-line tray
+   precedent): line 1 `MultiTunnel v<CARGO_PKG_VERSION>`, line 2
+   `Total ↓x ↑y`, line 3 `↓x/s ↑y/s` (the S16 single-line form is gone;
+   not-connected states are 2 lines: name+version / state word). Worst
+   case ≈70 UTF-16 units — safely inside the 128-unit NIF_TIP budget,
+   pinned by tests.
+2. ICON ASSETS (make_logo_assets.py): all RUNTIME icons — icon.ico
+   (16/32/48 emblem + 256 lockup), icon_mono.ico, logo_64.rgba (the
+   window/taskbar icon) and logo_24.rgba (titlebar emblem) — now share
+   ONE treatment: flood-fill keyed-out TRANSPARENT background,
+   `contrast_boost` (hue-preserving luminance remap onto [56,240],
+   percentile-normalized like desaturate but per-channel scaled so hue
+   and chroma survive) and a tighter margin (0.08 → 0.04, the glyph
+   fills ~8% more of the tile). Rationale: the old connected icon was a
+   nearly-white opaque tile (92% of pixels >200 luminance —
+   indistinguishable from a blank square); the emblem itself carries
+   dark strokes (16% below 110), which the boost deepens for light
+   taskbars while the pastel body still pops on dark ones. Verified by
+   pixel stats (33% opaque, corners alpha 0, dark-stroke bands) and the
+   rig (titlebar emblem lum spread 114 on light / 212 on dark).
+3. COLOR WHEEL = precomputed 256×256 HSV disc asset
+   (make_color_wheel.py; hue = clockwise angle from 12 o'clock,
+   saturation = radius, V=1) shown at 176 logical px via
+   image::Handle; hit-testing + marker placement are the INVERSE pair
+   `wheel_seed_at`/`wheel_marker_position` in theme.rs (unit-tested
+   roundtrip, cardinal hues pinned). Interaction: mouse_area
+   on_press/on_move(Point)/on_release; press picks the color under the
+   cursor (the move that got the cursor there recorded the position),
+   drag re-derives the theme LIVE (no disk I/O), release persists via
+   the shared save_settings path; a global left-release listener
+   (listen_with, same subscription as the S16 cursor tracking) ends a
+   drag released OUTSIDE the wheel. The marker is a canvas overlay
+   (seed disc + white halo + on-surface ring). Presets + numeric seed
+   field stay.
+4. THEME MODES = `SettingsView::theme_mode: String` ("system"|"light"|
+   "dark", serde default "") + `dark_mode: bool` KEPT as the
+   forward-compat shadow (written at the effective state on every save,
+   so a v0.11 binary reading a v0.12 file still lands on the appearance
+   the user sees; an absent theme_mode parses from the legacy bool —
+   D8 version-free migration, pinned by tests). System resolution:
+   `MT_THEME_SYSTEM_DARK` env override (the rig seam) → Windows
+   AppsUseLightTheme registry (windows-sys Win32_System_Registry — same
+   crate, one feature) → gsettings color-scheme → GTK3 settings.ini →
+   GTK_THEME suffix → light. Re-polled every 5 ticks while in System
+   mode (a flip logs + re-themes live). The Settings UI replaces the
+   dark toggler with System/Light/Dark segmented buttons (selected =
+   filled) + a caption showing what System currently resolves to.
+5. SCHEDULER (papers → code, docs/research/2026-11-21-bonding-
+   performance-survey.md): (a) BLEST (Ferlin et al., IFIP Networking
+   2016) — among carriers TIED at the min relative-load score, one
+   whose queue drains slower than 250 ms at its reported rate is
+   skipped (HoL avoidance at the merge daemon's reorder buffer). The
+   guard ONLY narrows the tied set: the score leader always stays
+   eligible, because queue depth alone is not a saturation signal (the
+   S14 lesson — the deep-queue-but-headroom carrier in the S14 test
+   must keep winning; a naive BLEST filter would have regressed it and
+   DID fail its first test run). (b) ECF (Lim et al. 2017) —
+   LowestLatency with delivery reports = earliest completion
+   (rtt + 1000·queued/deliver): a 20 ms carrier with a 500 ms backlog
+   loses to an empty 60 ms one; without reports the S11 sampled-RTT
+   behavior stands. Roadmap (redundant mode, FEC parity, reinjection,
+   wVegas-style delay signal) documented with mechanisms in the survey.
+6. UI SURVEY (docs/research/2026-11-21-ui-changelog-survey.md): Clash
+   Verge Rev / v2rayN / FlClash / Hiddify / Speedify changelogs mapped
+   to shipped vs proposed (next: per-link live status badges, exit-IP
+   auto-refresh, empty states).

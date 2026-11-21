@@ -306,7 +306,7 @@ bonding mode to `stream` (Advanced): the bytes of every connection are
 split across all ticked adapters and re-merged by `mt-merge-server` on
 the tunnel server — see "Stream bonding (v0.5)" above.
 
-## App identity & tray (v0.9–v0.11) — logo, blended title bar, close-to-tray
+## App identity & tray (v0.9–v0.12) — logo, blended title bar, close-to-tray
 
 The window itself became a first-class part of the app (all of it in the
 GUI, no new dependencies):
@@ -321,6 +321,10 @@ GUI, no new dependencies):
   background (flood-fill key-out with area-averaged resampling), so the
   mark blends into the window surface instead of sitting on a colored
   chip — same for the README banner above.
+  Since v0.12 ALL the runtime icons (tray + taskbar/window icon) are
+  transparent-background with a hue-preserving contrast boost and a
+  tighter margin — the mark is larger and legible on light AND dark
+  taskbars (no more opaque tile).
 - **Chromium-style title bar**: the native window chrome is replaced by
   an in-app strip on the SAME surface as the page — logo + app name on
   the left, minimize/maximize/close on the right, and every other pixel
@@ -342,10 +346,12 @@ GUI, no new dependencies):
   colored logo; in every not-connected state it switches to a
   monochrome, transparent-background version of the same mark — the
   connection state is readable from across the room.
-- **Live speeds on hover (v0.10)**: hovering the tray icon shows the
-  current download/upload speed AND the session's total uploaded /
-  downloaded volume (e.g. `MultiTunnel — ↓9.4 MB/s ↑1.2 MB/s •
-  Σ↓3.0 GB ↑42.9 MB`).
+- **Live speeds on hover (v0.10, reworked v0.12)**: hovering the tray
+  icon shows a three-line tooltip — the app name with the release
+  version on line 1, the session's total transferred volume on line 2
+  and the current download/upload speed on line 3 (e.g.
+  `MultiTunnel v0.12.0` / `Total ↓3.0 GB ↑42.9 MB` /
+  `↓9.4 MB/s ↑1.2 MB/s`).
 - **Version + live speeds in the title bar (v0.11)**: the release
   version rides right next to the app name (it moves in lock-step with
   the release tag — one workspace version line), and the strip's right
@@ -358,6 +364,16 @@ GUI, no new dependencies):
   the toolbar — ON by default, it keeps the newest line in view as
   events land; turn it off to read back through history without the
   view jumping to the tail.
+- **Accent color wheel + appearance mode (v0.12)**: Settings → Appearance
+  now has a full COLOR WHEEL — click or drag to pick ANY accent color
+  (hue = angle, saturation = distance from the center; the theme
+  re-derives live while you drag and persists on release). The 8 preset
+  swatches and the numeric seed field stay for exact values. Next to it,
+  the appearance mode picks **System / Light / Dark** — System follows
+  the OS (the Windows Personalize setting / the freedesktop
+  color-scheme), re-checked every few seconds while the app runs. A
+  survey of the multipath-bonding literature (BLEST, ECF, MP-QUIC…) and
+  how it maps onto the scheduler shipped alongside in `docs/research/`.
 - **Quick Settings on right-click**: the tray menu is built fresh from
   live state — Connect/Disconnect (state-reflecting), the server list
   (radio-checked on the active profile), Open MultiTunnel and Exit.

@@ -6,7 +6,15 @@ MEMORY_FILE = Path("PROJECT_MEMORY.md")
 NUM_COMMITS = 3  # Number of recent commits to pull diffs for
 
 def get_recent_git_diffs():
-    """Fetches recent commit metadata and diff patches using git log."""
+    """Fetches recent commit metadata and diff patches using git log.
+
+    S18 FIX: PROJECT_MEMORY.md is EXCLUDED from the embedded diffs. The
+    old script embedded its own previous section (each run's output is
+    committed into the file, so the next diff contained it) — the file
+    doubled every cycle and crossed GitHub's 100 MB per-file limit
+    (81 MB → 134 MB on 2026-11-21, push rejected). Long-form history
+    lives in harness/memory/LEDGER.md; the elision is noted per diff.
+    """
     try:
         # Run git log with patch output for the last N commits
         result = subprocess.run(
@@ -15,7 +23,9 @@ def get_recent_git_diffs():
                 f"-n{NUM_COMMITS}", 
                 "--pretty=format:### Commit: %h - %s (%an, %ad)", 
                 "--date=short", 
-                "-p"
+                "-p",
+                "--", ".",
+                ":(exclude)PROJECT_MEMORY.md",
             ],
             capture_output=True,
             text=True,
@@ -25,7 +35,7 @@ def get_recent_git_diffs():
             # .rgba bytes in diffs; never let that break the refresh.
             errors="replace"
         )
-        return result.stdout.strip()
+        return result.stdout.strip() + "\n\n( PROJECT_MEMORY.md's own diff is elided here — the durable\n  sections above are hand-maintained; see harness/memory/LEDGER.md\n  for the full stage history. )"
     except subprocess.CalledProcessError as e:
         print(f"[!] Error running git command: {e}")
         return ""

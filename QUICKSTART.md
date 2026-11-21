@@ -84,6 +84,11 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > Logs screen gained floating jump-to-top/bottom buttons plus an
 > Auto-scroll toggle (on by default — it keeps the newest line in view).
 
+> v0.12: the tray tooltip is now three lines (app name + version, session
+> totals, live speeds), the tray/taskbar icons are transparent with a
+> bigger mark, and Settings gained a full accent COLOR WHEEL plus a
+> System / Light / Dark appearance mode (System follows the OS).
+
 **SMOKE TEST — this is the first time the GUI binary runs on real Windows.**
 The development sandbox is Linux; the window has been cross-compiled and
 unit-tested, never displayed. Do not walk away after launching it — verify

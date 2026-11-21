@@ -228,6 +228,25 @@ fn carrier_score(slot: &CarrierSlot) -> f64 {
     slot.assign_bps / slot.deliver_bps.max(PROBE_BPS)
 }
 
+/// S18 (ECF, Lim et al. 2017): the EARLIEST-COMPLETION estimate for one
+/// frame on this carrier, in milliseconds — the sampled RTT plus the time
+/// the already-queued backlog needs to drain at the peer-reported delivery
+/// rate. Scheduling by this (instead of raw RTT) stops the pile-up the
+/// classic minRTT scheduler suffers when every frame lands on the
+/// low-RTT path regardless of its backlog: a low-RTT carrier with a deep
+/// queue LOSES to a slightly-slower one that is empty.
+fn ecf_completion_ms(slot: &CarrierSlot) -> f64 {
+    let drain_ms = 1000.0 * slot.queued as f64 / slot.deliver_bps.max(PROBE_BPS);
+    f64::from(slot.rtt_ms) + drain_ms
+}
+
+/// S18 (BLEST, Ferlin et al. 2016): a carrier whose writer queue needs
+/// longer than this to drain is BLOCKED for the `Balanced` picker — the
+/// frame that would ride it stalls the peer's reorder buffer
+/// (head-of-line blocking) while the same frame on a faster carrier
+/// completes sooner. BLEST's send-window guard, expressed in drain time.
+pub const BALANCED_DRAIN_CAP_MS: f64 = 250.0;
+
 /// A carrier whose writer queue exceeds this many BYTES counts as
 /// SATURATED for the `Priority` policy — its socket provably cannot keep
 /// up with the offered rate. 512 KiB ≈ 8 max-size frames: a healthy
@@ -290,6 +309,20 @@ fn pick_carrier_index(
             Some(s.idx)
         }
         mt_net::MergePolicy::LowestLatency => {
+            // S18 (ECF): with delivery-rate reports, "lowest latency" is
+            // EARLIEST COMPLETION — RTT + queue drain time — so a deep
+            // backlog on the fastest path correctly loses to an empty
+            // slower one. Without reports this stays the S11 sampled-RTT
+            // behavior (known beats unknown, ties keep the earlier slot).
+            if slots.iter().any(|s| s.deliver_bps > 0.0) {
+                let mut best = 0;
+                for i in 1..slots.len() {
+                    if ecf_completion_ms(&slots[i]) < ecf_completion_ms(&slots[best]) {
+                        best = i;
+                    }
+                }
+                return Some(slots[best].idx);
+            }
             let mut best = 0;
             for i in 1..slots.len() {
                 let (b, c) = (slots[best], slots[i]);
@@ -313,14 +346,35 @@ fn pick_carrier_index(
                 *cursor = cursor.wrapping_add(1);
                 return Some(slots[pick].idx);
             }
-            // Capacity-aware: least relative load; ties rotate.
+            // Capacity-aware: least relative load; ties rotate. S18 (BLEST,
+            // Ferlin et al. 2016): among the carriers TIED at the minimum
+            // score, one whose writer queue needs > BALANCED_DRAIN_CAP_MS
+            // to drain is skipped — scheduling onto it delays the frame
+            // behind the backlog and stalls the peer's reorder buffer
+            // (head-of-line blocking) while a same-score carrier is empty.
+            // The refinement only narrows the tied set: when every tied
+            // carrier is backed up (or a single leader holds the minimum),
+            // the S14 semantics stand untouched — a deep queue alone never
+            // disqualifies the score leader, because queue depth is not a
+            // saturation signal (the S14 lesson).
             let min = slots
                 .iter()
                 .map(carrier_score)
                 .fold(f64::INFINITY, f64::min);
-            let tied: Vec<usize> = (0..slots.len())
+            let mut tied: Vec<usize> = (0..slots.len())
                 .filter(|&i| (carrier_score(&slots[i]) - min).abs() < f64::EPSILON)
                 .collect();
+            let eligible: Vec<usize> = tied
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    1000.0 * slots[i].queued as f64 / slots[i].deliver_bps.max(PROBE_BPS)
+                        <= BALANCED_DRAIN_CAP_MS
+                })
+                .collect();
+            if !eligible.is_empty() {
+                tied = eligible;
+            }
             let pick = tied[(*cursor % tied.len() as u64) as usize];
             *cursor = cursor.wrapping_add(1);
             Some(slots[pick].idx)
@@ -1738,5 +1792,100 @@ mod scheduling_tests {
             cap_slot(1, 0, 40, 64.0 * 1024.0, 0.0),
         ];
         assert_eq!(pick1(mt_net::MergePolicy::Balanced, &slots), Some(0));
+    }
+
+    /// S18 (BLEST): among EQUAL-score carriers, one whose writer queue
+    /// needs > BALANCED_DRAIN_CAP_MS to drain is skipped — the frame rides
+    /// the empty same-score carrier instead of waiting behind the backlog
+    /// (HoL avoidance at the peer's reorder buffer).
+    #[test]
+    fn balanced_blest_guard_skips_slow_draining_tied_carrier() {
+        // Equal relative load (both 1.0, well above the probe floor).
+        // Carrier 0: 1 MiB queued on a 2 MiB/s path = 500 ms drain
+        // (> cap) → BLOCKED. Carrier 1: empty queue → picked.
+        let slots = [
+            cap_slot(0, 1_048_576, 30, 2_048_000.0, 2_048_000.0),
+            cap_slot(1, 0, 40, 2_048_000.0, 2_048_000.0),
+        ];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::Balanced, &slots),
+            Some(1),
+            "tied score: the empty-queue carrier must win"
+        );
+        // Both blocked → the score leader still takes the frame (the bond
+        // must not stall; the leader is always eligible by construction).
+        let both = [
+            cap_slot(0, 2_097_152, 30, 2_048_000.0, 2_048_000.0),
+            cap_slot(1, 1_048_576, 40, 1_024_000.0, 1_024_000.0),
+        ];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::Balanced, &both),
+            Some(0),
+            "both blocked → the score leader (0: 1.0 vs 1: 1.0, first tie) still picks"
+        );
+    }
+
+    /// S18 (BLEST, the S14 reconciliation): a deep queue alone never
+    /// disqualifies the SCORE LEADER — queue depth is not a saturation
+    /// signal (the S14 lesson); only near-equal scores get the guard.
+    #[test]
+    fn balanced_blest_guard_never_bypasses_the_score_leader() {
+        // Leader (score 0.1) has the DEEP queue (500 ms drain); the
+        // follower (score 1.6) is empty. The leader keeps the frame.
+        let slots = [
+            cap_slot(
+                0,
+                1_048_576,
+                30,
+                0.2 * 1024.0 * 1024.0,
+                2.0 * 1024.0 * 1024.0,
+            ),
+            cap_slot(1, 0, 40, 1.6 * 1024.0 * 1024.0, 1.0 * 1024.0 * 1024.0),
+        ];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::Balanced, &slots),
+            Some(0),
+            "score leader with a deep queue still wins (S14 semantics)"
+        );
+    }
+
+    /// S18 (ECF): with delivery reports, LowestLatency = earliest
+    /// completion — RTT plus queue-drain time — so a low-RTT carrier with
+    /// a deep backlog correctly loses to an empty slower one.
+    #[test]
+    fn lowest_latency_ecf_prefers_earliest_completion() {
+        // Carrier 0: 20 ms RTT but 1 MiB queued on 2 MiB/s = 500 ms drain
+        // → completion ≈ 520 ms. Carrier 1: 60 ms RTT, empty → 60 ms.
+        let slots = [
+            cap_slot(0, 1_048_576, 20, 2_048_000.0, 2_048_000.0),
+            cap_slot(1, 0, 60, 2_048_000.0, 2_048_000.0),
+        ];
+        assert_eq!(
+            pick1(mt_net::MergePolicy::LowestLatency, &slots),
+            Some(1),
+            "empty 60 ms path beats backed-up 20 ms path (520 ms completion)"
+        );
+        // Same shape with shallow queues → raw RTT decides (the classic
+        // behavior): 20 ms beats 60 ms.
+        let shallow = [
+            cap_slot(0, 10_000, 20, 2_048_000.0, 2_048_000.0),
+            cap_slot(1, 0, 60, 2_048_000.0, 2_048_000.0),
+        ];
+        assert_eq!(pick1(mt_net::MergePolicy::LowestLatency, &shallow), Some(0));
+        // Mixed reports (one silent): the ECF arm needs rates; the
+        // sampled-RTT arm handles unknowns (existing behavior).
+        let mixed = [cap_slot(0, 0, 25, 1_000_000.0, 1_000_000.0), slot(1, 0, 90)];
+        assert_eq!(pick1(mt_net::MergePolicy::LowestLatency, &mixed), Some(0));
+    }
+
+    /// S18: the ECF completion estimate itself (RTT + queue/rate).
+    #[test]
+    fn ecf_completion_is_rtt_plus_drain_time() {
+        let s = cap_slot(0, 300_000, 25, 1_200_000.0, 1_200_000.0);
+        // 300000/1200000 s = 250 ms; + 25 ms RTT = 275 ms.
+        assert!((ecf_completion_ms(&s) - 275.0).abs() < 1e-6);
+        // Unreported rate → the probe floor drains the queue: 32 KiB/s.
+        let silent = cap_slot(1, 32_768, 10, 0.0, 0.0);
+        assert!((ecf_completion_ms(&silent) - 1010.0).abs() < 1e-6);
     }
 }

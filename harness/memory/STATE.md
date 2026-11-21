@@ -1,52 +1,44 @@
-# STATE — rewritten at the end of every stage. Last update: S16 (repo polish + window menu + state-aware tray, v0.10.0)
+# STATE — rewritten at the end of every stage. Last update: S18 (tray tooltip/icon rework + color wheel + theme modes + research-driven scheduler refinements, v0.12.0)
 
 ## Current position
-- Stage: S16 IN FLIGHT — implementation + gates COMPLETE, release v0.10.0
-  re-running (first attempt: two independent GitHub-runner flakes in the
-  mt-bond integration leg — `carrier_death_mid_stream_fails_over_without_
-  data_loss` failed on windows (second-half write: "no live bond carrier")
-  and the linux leg hung inside `cargo test -p mt-bond`; the SAME commit
-  passed CI on BOTH OSes (run 44717917257) minutes earlier, 25x solo +
-  12x full-suite stress runs under 8-way CPU load locally = 408 executions
-  0 failures, and the identical suite shipped S14/S15 releases — verdict
-  runner flake, precedent v0.5.1 cancel+rerun; run 44719389267 cancelled
-  + re-run).
-- S16 user asks ALL implemented (D26): (1) GitHub About section rewritten
-  (was a stale description of an unrelated project) + homepage → releases;
-  20 relevant topic tags set via API; (2) Attribution section in README
-  (Xray-core, iced + vendored patches, Material You, v2rayN, net-merge,
-  BondTunnel predecessor, own logo/banner artwork, cargo-zigbuild/zig);
-  (3) README banner (assets/banner.png, 1280x360 lockup on the logo's own
-  canvas color) + transparent logo in the identity section; (4) titlebar
-  emblem on a TRANSPARENT background (flood-fill key-out + area-averaged
-  resample with premultiplied alpha — bilinear punched holes at 20:1);
-  (5) tray icon state-aware: colored logo while connected, MONOCHROME
-  transparent variant in every not-connected state (NIM_MODIFY swap,
-  TaskbarCreated re-adds the current style, boots Mono); (6) tray hover =
-  live ↓/↑ speeds + Σ totals (session_bytes from link-counter deltas,
-  counter-reset-safe, wiped on leaving Connected; tooltip < 128 NIF_TIP
-  units); (7) titlebar RIGHT-CLICK window menu (stack overlay layer,
-  cursor-anchored + clamped, dismiss on outside release): Always on top
-  (checkable, serde-default settings field, applied cross-platform via
-  iced window::change_level, honored at startup) / Minimize / Maximize /
-  Close. ALSO FIXED: latent S15 bug — the titlebar identity cluster sat
-  flush at the strip top (container align_y(Center) added; was hidden by
-  the old opaque emblem tile).
-- Memory graph + RAG (S14) remain live: query_memory.py / write_memory.py;
-  graph rebuilt after every change (18/18 tests).
+- Stage: S18 IMPLEMENTED + all local gates green, releasing v0.12.0.
+- The user's six asks shipped (D28): (1) 3-line tray tooltip —
+  `MultiTunnel v0.12.0` / `Total ↓x ↑y` / `↓x/s ↑y/s` (CRLF, ≤70 NIF_TIP
+  units worst case); (2) ALL runtime icons (tray ICOs, window/taskbar
+  logo_64, titlebar logo_24) transparent-background + hue-preserving
+  contrast boost + tighter margin (0.08→0.04); (3) Settings accent COLOR
+  WHEEL (256px HSV disc asset + inverse hit-test/marker math in theme.rs,
+  live re-theme during drag, persist on release); (4) System/Light/Dark
+  mode with OS detection (env seam → Windows AppsUseLightTheme →
+  gsettings/gtk) re-polled every 5 s in System mode, legacy dark_mode
+  kept as the forward-compat shadow; (5) docs/research/ bonding survey —
+  BLEST tie-guard + ECF completion scheduling IMPLEMENTED in mt-bond
+  (reconciled with S14: the guard only narrows the min-score tied set),
+  redundant-mode/FEC/reinjection/delay-signal roadmap documented; (6)
+  docs/research/ UI changelog survey (CVR/v2rayN/FlClash/Hiddify/
+  Speedify) with a prioritized adopt-next list.
+- 447/0 workspace tests; fmt/clippy host+windows-gnu; vendored iced 6/0;
+  zigbuild PE32+ ×4 + ELF ×2; rig verified sf=1.0+1.5 (wheel pick
+  purple→green end-to-end, mode buttons light↔dark, system env boot,
+  emblem legibility both modes).
+- Sandbox recycled AGAIN before the stage (registry/rustup/zig/xkblibs
+  gone, tools/zig tarball truncated): full D2 bootstrap re-run, env.sh
+  rewritten; disk hit 100% twice — stale /tmp/my-project snapshots +
+  mt-target/debug cleaned.
 
 ## Next actions
-1. Watch release run 44719389267 (re-run); on success verify assets by
-   download+unzip (11-entry manifest, PE32+ x2, README/QUICKSTART carried);
-   then LEDGER close entry + backup push.
-2. If the mt-bond flake recurs on the runner: do NOT blind-rerun again —
-   capture the hung job's logs FIRST (jobs API), then decide (test-harness
-   hardening: bound read_to_end with tokio timeout is the leading option,
-   but only with a reproduced defect in hand).
-3. USER VERIFICATION of v0.9/v0.10 asks on the real Windows box: tray mono
-   ↔ colored transition, hover speeds, titlebar right-click → always-on-top
-   actually floating above other windows, transparent emblem on both light
-   and dark titlebars.
-4. Backlog: subscription auto-update, vmess validation, profiles.json
-   locking, engine log rotation, listener max_conns, upstream iced
-   migration, S7 native REALITY core (parked).
+1. Tag v0.12.0 → release.yml; watch the run; verify assets by
+   download+unzip (PE32+ ×2 in zip, ELFs, README/QUICKSTART carried).
+2. User-side Windows verification: 3-line hover tooltip, icon size/
+   transparency on light AND dark taskbars, wheel + System mode against
+   the real OS theme flip (Settings → Personalization → Color).
+3. Backlog candidates from the research docs when asked: redundant bond
+   mode (calls), FEC parity frames, reinjection, per-link live status
+   badges, exit-IP auto-refresh, empty states.
+
+## Watch items (unchanged unless noted)
+- Disk: /tmp/mt-target release trees ~4.5G; clean debug trees after gate
+  runs; the 100%-full rootfs manifests as linker "signal 7" or ENOSPC
+  temp-dir panics (hit BOTH this stage).
+- Background processes DO NOT survive between sandbox tool calls — long
+  builds must run in the foreground (setsid/nohup both reaped).

@@ -163,6 +163,12 @@
       "evidence": "crates/mt-app/src/screens.rs logs()+titlebar(); app.rs messages+autoscroll_logs_now"
     },
     {
+      "src": "task:s18-wheel-theme-research",
+      "dst": "decision:D28",
+      "rel": "implements",
+      "evidence": "DECISIONS.md D28, S18"
+    },
+    {
       "src": "task:saturation-aware-split",
       "dst": "bug:reorder-overflow",
       "rel": "fixes",

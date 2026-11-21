@@ -33,5 +33,7 @@ mock = []
 
 # S15 (D25): the in-app tray is raw Win32 (same windows-sys pick as the
 # root crate's legacy tray, D4) — target-gated, no new cross-platform deps.
+# S18: Win32_System_Registry reads AppsUseLightTheme for the System theme
+# mode (same crate, one more feature gate, no new dependency).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }

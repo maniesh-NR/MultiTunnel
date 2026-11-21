@@ -545,6 +545,11 @@ impl Default for SettingsFile {
                 // Default seed: the Material baseline primary #6750A4.
                 theme_seed: 0x6750A4,
                 dark_mode: false,
+                // S18: fresh installs follow the OS appearance (the user's
+                // ask); the legacy dark_mode stays false so an old binary
+                // reading this file lands on light, matching what a
+                // light-mode OS user sees.
+                theme_mode: "system".to_string(),
                 system_proxy: false,
                 // D23: "balanced" spreads new connections across the
                 // ticked adapters by LIVE byte load — the v0.7.0 default.
@@ -1959,6 +1964,9 @@ mod tests {
             settings: SettingsView {
                 theme_seed: 0x6750A4,
                 dark_mode: false,
+                // v0.5-era file shape: NO theme_mode key (the S18 legacy
+                // migration tests build on files like this one).
+                theme_mode: String::new(),
                 system_proxy,
                 merge_policy: "failover".to_string(),
                 autostart: false,
@@ -2301,6 +2309,7 @@ mod tests {
         let view = SettingsView {
             theme_seed: 0xEA4335,
             dark_mode: true,
+            theme_mode: "dark".to_string(),
             system_proxy: false, // never true in tests: autostart/sysproxy touch the host
             merge_policy: "lowestlatency".to_string(),
             autostart: false,

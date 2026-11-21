@@ -449,6 +449,26 @@
       ]
     },
     {
+      "id": "task:s18-wheel-theme-research",
+      "type": "task",
+      "title": "S18: tray tooltip/icon rework, accent color wheel, system/light/dark modes, paper-driven scheduler refinements (v0.12.0)",
+      "tags": [
+        "s18"
+      ],
+      "sources": [
+        {
+          "file": "user-directive+LEDGER-s18",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "User asks (D28): 3-line tray tooltip (name+version, session totals, live speeds); clear-background larger tray/taskbar icons; Settings color wheel for custom accent colors; system/light/dark mode selection; bonding-performance research from prominent papers; UI research from comparable apps' changelogs. Shipped: CRLF 3-line tooltip (<=70 NIF_TIP units); all runtime icons transparent + hue-preserving contrast boost + tighter margin; HSV disc wheel (make_color_wheel.py asset + wheel_seed_at/wheel_marker_position inverse pair in theme.rs, live re-theme during drag, persist on release, canvas marker overlay); ThemeMode System/Light/Dark with OS detection (env seam MT_THEME_SYSTEM_DARK -> Win32 AppsUseLightTheme RegGetValueW -> gsettings -> gtk ini) re-polled every 5 ticks, dark_mode kept as forward-compat shadow written at effective state; mt-bond BLEST tie-guard (250ms drain cap among min-score-tied carriers, leader always eligible - reconciled with S14 saturation semantics after the naive filter failed the S14 test) + ECF earliest-completion for lowest-latency with reports; docs/research/2026-11-21-bonding-performance-survey.md (BLEST/ECF/coupled-CC/MP-QUIC/DaMPS/ToN-2023 -> shipped+roadmap) and 2026-11-21-ui-changelog-survey.md (Clash Verge Rev/v2rayN/FlClash/Hiddify/Speedify). 447/0 tests; rig sf=1.0+1.5 verified wheel pick + mode flips + system env boot.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "task:saturation-aware-split",
       "type": "task",
       "title": "Task E (core) — saturation-aware redistribution: when one adapter hits its bandwidth ceiling, spill traffic to the rest (S14, gated — release pending)",

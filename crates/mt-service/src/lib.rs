@@ -97,6 +97,14 @@ pub struct RuleView {
 pub struct SettingsView {
     pub theme_seed: u32,
     pub dark_mode: bool,
+    /// S18: how the app resolves light vs dark — "system" | "light" |
+    /// "dark". Absent in files written by v0.11 and older → the legacy
+    /// [`SettingsView::dark_mode`] bool decides (true → Dark, false →
+    /// Light); see [`SettingsView::theme_mode`]. `dark_mode` itself stays
+    /// serialized (the GUI keeps it at the EFFECTIVE state on every save)
+    /// so a v0.11-or-older binary still reads future files.
+    #[serde(default)]
+    pub theme_mode: String,
     pub system_proxy: bool,
     pub merge_policy: String,
     pub autostart: bool,
@@ -145,6 +153,69 @@ pub struct SettingsView {
     /// files → false (same D8 version-free migration).
     #[serde(default)]
     pub always_on_top: bool,
+}
+
+/// S18: how the app resolves light vs dark appearance. Serialized as
+/// the lowercase string in [`SettingsView::theme_mode`] (the existing
+/// merge_policy String convention; the GUI owns the parse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemeMode {
+    /// Follow the OS preference (re-polled while the app runs).
+    System,
+    /// Always light.
+    Light,
+    /// Always dark.
+    Dark,
+}
+
+impl ThemeMode {
+    /// The serialized form (also the pick_list value).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    /// Parse a stored `theme_mode` string. Unknown/absent values fall
+    /// back to the LEGACY `dark_mode` bool (files written by v0.11 and
+    /// older carry no `theme_mode` key).
+    pub fn parse(s: &str, legacy_dark_mode: bool) -> Self {
+        match s {
+            "system" => Self::System,
+            "light" => Self::Light,
+            "dark" => Self::Dark,
+            // Absent (serde default "") or garbage: keep what the legacy
+            // bool said so an upgrade never flips the user's theme.
+            _ if legacy_dark_mode => Self::Dark,
+            _ => Self::Light,
+        }
+    }
+
+    /// The effective dark flag given the OS preference (`System` mode).
+    #[must_use]
+    pub fn resolves_dark(self, system_prefers_dark: bool) -> bool {
+        match self {
+            Self::System => system_prefers_dark,
+            Self::Light => false,
+            Self::Dark => true,
+        }
+    }
+}
+
+impl SettingsView {
+    /// S18: the parsed appearance mode (legacy `dark_mode` decides when
+    /// the stored string is absent/invalid).
+    pub fn theme_mode(&self) -> ThemeMode {
+        ThemeMode::parse(&self.theme_mode, self.dark_mode)
+    }
+
+    /// S18: the dark flag the GUI should apply right now.
+    #[must_use]
+    pub fn effective_dark(&self, system_prefers_dark: bool) -> bool {
+        self.theme_mode().resolves_dark(system_prefers_dark)
+    }
 }
 
 fn default_bond_mode() -> String {
@@ -692,6 +763,7 @@ mod close_to_tray_migration_tests {
             Self {
                 theme_seed: 0,
                 dark_mode: false,
+                theme_mode: String::new(),
                 system_proxy: false,
                 merge_policy: "balanced".into(),
                 autostart: false,
@@ -744,5 +816,62 @@ mod always_on_top_migration_tests {
         assert!(json.contains("\"always_on_top\":true"));
         let back: SettingsView = serde_json::from_str(&json).expect("reload");
         assert!(back.always_on_top);
+    }
+}
+
+#[cfg(test)]
+mod theme_mode_migration_tests {
+    use super::*;
+
+    /// S18: settings.json written by v0.11 and older (no `theme_mode`
+    /// key) loads with the mode derived from the legacy `dark_mode` bool —
+    /// an upgrade never flips the user's appearance (D8 version-free
+    /// migration via serde default + the legacy fallback).
+    #[test]
+    fn old_settings_derive_mode_from_legacy_dark_mode() {
+        let base = r#"{
+            "theme_seed": 42,
+            "dark_mode": {},
+            "system_proxy": false,
+            "merge_policy": "balanced",
+            "autostart": false
+        }"#;
+        let dark: SettingsView =
+            serde_json::from_str(&base.replace("{}", "true")).expect("legacy dark loads");
+        assert_eq!(dark.theme_mode(), ThemeMode::Dark);
+        assert!(dark.effective_dark(false));
+        let light: SettingsView =
+            serde_json::from_str(&base.replace("{}", "false")).expect("legacy light loads");
+        assert_eq!(light.theme_mode(), ThemeMode::Light);
+        assert!(!light.effective_dark(true));
+    }
+
+    /// The three S18 modes round-trip through JSON and resolve correctly
+    /// against both OS preferences.
+    #[test]
+    fn theme_mode_strings_roundtrip_and_resolve() {
+        for (mode, sys_dark, want) in [
+            (ThemeMode::System, true, true),
+            (ThemeMode::System, false, false),
+            (ThemeMode::Light, true, false),
+            (ThemeMode::Dark, false, true),
+        ] {
+            let mut v = SettingsView::default_settings_for_tests();
+            v.theme_mode = mode.as_str().to_string();
+            let json = serde_json::to_string(&v).expect("serialize");
+            assert!(json.contains(&format!("\"theme_mode\":\"{}\"", mode.as_str())));
+            let back: SettingsView = serde_json::from_str(&json).expect("reload");
+            assert_eq!(back.theme_mode(), mode);
+            assert_eq!(back.effective_dark(sys_dark), want);
+        }
+    }
+
+    /// Garbage in the stored string keeps the legacy bool's answer
+    /// (never a panic, never a silent theme flip).
+    #[test]
+    fn invalid_theme_mode_falls_back_to_legacy_bool() {
+        assert_eq!(ThemeMode::parse("neon", true), ThemeMode::Dark);
+        assert_eq!(ThemeMode::parse("neon", false), ThemeMode::Light);
+        assert_eq!(ThemeMode::parse("", true), ThemeMode::Dark);
     }
 }

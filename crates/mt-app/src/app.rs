@@ -276,8 +276,17 @@ pub enum Message {
     SeedFieldChanged(String),
     /// Commit the numeric seed field.
     SeedCommitted,
-    /// Dark mode toggled.
-    DarkToggled(bool),
+    /// S18: appearance mode picked — "system" | "light" | "dark"
+    /// (replaces the S9 dark-mode toggler).
+    ThemeModePicked(String),
+    /// S18: the accent color wheel was pressed (drag starts; the color
+    /// under the cursor is picked immediately).
+    WheelPressed,
+    /// S18: the cursor moved over the wheel (local coords; live seed
+    /// update while dragging).
+    WheelMoved(iced::Point),
+    /// S18: the wheel drag ended (release anywhere) — persist the seed.
+    WheelReleased,
     /// System proxy toggled.
     SystemProxyToggled(bool),
     /// Merge policy picked.
@@ -487,6 +496,17 @@ pub struct App {
     /// (default ON — a log viewer should track the tail until the user
     /// opts out; the toggle lives in the Logs toolbar).
     pub logs_autoscroll: bool,
+    /// S18: last-detected OS dark preference (System mode resolves through
+    /// it; `MT_THEME_SYSTEM_DARK` env override for the rig).
+    pub sys_dark: bool,
+    /// S18: Tick counter for the System-mode OS preference re-poll.
+    pub sys_poll: u32,
+    /// S18: the accent wheel drag is in progress (seed updates live, the
+    /// pick persists on release).
+    pub wheel_dragging: bool,
+    /// S18: last cursor position inside the wheel (local coords) — the
+    /// press picks the color under the cursor without needing a move.
+    pub wheel_cursor: Option<iced::Point>,
 }
 
 /// S17: the release version shown next to the app name in the titlebar.
@@ -503,6 +523,8 @@ impl App {
         let settings = SettingsView {
             theme_seed: SEED_SWATCHES[0],
             dark_mode: false,
+            // S18: follow the OS until the user picks otherwise.
+            theme_mode: "system".to_string(),
             system_proxy: false,
             merge_policy: MERGE_POLICIES[0].to_string(),
             autostart: false,
@@ -518,8 +540,11 @@ impl App {
             close_to_tray: false,
             always_on_top: false,
         };
+        // S18: detect the OS appearance once so the System mode (the
+        // stock default) starts honest.
+        let sys_dark = crate::theme::system_prefers_dark();
         Self {
-            theme: MtTheme::from_settings(&settings),
+            theme: MtTheme::derive(settings.theme_seed, settings.effective_dark(sys_dark)),
             service,
             events_rx,
             flags,
@@ -562,6 +587,11 @@ impl App {
             tray_icon: crate::tray::TrayIcon::Mono,
             // S17
             logs_autoscroll: true,
+            // S18
+            sys_dark,
+            sys_poll: 0,
+            wheel_dragging: false,
+            wheel_cursor: None,
         }
     }
 
@@ -615,6 +645,12 @@ impl App {
         app.rules_saved = app.rules.clone();
         app.settings = app.service.settings().await;
         app.seed_text = app.settings.theme_seed.to_string();
+        // S18: resolve light/dark through the picked mode + OS preference.
+        app.sys_dark = crate::theme::system_prefers_dark();
+        app.theme.rederive(
+            app.settings.theme_seed,
+            app.settings.effective_dark(app.sys_dark),
+        );
         app.adapters = app
             .service
             .adapters()
@@ -626,8 +662,6 @@ impl App {
                 view,
             })
             .collect();
-        app.theme
-            .rederive(app.settings.theme_seed, app.settings.dark_mode);
         app.seed_initial_logs();
         app
     }
@@ -769,6 +803,11 @@ impl App {
     }
 
     fn save_settings(&self, s: SettingsView) -> iced::Task<Message> {
+        // S18: keep the legacy `dark_mode` bool at the EFFECTIVE state so a
+        // v0.11-or-older binary reading this file lands on the appearance
+        // the user currently sees (forward-compat shadow; D8).
+        let mut s = s;
+        s.dark_mode = s.effective_dark(self.sys_dark);
         let svc = Arc::clone(&self.service);
         iced::Task::perform(
             async move { svc.set_settings(s).await },
@@ -812,6 +851,27 @@ impl App {
         match message {
             Message::Tick => {
                 self.pump_events();
+                // S18: System mode follows the OS — re-check the preference
+                // every few ticks (cheap on Windows: one registry read; the
+                // env seam makes the rig deterministic).
+                if self.settings.theme_mode() == mt_service::ThemeMode::System {
+                    self.sys_poll = self.sys_poll.saturating_add(1);
+                    if self.sys_poll >= crate::theme::SYSTEM_THEME_POLL_TICKS {
+                        self.sys_poll = 0;
+                        let now_dark = crate::theme::system_prefers_dark();
+                        if now_dark != self.sys_dark {
+                            self.sys_dark = now_dark;
+                            util::push_log(
+                                &mut self.logs,
+                                format!(
+                                    "INFO  gui: system appearance changed → {}",
+                                    if now_dark { "dark" } else { "light" }
+                                ),
+                            );
+                            self.apply_theme();
+                        }
+                    }
+                }
                 let t = self.refresh_status();
                 self.sync_tray();
                 return t;
@@ -1109,7 +1169,10 @@ impl App {
             Message::SettingsLoaded(s) => {
                 self.settings = s.clone();
                 self.seed_text = s.theme_seed.to_string();
-                self.theme.rederive(s.theme_seed, s.dark_mode);
+                // S18: light/dark resolves through the picked mode + the
+                // CURRENT OS preference (not the legacy bool).
+                self.sys_dark = crate::theme::system_prefers_dark();
+                self.apply_theme();
                 // S16: honor a persisted always-on-top now that settings
                 // exist (the Opened path covers the reverse order).
                 let top = s.always_on_top;
@@ -1126,14 +1189,14 @@ impl App {
             Message::SeedSwatch(seed) => {
                 self.settings.theme_seed = seed;
                 self.seed_text = seed.to_string();
-                self.theme.rederive(seed, self.settings.dark_mode);
+                self.apply_theme();
                 return self.save_settings(self.settings.clone());
             }
             Message::SeedFieldChanged(t) => self.seed_text = t,
             Message::SeedCommitted => match parse_seed(&self.seed_text) {
                 Some(seed) => {
                     self.settings.theme_seed = seed;
-                    self.theme.rederive(seed, self.settings.dark_mode);
+                    self.apply_theme();
                     return self.save_settings(self.settings.clone());
                 }
                 None => {
@@ -1141,10 +1204,44 @@ impl App {
                         Some("invalid seed: use decimal or 0xRRGGBB".to_string());
                 }
             },
-            Message::DarkToggled(dark) => {
-                self.settings.dark_mode = dark;
-                self.theme.rederive(self.settings.theme_seed, dark);
+            Message::ThemeModePicked(mode) => {
+                if !["system", "light", "dark"].contains(&mode.as_str()) {
+                    self.settings_status = Some(format!("unknown theme mode: {mode:?}"));
+                    return iced::Task::none();
+                }
+                self.settings.theme_mode = mode;
+                self.apply_theme();
                 return self.save_settings(self.settings.clone());
+            }
+            // S18: the accent wheel. Press picks the color under the
+            // cursor (the move that GOT the cursor there already recorded
+            // the position); drag updates live; release persists.
+            Message::WheelPressed => {
+                self.wheel_dragging = true;
+                if let Some(p) = self.wheel_cursor {
+                    self.set_wheel_seed(crate::theme::wheel_seed_at(
+                        p,
+                        crate::theme::COLOR_WHEEL_DRAW,
+                    ));
+                }
+            }
+            Message::WheelMoved(p) => {
+                self.wheel_cursor = Some(p);
+                if self.wheel_dragging {
+                    self.set_wheel_seed(crate::theme::wheel_seed_at(
+                        p,
+                        crate::theme::COLOR_WHEEL_DRAW,
+                    ));
+                }
+            }
+            Message::WheelReleased => {
+                let was_dragging = self.wheel_dragging;
+                self.wheel_dragging = false;
+                if was_dragging {
+                    // The mouse_area's own on_release also lands here — the
+                    // second arrival no-ops (dragging already false).
+                    return self.save_settings(self.settings.clone());
+                }
             }
             Message::SystemProxyToggled(v) => {
                 self.settings.system_proxy = v;
@@ -1718,11 +1815,16 @@ impl App {
             // S15: window events (Open/CloseRequested/Resized) + the tray
             // event stream.
             iced::window::events().map(|(id, ev)| Message::WindowEvent(id, ev)),
-            // S16: cursor tracking (anchors the titlebar window menu).
+            // S16: cursor tracking (anchors the titlebar window menu) +
+            // S18: a left release ANYWHERE ends an accent-wheel drag (the
+            // mouse_area only sees releases inside its own bounds).
             iced::event::listen_with(|event, _status, _window| match event {
                 iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                     Some(Message::CursorMoved(position))
                 }
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::WheelReleased),
                 _ => None,
             }),
             tray_events,
@@ -1745,6 +1847,29 @@ impl App {
     /// the user is elsewhere).
     pub fn autoscroll_logs_now(&self) -> bool {
         self.logs_autoscroll && self.screen == Screen::Logs
+    }
+
+    /// S18: the dark flag the picked mode + OS preference resolve to right
+    /// now (the single source of truth for `MtTheme` re-derivation).
+    pub fn theme_dark(&self) -> bool {
+        self.settings.effective_dark(self.sys_dark)
+    }
+
+    /// S18: re-derive the theme snapshot from the CURRENT seed + resolved
+    /// light/dark (every seed/mode change funnels through here).
+    pub fn apply_theme(&mut self) {
+        self.theme
+            .rederive(self.settings.theme_seed, self.theme_dark());
+    }
+
+    /// S18: live-update the accent seed during a wheel drag/pick (no disk
+    /// write — the release persists; see [`Message::WheelReleased`]).
+    fn set_wheel_seed(&mut self, seed: u32) {
+        if seed != self.settings.theme_seed {
+            self.settings.theme_seed = seed;
+            self.seed_text = seed.to_string();
+            self.apply_theme();
+        }
     }
 
     /// S11: is the Adapters draft different from what is persisted?
@@ -2424,9 +2549,19 @@ mod tests {
         drop(app.update(Message::SeedCommitted));
         assert_eq!(app.theme.palette.seed(), 0x42F45B);
 
-        drop(app.update(Message::DarkToggled(true)));
+        // S18: explicit Dark mode flips the theme now (and the legacy
+        // dark_mode shadow follows on save).
+        drop(app.update(Message::ThemeModePicked("dark".to_string())));
         assert!(app.theme.dark);
-        assert!(app.settings.dark_mode);
+        drop(app.update(Message::ThemeModePicked("light".to_string())));
+        assert!(!app.theme.dark);
+        // System mode resolves through the detected OS preference.
+        drop(app.update(Message::ThemeModePicked("system".to_string())));
+        assert_eq!(app.theme.dark, app.theme_dark());
+        assert_eq!(app.settings.theme_mode, "system");
+        // Garbage is rejected, leaving the mode untouched.
+        drop(app.update(Message::ThemeModePicked("neon".to_string())));
+        assert_eq!(app.settings.theme_mode, "system");
 
         // Invalid seed commit leaves the theme untouched.
         drop(app.update(Message::SeedFieldChanged("nope".to_string())));
@@ -2437,6 +2572,43 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("invalid seed"));
+    }
+
+    /// S18: the accent wheel — press picks the color under the cursor,
+    /// drag follows, release persists via the same save path as swatches.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn wheel_drag_updates_seed_live_and_persists_on_release() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        let seed_before = app.theme.palette.seed();
+        let s = crate::theme::COLOR_WHEEL_DRAW;
+
+        // Cursor moves over the wheel WITHOUT dragging: remembered, no pick.
+        drop(app.update(Message::WheelMoved(iced::Point::new(s / 2.0, s / 2.0))));
+        assert_eq!(app.theme.palette.seed(), seed_before);
+
+        // Press at the 12 o'clock rim: red seed, immediately applied.
+        drop(app.update(Message::WheelPressed));
+        assert!(app.wheel_dragging);
+        let red = crate::theme::wheel_seed_at(iced::Point::new(s / 2.0, 4.0), s);
+        drop(app.update(Message::WheelMoved(iced::Point::new(s / 2.0, 4.0))));
+        assert_eq!(app.theme.palette.seed(), red);
+        assert_eq!(app.seed_text, red.to_string());
+
+        // Release: the drag ends and the pick rides the SAME save path as
+        // the seed swatches (`save_settings` → Task::perform; the iced
+        // runtime owns task execution, so a unit test drops the task —
+        // the mock round-trip test covers the service save itself).
+        drop(app.update(Message::WheelReleased));
+        assert!(!app.wheel_dragging);
+        assert_eq!(app.settings.theme_seed, red);
+        assert_eq!(app.theme.palette.seed(), red);
+        assert_eq!(app.settings.theme_mode, "system");
+
+        // A stray release (no drag in progress) does nothing.
+        drop(app.update(Message::WheelReleased));
+        assert_eq!(app.theme.palette.seed(), red);
     }
 
     /// GUI update loop over the mock service: screen switches, the rules

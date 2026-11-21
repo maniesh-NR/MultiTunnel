@@ -7,11 +7,11 @@
 //! Adapters screen).
 
 use iced::widget::{
-    button, checkbox, column, container, horizontal_space, image, mouse_area, pick_list, row,
-    scrollable, stack, text, text_input, toggler, vertical_space,
+    button, canvas, checkbox, column, container, horizontal_space, image, mouse_area, pick_list,
+    row, scrollable, stack, text, text_input, toggler, vertical_space, Canvas,
 };
 use iced::{Length, Padding};
-use mt_service::{ProfileView, ServiceState};
+use mt_service::{ProfileView, ServiceState, ThemeMode};
 
 use crate::app::{
     App, LatencyState, LogFilter, Message, RuleRow, Screen, TitleMenuItem, BOND_MODES, LOG_LEVELS,
@@ -1450,13 +1450,94 @@ pub fn adapters(app: &App) -> Element<'_> {
 // Settings
 // ---------------------------------------------------------------------------
 
-/// Settings screen: theme seed picker + dark, system proxy, merge policy,
-/// autostart — all mapped onto SettingsView with immediate save.
+/// S18: the accent wheel's selection marker — a canvas overlay stacked on
+/// the wheel image, drawing a filled disc of the CURRENT seed color with
+/// an on-surface ring (visible over any wheel hue). The canvas is sized
+/// to the same square as the wheel, so [`theme::wheel_marker_position`]'s
+/// local coordinates line up with the image underneath.
+#[derive(Debug, Clone, Copy)]
+pub struct WheelMarker {
+    /// The seed whose wheel position the marker shows.
+    pub seed: u32,
+    /// Ring color (on_surface — theme-dependent).
+    pub ring: iced::Color,
+}
+
+impl canvas::Program<Message> for WheelMarker {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let side = bounds.width.min(bounds.height).max(1.0);
+        let p = crate::theme::wheel_marker_position(self.seed, side);
+        let c = mt_m3::M3Color::from_argb(self.seed);
+        // Halo + disc + ring: readable over identical hues and at the rim.
+        frame.fill(
+            &canvas::Path::circle(p, 9.0),
+            iced::Color::from(c).scale_alpha(0.35),
+        );
+        frame.fill(&canvas::Path::circle(p, 6.0), iced::Color::from(c));
+        frame.stroke(
+            &canvas::Path::circle(p, 6.0),
+            canvas::Stroke::default()
+                .with_color(self.ring)
+                .with_width(2.0),
+        );
+        vec![frame.into_geometry()]
+    }
+}
+
+/// Settings screen: accent color wheel + presets + seed, theme mode
+/// (system/light/dark), system proxy, merge policy, autostart — all
+/// mapped onto SettingsView with immediate save.
 pub fn settings(app: &App) -> Element<'_> {
     let s = app.theme.scheme;
     let ts = app.theme.ts;
 
     // Appearance card ------------------------------------------------------
+    //
+    // S18: the accent picker is a color WHEEL (click or drag; the seed
+    // updates live and persists on release) — the 8 presets and the
+    // numeric seed field stay for exact values. Next to it, the
+    // appearance MODE picks system / light / dark.
+    let wheel_img = image(image::Handle::from_rgba(
+        t3::COLOR_WHEEL_PX,
+        t3::COLOR_WHEEL_PX,
+        t3::COLOR_WHEEL_BYTES.to_vec(),
+    ))
+    .width(Length::Fixed(t3::COLOR_WHEEL_DRAW))
+    .height(Length::Fixed(t3::COLOR_WHEEL_DRAW));
+    let marker = Canvas::new(WheelMarker {
+        seed: app.settings.theme_seed,
+        ring: t3::col(s.on_surface),
+    })
+    .width(Length::Fixed(t3::COLOR_WHEEL_DRAW))
+    .height(Length::Fixed(t3::COLOR_WHEEL_DRAW));
+    let wheel = mouse_area(stack![wheel_img, marker])
+        .on_press(Message::WheelPressed)
+        .on_release(Message::WheelReleased)
+        .on_move(Message::WheelMoved)
+        .interaction(iced::mouse::Interaction::Crosshair);
+
+    // The current accent: a filled chip + hex readout (also the rig's
+    // pixel-assertion target — the chip shows the picked seed verbatim).
+    let seed = app.settings.theme_seed;
+    let seed_chip = container(vertical_space().height(Length::Fixed(28.0)))
+        .width(Length::Fixed(48.0))
+        .style(move |_t| iced::widget::container::Style {
+            background: t3::bg(mt_m3::M3Color::from_argb(seed)),
+            border: t3::border(8.0, s.on_surface_variant, 1.0),
+            ..Default::default()
+        });
+    let hex = format!("#{seed:06X}", seed = seed & 0xFF_FFFF);
+
     let mut swatches = row![].spacing(8);
     for seed in t3::SEED_SWATCHES {
         let selected = seed == app.settings.theme_seed;
@@ -1486,25 +1567,87 @@ pub fn settings(app: &App) -> Element<'_> {
         .width(Length::Fixed(180.0))
         .style(t3::text_field(s));
 
+    // S18 appearance mode: segmented System / Light / Dark (selected =
+    // filled). System shows what it currently resolves to.
+    let mode = app.settings.theme_mode();
+    let mode_button = |label: &str, m: ThemeMode, msg: Message| {
+        m3_button(
+            label,
+            true,
+            if mode == m {
+                ButtonKind::Filled
+            } else {
+                ButtonKind::Outlined
+            },
+            msg,
+            app,
+        )
+    };
+    let mode_caption = match mode {
+        ThemeMode::System => format!(
+            "system — currently {}",
+            if app.theme_dark() { "dark" } else { "light" }
+        ),
+        ThemeMode::Light => "light — always".to_string(),
+        ThemeMode::Dark => "dark — always".to_string(),
+    };
+    let mode_row = row![
+        mode_button(
+            "System",
+            ThemeMode::System,
+            Message::ThemeModePicked("system".into())
+        ),
+        mode_button(
+            "Light",
+            ThemeMode::Light,
+            Message::ThemeModePicked("light".into())
+        ),
+        mode_button(
+            "Dark",
+            ThemeMode::Dark,
+            Message::ThemeModePicked("dark".into())
+        ),
+    ]
+    .spacing(8);
+
     let appearance = column![
         text("Appearance").size(ts.title_m.size).color(s.on_surface),
-        swatches,
         row![
-            seed_field,
-            m3_button(
-                "Set seed",
-                true,
-                ButtonKind::Tonal,
-                Message::SeedCommitted,
-                app
-            ),
+            wheel,
+            column![
+                text("accent color")
+                    .size(ts.label_l.size)
+                    .color(s.on_surface_variant),
+                row![
+                    seed_chip,
+                    text(hex).size(ts.body_m.size).color(s.on_surface)
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::Center),
+                swatches,
+                row![
+                    seed_field,
+                    m3_button(
+                        "Set seed",
+                        true,
+                        ButtonKind::Tonal,
+                        Message::SeedCommitted,
+                        app
+                    ),
+                ]
+                .spacing(8),
+            ]
+            .spacing(10),
         ]
-        .spacing(8),
-        toggler(app.settings.dark_mode)
-            .label("dark mode")
-            .size(28.0)
-            .on_toggle(Message::DarkToggled)
-            .style(t3::switch(s)),
+        .spacing(20)
+        .align_y(iced::Alignment::Start),
+        text("mode")
+            .size(ts.label_l.size)
+            .color(s.on_surface_variant),
+        mode_row,
+        text(mode_caption)
+            .size(ts.label_m.size)
+            .color(s.on_surface_variant),
     ]
     .spacing(10);
 
