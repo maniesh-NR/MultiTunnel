@@ -690,6 +690,9 @@ mod tests {
             exit_probe_url: String::new(),
             close_to_tray: false,
             always_on_top: false,
+            kill_switch: false,
+            diagnostics: false,
+            speed_test_url: String::new(),
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);

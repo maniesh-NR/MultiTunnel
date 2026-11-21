@@ -154,6 +154,80 @@ Every change closes only after ALL of these (CI runs them too):
 ## Recent Progress & Git Activity
 
 ```diff
+### Commit: 4888fec - backup(s18-memory-node): 2026-11-21T08:27:47Z (Z User, 2026-11-21)
+diff --git a/harness/memory/store/memory_graph.json b/harness/memory/store/memory_graph.json
+index 9b16150..5526006 100644
+--- a/harness/memory/store/memory_graph.json
++++ b/harness/memory/store/memory_graph.json
+@@ -1,6 +1,6 @@
+ {
+   "schema_version": 1,
+-  "as_of": "9d4111b 2026-11-21T07:17:18Z",
++  "as_of": "7203362 2026-11-21T08:27:44Z",
+   "sources": [
+     "PROJECT_MEMORY.md",
+     "harness/memory/STATE.md",
+@@ -11,8 +11,8 @@
+     "git (tags + full log)",
+     "harness/memory/curated/"
+   ],
+-  "node_count": 263,
+-  "edge_count": 272,
++  "node_count": 264,
++  "edge_count": 273,
+   "nodes": [
+     {
+       "id": "bug:freedom-loopback-blackhole",
+@@ -975,6 +975,26 @@
+         }
+       ]
+     },
++    {
++      "id": "commit:7203362",
++      "type": "commit",
++      "title": "backup(s18-close-v0.12.0): 2026-11-21T08:27:44Z",
++      "tags": [
++        "2026-11-21"
++      ],
++      "sources": [
++        {
++          "file": "git:log",
++          "anchor": "7203362"
++        }
++      ],
++      "passages": [
++        {
++          "text": "backup(s18-close-v0.12.0): 2026-11-21T08:27:44Z",
++          "kind": "title"
++        }
++      ]
++    },
+     {
+       "id": "commit:723ec6e",
+       "type": "commit",
+@@ -5218,7 +5238,7 @@
+       ],
+       "passages": [
+         {
+-          "text": "- **Stage**: S18 (v0.12.0) — implementation + local gates COMPLETE, release running. The six asks shipped (D28): 3-line tray tooltip (name+version / totals / speeds, CRLF), transparent-background contrast-boosted LARGER runtime icons (tray ICOs + logo_64 + logo_24), Settings accent COLOR WHEEL (HSV disc asset + inverse marker math, live re-theme, persist on release), System/Light/Dark mode (OS detection chain: MT_THEME_SYSTEM_DARK env seam → Win32 AppsUseLightTheme → gsettings/gtk; 5 s repoll; legacy dark_mode kept as the forward-compat shadow), mt-bond BLEST tie-guard + ECF completion scheduling (papers survey: docs/research/), UI changelog survey (docs/research/). 447/0 tests; rig verified sf=1.0+1.5. - **Prior stage**: S17 (v0.11.0, titlebar version + live speeds, logs floating jump buttons + autoscroll). The three asks shipped: release version next to the app name in the titlebar (workspace version inheritance — one-line release bumps; mt-app.exe PE metadata now carries the release version), live global ↓/↑ rates on the strip's right (the tray tooltip's same 1 s sample), Logs tab = fixed toolbar + dedicated viewport with floating top/bottom jump buttons (26px right stand-off — the rig caught the scrollbar grab-zone swallowing flush-corner clicks) + autoscroll toggle (default ON, follows the tail; re-enabling re-anchors). All 8 gates green; rig verified sf=1.0+1.5 (VLM content reads + pixel diffs); 433/0 tests.",
++          "text": "- **Stage**: IDLE — S18 CLOSED, v0.12.0 released and verified (release run 44879546925 first-try SUCCESS; the ci windows leg was a 69-min cold-cache cancel with same-commit green proof from the release's own build-windows — see LEDGER 08:30Z). The six asks shipped (D28): 3-line tray tooltip (name+version / totals / speeds, CRLF), transparent-background contrast-boosted LARGER runtime icons (tray ICOs + logo_64 + logo_24), Settings accent COLOR WHEEL (HSV disc asset + inverse marker math, live re-theme, persist on release), System/Light/Dark mode (OS detection chain: MT_THEME_SYSTEM_DARK env seam → Win32 AppsUseLightTheme → gsettings/gtk; 5 s repoll; legacy dark_mode kept as the forward-compat shadow), mt-bond BLEST tie-guard + ECF completion scheduling (papers survey: docs/research/), UI changelog survey (docs/research/). 447/0 tests; rig verified sf=1.0+1.5. - **Prior stages**: S18 (v0.12.0, D28: 3-line tray tooltip; transparent contrast-boosted larger icons everywhere; Settings accent COLOR WHEEL; System/Light/Dark mode with OS detection; mt-bond BLEST tie-guard + ECF scheduling per the docs/research/ papers survey; UI changelog survey), S17 (v0.11.0, titlebar version + live speeds, logs floating jump buttons + autoscroll).",
+           "kind": "body"
+         }
+       ]
+@@ -7761,6 +7781,12 @@
+       "rel": "part_of",
+       "evidence": "subject stage label (s11)"
+     },
++    {
++      "src": "commit:7203362",
++      "dst": "ledger:s18",
++      "rel": "part_of",
++      "evidence": "subject stage label (s18)"
++    },
+     {
+       "src": "commit:723ec6e",
+       "dst": "ledger:s11-release",
+
 ### Commit: 7203362 - backup(s18-close-v0.12.0): 2026-11-21T08:27:44Z (Z User, 2026-11-21)
 diff --git a/harness/memory/LEDGER.md b/harness/memory/LEDGER.md
 index 5487b37..ea28030 100755
@@ -2874,167 +2948,6 @@ index 63109da..fc69353 100755
      except subprocess.CalledProcessError as e:
          print(f"[!] Error running git command: {e}")
          return ""
-
-### Commit: d910ee5 - backup(s17-memory-node): 2026-11-20T17:04:40Z (Z User, 2026-11-20)
-diff --git a/harness/memory/curated/edges.json b/harness/memory/curated/edges.json
-index 2649327..ff10e85 100644
---- a/harness/memory/curated/edges.json
-+++ b/harness/memory/curated/edges.json
-@@ -150,6 +150,18 @@
-       "rel": "implements",
-       "evidence": "S14 protocol upgrade, user directive"
-     },
-+    {
-+      "src": "task:s17-titlebar-logs",
-+      "dst": "commit:ce6af07",
-+      "rel": "released_in",
-+      "evidence": "tag v0.11.0, release run 44766745650 attempt 2"
-+    },
-+    {
-+      "src": "task:s17-titlebar-logs",
-+      "dst": "component:mt-app",
-+      "rel": "implements",
-+      "evidence": "crates/mt-app/src/screens.rs logs()+titlebar(); app.rs messages+autoscroll_logs_now"
-+    },
-     {
-       "src": "task:saturation-aware-split",
-       "dst": "bug:reorder-overflow",
-diff --git a/harness/memory/curated/nodes.json b/harness/memory/curated/nodes.json
-index c06361f..63d3251 100644
---- a/harness/memory/curated/nodes.json
-+++ b/harness/memory/curated/nodes.json
-@@ -430,6 +430,24 @@
-         }
-       ]
-     },
-+    {
-+      "id": "task:s17-titlebar-logs",
-+      "type": "task",
-+      "title": "S17 titlebar version+speeds, logs viewport navigation (D27, v0.11.0)",
-+      "tags": [],
-+      "sources": [
-+        {
-+          "file": "harness/memory/LEDGER.md#s17",
-+          "anchor": ""
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "S17 CLOSED (v0.11.0): titlebar shows the release version next to the app name (workspace version inheritance — [workspace.package] + version.workspace, one-line release bumps) and live global down/up rates on the right (self.throughput, the tray tooltip's same 1s sample). Logs screen: scaffold_fixed + dedicated viewport scrollable (id logs-lines), floating top/bottom jump buttons (26px right stand-off — RIG BUG: flush-corner placement sat in the scrollbar grab zone and the rail swallowed clicks), autoscroll toggle default ON (LogLine re-anchors via scrollable::snap_to RelativeOffset y=1.0 gated by autoscroll_logs_now()); mock gained a connect burst + deterministic 2s keepalive. Release ops: cold-cache cancel+rerun (68min leg -> 6min warm retry; rust-cache saves in post-steps even on cancellation) and CI runner-flake round 2 (carrier_death then socks_probe deadline, green on attempt 3).",
-+          "kind": "body"
-+        }
-+      ]
-+    },
-     {
-       "id": "task:saturation-aware-split",
-       "type": "task",
-diff --git a/harness/memory/store/memory_graph.json b/harness/memory/store/memory_graph.json
-index 142da4f..d0e8659 100644
---- a/harness/memory/store/memory_graph.json
-+++ b/harness/memory/store/memory_graph.json
-@@ -1,6 +1,6 @@
- {
-   "schema_version": 1,
--  "as_of": "25f93ff 2026-11-20T15:47:04Z",
-+  "as_of": "66147c6 2026-11-20T17:04:04Z",
-   "sources": [
-     "PROJECT_MEMORY.md",
-     "harness/memory/STATE.md",
-@@ -11,8 +11,8 @@
-     "git (tags + full log)",
-     "harness/memory/curated/"
-   ],
--  "node_count": 254,
--  "edge_count": 262,
-+  "node_count": 256,
-+  "edge_count": 265,
-   "nodes": [
-     {
-       "id": "bug:freedom-loopback-blackhole",
-@@ -815,6 +815,26 @@
-         }
-       ]
-     },
-+    {
-+      "id": "commit:66147c6",
-+      "type": "commit",
-+      "title": "backup(s17-close-v0.11.0): 2026-11-20T17:04:00Z",
-+      "tags": [
-+        "2026-11-20"
-+      ],
-+      "sources": [
-+        {
-+          "file": "git:log",
-+          "anchor": "66147c6"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "backup(s17-close-v0.11.0): 2026-11-20T17:04:00Z",
-+          "kind": "title"
-+        }
-+      ]
-+    },
-     {
-       "id": "commit:6a4bd7c",
-       "type": "commit",
-@@ -7263,6 +7283,24 @@
-         }
-       ]
-     },
-+    {
-+      "id": "task:s17-titlebar-logs",
-+      "type": "task",
-+      "title": "S17 titlebar version+speeds, logs viewport navigation (D27, v0.11.0)",
-+      "tags": [],
-+      "sources": [
-+        {
-+          "file": "harness/memory/LEDGER.md#s17",
-+          "anchor": ""
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "S17 CLOSED (v0.11.0): titlebar shows the release version next to the app name (workspace version inheritance — [workspace.package] + version.workspace, one-line release bumps) and live global down/up rates on the right (self.throughput, the tray tooltip's same 1s sample). Logs screen: scaffold_fixed + dedicated viewport scrollable (id logs-lines), floating top/bottom jump buttons (26px right stand-off — RIG BUG: flush-corner placement sat in the scrollbar grab zone and the rail swallowed clicks), autoscroll toggle default ON (LogLine re-anchors via scrollable::snap_to RelativeOffset y=1.0 gated by autoscroll_logs_now()); mock gained a connect burst + deterministic 2s keepalive. Release ops: cold-cache cancel+rerun (68min leg -> 6min warm retry; rust-cache saves in post-steps even on cancellation) and CI runner-flake round 2 (carrier_death then socks_probe deadline, green on attempt 3).",
-+          "kind": "body"
-+        }
-+      ]
-+    },
-     {
-       "id": "task:saturation-aware-split",
-       "type": "task",
-@@ -7528,6 +7566,12 @@
-       "rel": "part_of",
-       "evidence": "subject stage label (s15)"
-     },
-+    {
-+      "src": "commit:66147c6",
-+      "dst": "ledger:s17",
-+      "rel": "part_of",
-+      "evidence": "subject stage label (s17)"
-+    },
-     {
-       "src": "commit:6a4bd7c",
-       "dst": "ledger:s9.1",
-@@ -8830,6 +8874,18 @@
-       "rel": "implements",
-       "evidence": "S14 protocol upgrade, user directive"
-     },
-+    {
-+      "src": "task:s17-titlebar-logs",
-+      "dst": "commit:ce6af07",
-+      "rel": "released_in",
-+      "evidence": "tag v0.11.0, release run 44766745650 attempt 2"
-+    },
-+    {
-+      "src": "task:s17-titlebar-logs",
-+      "dst": "component:mt-app",
-+      "rel": "implements",
-+      "evidence": "crates/mt-app/src/screens.rs logs()+titlebar(); app.rs messages+autoscroll_logs_now"
-+    },
-     {
-       "src": "task:saturation-aware-split",
-       "dst": "bug:reorder-overflow",
 
 ( PROJECT_MEMORY.md's own diff is elided here — the durable
   sections above are hand-maintained; see harness/memory/LEDGER.md

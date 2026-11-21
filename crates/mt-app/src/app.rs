@@ -368,6 +368,33 @@ pub enum Message {
     TitleMenu(TitleMenuItem),
     /// "always on top" toggled (window menu or Settings).
     AlwaysOnTopToggled(bool),
+    // --- S19: server editing, speed test, kill switch, diagnostics ---
+    /// Open the Edit dialog for a server (fetch the editable material).
+    EditServer(String),
+    /// `profile_details` finished (id + the prefill, or an error).
+    EditLoaded(String, Result<mt_service::ProfileDetails, String>),
+    /// One Edit-dialog field changed.
+    EditField(EditField, String),
+    /// Save the Edit dialog's draft (`update_profile`).
+    EditSave,
+    /// `update_profile` finished.
+    EditSaved(Result<mt_service::ProfileView, String>),
+    /// Close the Edit dialog without saving.
+    EditCancel,
+    /// Run the speed test through the active profile.
+    SpeedTest,
+    /// The speed test finished.
+    SpeedTested(Result<mt_service::SpeedTestInfo, String>),
+    /// Kill switch toggled (Settings → Network).
+    KillSwitchToggled(bool),
+    /// Diagnostics mode toggled (Settings → Diagnostics).
+    DiagnosticsToggled(bool),
+    /// The diagnostics file path arrived (init / after a toggle).
+    DiagPath(Option<String>),
+    /// Speed-test URL changed (Settings → Advanced).
+    SpeedUrlChanged(String),
+    /// Open the log folder in the OS file manager.
+    OpenLogsFolder,
 }
 
 /// S16: one entry of the titlebar right-click window menu.
@@ -377,6 +404,95 @@ pub enum TitleMenuItem {
     Minimize,
     Maximize,
     Close,
+}
+
+/// S19: one editable field of the server-Edit dialog (indexes into
+/// [`EditDraft`]'s string fields; the update() arm writes exactly one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditField {
+    Tag,
+    Remark,
+    Address,
+    Port,
+    Identity,
+    Sni,
+    Fingerprint,
+    PublicKey,
+    ShortId,
+    SpiderX,
+}
+
+/// S19: the Edit dialog's draft state (all text fields are strings; the
+/// service validates + converts on save).
+#[derive(Debug, Clone)]
+pub struct EditDraft {
+    pub id: String,
+    pub tag: String,
+    pub remark: String,
+    /// Read-only protocol label ("vless" …).
+    pub protocol: String,
+    pub address: String,
+    pub port: String,
+    pub identity: String,
+    /// Read-only security label ("reality" …); the REALITY-only fields
+    /// below render only when this is "reality".
+    pub security: String,
+    pub sni: String,
+    pub fingerprint: String,
+    pub public_key: String,
+    pub short_id: String,
+    pub spider_x: String,
+    /// A save is in flight (disables the Save button).
+    pub saving: bool,
+    /// Last save error (shown in the dialog; keeps it open).
+    pub error: Option<String>,
+}
+
+impl EditDraft {
+    /// Prefill from the service's `profile_details` payload.
+    pub fn from_details(d: mt_service::ProfileDetails) -> Self {
+        Self {
+            id: d.id,
+            tag: d.tag,
+            remark: d.remark,
+            protocol: d.protocol,
+            address: d.address,
+            port: d.port,
+            identity: d.identity,
+            security: d.security,
+            sni: d.sni,
+            fingerprint: d.fingerprint,
+            public_key: d.public_key,
+            short_id: d.short_id,
+            spider_x: d.spider_x,
+            saving: false,
+            error: None,
+        }
+    }
+
+    /// The draft as a save payload (the service re-validates).
+    pub fn to_details(&self) -> mt_service::ProfileDetails {
+        mt_service::ProfileDetails {
+            id: self.id.clone(),
+            tag: self.tag.clone(),
+            remark: self.remark.clone(),
+            protocol: self.protocol.clone(),
+            address: self.address.clone(),
+            port: self.port.clone(),
+            identity: self.identity.clone(),
+            security: self.security.clone(),
+            sni: self.sni.clone(),
+            fingerprint: self.fingerprint.clone(),
+            public_key: self.public_key.clone(),
+            short_id: self.short_id.clone(),
+            spider_x: self.spider_x.clone(),
+        }
+    }
+
+    /// TRUE iff the security-layer fields apply (REALITY profiles only).
+    pub fn is_reality(&self) -> bool {
+        self.security.eq_ignore_ascii_case("reality")
+    }
 }
 
 /// Valid routing rule kinds (matches the mt-net router matcher).
@@ -507,6 +623,17 @@ pub struct App {
     /// S18: last cursor position inside the wheel (local coords) — the
     /// press picks the color under the cursor without needing a move.
     pub wheel_cursor: Option<iced::Point>,
+    /// S19: the open server-Edit dialog (None = closed). Holds the draft
+    /// fields + the save-in-flight flag; opens via `Message::EditServer`.
+    pub edit: Option<EditDraft>,
+    /// S19: last speed-test result for the Status screen (None = never
+    /// run).
+    pub speed: Option<Result<mt_service::SpeedTestInfo, String>>,
+    /// S19: a speed test is in flight (drives the card's button state).
+    pub speed_testing: bool,
+    /// S19: the diagnostics log file currently being written (Settings
+    /// screen; None when the mode is off).
+    pub diag_path: Option<String>,
 }
 
 /// S17: the release version shown next to the app name in the titlebar.
@@ -539,6 +666,9 @@ impl App {
             exit_probe_url: "http://ip-api.com/json".to_string(),
             close_to_tray: false,
             always_on_top: false,
+            kill_switch: false,
+            diagnostics: false,
+            speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
         };
         // S18: detect the OS appearance once so the System mode (the
         // stock default) starts honest.
@@ -592,6 +722,11 @@ impl App {
             sys_poll: 0,
             wheel_dragging: false,
             wheel_cursor: None,
+            // S19
+            edit: None,
+            speed: None,
+            speed_testing: false,
+            diag_path: None,
         }
     }
 
@@ -621,6 +756,7 @@ impl App {
             app.load_rules(),
             app.load_settings(),
             app.load_adapters(),
+            app.fetch_diag_path(),
         ];
         (app, iced::Task::batch(tasks))
     }
@@ -645,6 +781,7 @@ impl App {
         app.rules_saved = app.rules.clone();
         app.settings = app.service.settings().await;
         app.seed_text = app.settings.theme_seed.to_string();
+        app.diag_path = app.service.diagnostics_path().await;
         // S18: resolve light/dark through the picked mode + OS preference.
         app.sys_dark = crate::theme::system_prefers_dark();
         app.theme.rederive(
@@ -700,6 +837,16 @@ impl App {
     fn load_settings(&self) -> iced::Task<Message> {
         let svc = Arc::clone(&self.service);
         iced::Task::perform(async move { svc.settings().await }, Message::SettingsLoaded)
+    }
+
+    /// S19: refresh the diagnostics file path shown on the Settings screen
+    /// (the service creates the file when the mode turns on).
+    fn fetch_diag_path(&self) -> iced::Task<Message> {
+        let svc = Arc::clone(&self.service);
+        iced::Task::perform(
+            async move { svc.diagnostics_path().await },
+            Message::DiagPath,
+        )
     }
 
     fn load_adapters(&self) -> iced::Task<Message> {
@@ -1466,6 +1613,150 @@ impl App {
                 self.settings.exit_probe_url = t;
                 return self.save_settings(self.settings.clone());
             }
+            Message::SpeedUrlChanged(t) => {
+                self.settings.speed_test_url = t;
+                return self.save_settings(self.settings.clone());
+            }
+            // --- S19: server editing, speed test, kill switch, diagnostics ---
+            Message::EditServer(id) => {
+                let svc = Arc::clone(&self.service);
+                let id_for_res = id.clone();
+                return iced::Task::perform(
+                    async move {
+                        let res = svc.profile_details(&id_for_res).await;
+                        (id_for_res, res)
+                    },
+                    |(id, res)| Message::EditLoaded(id, res),
+                );
+            }
+            Message::EditLoaded(_id, res) => match res {
+                Ok(details) => {
+                    // Only open when no dialog is up (a stale fetch must
+                    // never clobber the draft the user is typing into).
+                    if self.edit.is_none() {
+                        self.edit = Some(EditDraft::from_details(details));
+                        self.notice = None;
+                    }
+                }
+                Err(e) => self.notice = Some(format!("cannot edit server: {e}")),
+            },
+            Message::EditField(field, value) => {
+                if let Some(d) = self.edit.as_mut() {
+                    match field {
+                        EditField::Tag => d.tag = value,
+                        EditField::Remark => d.remark = value,
+                        EditField::Address => d.address = value,
+                        EditField::Port => d.port = value,
+                        EditField::Identity => d.identity = value,
+                        EditField::Sni => d.sni = value,
+                        EditField::Fingerprint => d.fingerprint = value,
+                        EditField::PublicKey => d.public_key = value,
+                        EditField::ShortId => d.short_id = value,
+                        EditField::SpiderX => d.spider_x = value,
+                    }
+                }
+            }
+            Message::EditSave => {
+                let Some(draft) = self.edit.clone() else {
+                    return iced::Task::none();
+                };
+                if draft.saving {
+                    return iced::Task::none();
+                }
+                if let Some(d) = self.edit.as_mut() {
+                    d.saving = true;
+                    d.error = None;
+                }
+                let svc = Arc::clone(&self.service);
+                let id = draft.id.clone();
+                let payload = draft.to_details();
+                return iced::Task::perform(
+                    async move { svc.update_profile(&id, payload).await },
+                    Message::EditSaved,
+                );
+            }
+            Message::EditSaved(res) => match res {
+                Ok(pv) => {
+                    self.edit = None;
+                    self.notice = Some(format!("saved server \"{}\"", pv.tag));
+                    return self.load_profiles();
+                }
+                Err(e) => {
+                    if let Some(d) = self.edit.as_mut() {
+                        d.saving = false;
+                        d.error = Some(e);
+                    }
+                }
+            },
+            Message::EditCancel => self.edit = None,
+            Message::SpeedTest => {
+                if self.speed_testing {
+                    return iced::Task::none();
+                }
+                self.speed_testing = true;
+                let svc = Arc::clone(&self.service);
+                return iced::Task::perform(
+                    async move { svc.speed_test(None).await },
+                    Message::SpeedTested,
+                );
+            }
+            Message::SpeedTested(res) => {
+                self.speed_testing = false;
+                if let Err(e) = &res {
+                    util::push_log(&mut self.logs, format!("WARN  speed test: {e}"));
+                }
+                self.speed = Some(res);
+            }
+            Message::KillSwitchToggled(v) => {
+                self.settings.kill_switch = v;
+                return self.save_settings(self.settings.clone());
+            }
+            Message::DiagnosticsToggled(v) => {
+                self.settings.diagnostics = v;
+                let save = self.save_settings(self.settings.clone());
+                // The service creates/closes the file during the save;
+                // refresh the displayed path right after.
+                return iced::Task::batch([save, self.fetch_diag_path()]);
+            }
+            Message::DiagPath(p) => self.diag_path = p,
+            Message::OpenLogsFolder => {
+                // The diagnostics file's folder — the button lives on the
+                // Diagnostics card and is only meaningful while the file
+                // exists (diagnostics ON).
+                let Some(diag) = self.diag_path.clone() else {
+                    self.settings_status = Some(
+                        "turn diagnostics on first — the log file is created when it starts"
+                            .to_string(),
+                    );
+                    return iced::Task::none();
+                };
+                let path = std::path::Path::new(&diag)
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| std::path::PathBuf::from(&diag));
+                let opened = if path.exists() {
+                    #[cfg(windows)]
+                    {
+                        std::process::Command::new("explorer")
+                            .arg(&path)
+                            .spawn()
+                            .is_ok()
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        std::process::Command::new("xdg-open")
+                            .arg(&path)
+                            .spawn()
+                            .is_ok()
+                    }
+                } else {
+                    false
+                };
+                if !opened {
+                    self.settings_status =
+                        Some(format!("could not open the log folder: {}", path.display()));
+                }
+            }
             // --- S15: title bar / tray / close-to-tray (D25) ---
             Message::WindowEvent(id, event) => {
                 if self.window_id.is_none() {
@@ -1746,6 +2037,10 @@ impl App {
         let mut stack = iced::widget::stack![base];
         if self.title_menu.is_some() {
             stack = stack.push(screens::title_menu_overlay(self));
+        }
+        // S19: the server Edit dialog — same full-window layer discipline.
+        if self.edit.is_some() {
+            stack = stack.push(screens::edit_overlay(self));
         }
         stack.into()
     }
@@ -2853,5 +3148,130 @@ mod tests {
         s.always_on_top = true;
         app.service.set_settings(s).await.expect("save");
         assert!(app.service.settings().await.always_on_top);
+    }
+
+    // --- S19: server editing, speed test, kill switch, diagnostics ---------
+
+    /// S19: the Edit dialog flow — open (fetch), type into fields, save
+    /// (update_profile), close; a failing save keeps the dialog open with
+    /// the error in it.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn edit_dialog_open_type_save_close() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        let id = app.profiles[0].id.clone();
+        assert!(app.edit.is_none());
+
+        // Open: the fetch completes into a draft.
+        drop(app.update(Message::EditServer(id.clone())));
+        let details = app.service.profile_details(&id).await.expect("details");
+        drop(app.update(Message::EditLoaded(id.clone(), Ok(details.clone()))));
+        let draft = app.edit.as_ref().expect("dialog open");
+        assert_eq!(draft.id, id);
+        assert_eq!(draft.tag, details.tag);
+        assert!(
+            draft.is_reality(),
+            "the mock's seed vless profile is REALITY"
+        );
+
+        // Type: rename + retag the port.
+        drop(app.update(Message::EditField(EditField::Tag, "edited".into())));
+        drop(app.update(Message::EditField(EditField::Port, "8443".into())));
+        drop(app.update(Message::EditField(EditField::Sni, "new.sni.example".into())));
+        let draft = app.edit.as_ref().expect("still open");
+        assert_eq!(draft.tag, "edited");
+        assert_eq!(draft.port, "8443");
+        assert_eq!(draft.sni, "new.sni.example");
+
+        // Save: the service applies the edit; the dialog closes and the
+        // notice names the saved server.
+        let res = app
+            .service
+            .update_profile(&id, app.edit.as_ref().unwrap().to_details())
+            .await
+            .expect("save");
+        drop(app.update(Message::EditSaved(Ok(res))));
+        assert!(app.edit.is_none(), "closed after a good save");
+        assert!(app.notice.as_deref().unwrap_or("").contains("edited"));
+
+        // A failing save keeps the dialog open with the error shown.
+        drop(app.update(Message::EditServer(id.clone())));
+        let details = app.service.profile_details(&id).await.expect("details");
+        drop(app.update(Message::EditLoaded(id.clone(), Ok(details))));
+        drop(app.update(Message::EditSaved(Err(
+            "port must be a number 0-65535".into(),
+        ))));
+        let draft = app.edit.as_ref().expect("still open on error");
+        assert_eq!(
+            draft.error.as_deref(),
+            Some("port must be a number 0-65535")
+        );
+        assert!(!draft.saving);
+        drop(app.update(Message::EditCancel));
+        assert!(app.edit.is_none(), "cancel closes");
+    }
+
+    /// S19: the speed-test card state machine — in-flight guard, result
+    /// lands, errors land too.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn speed_test_message_flow() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        assert!(app.speed.is_none());
+        drop(app.update(Message::SpeedTest));
+        assert!(app.speed_testing);
+        let res = app.service.speed_test(None).await;
+        drop(app.update(Message::SpeedTested(res)));
+        assert!(!app.speed_testing);
+        let info = app
+            .speed
+            .as_ref()
+            .expect("result present")
+            .as_ref()
+            .expect("ok");
+        assert!(info.mbps > 0.0);
+        // Errors surface in the result and the log buffer.
+        drop(app.update(Message::SpeedTest));
+        drop(app.update(Message::SpeedTested(Err("no data received".into()))));
+        assert!(app.speed.as_ref().expect("error result present").is_err());
+        assert!(app.logs.iter().any(|l| l.contains("speed test")));
+    }
+
+    /// S19: kill switch + diagnostics + speed-URL toggles update the draft
+    /// settings (the save task is runtime-driven; persistence through the
+    /// service is proven directly like the S15/S16 twins) and the view
+    /// modal only exists while a dialog is open.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn s19_settings_toggles_and_modal_gating() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        assert!(!app.settings.kill_switch);
+        drop(app.update(Message::KillSwitchToggled(true)));
+        assert!(app.settings.kill_switch);
+        assert!(!app.settings.diagnostics);
+        drop(app.update(Message::DiagnosticsToggled(true)));
+        assert!(app.settings.diagnostics);
+        drop(app.update(Message::SpeedUrlChanged("http://x.example/f".into())));
+        assert_eq!(app.settings.speed_test_url, "http://x.example/f");
+
+        // The modal layer only renders while the draft exists (view()
+        // gates on edit.is_some()).
+        drop(app.view());
+        assert!(app.edit.is_none());
+        let id = app.profiles[0].id.clone();
+        let details = app.service.profile_details(&id).await.expect("details");
+        drop(app.update(Message::EditLoaded(id, Ok(details))));
+        assert!(app.edit.is_some());
+        drop(app.view()); // builds fine with the dialog up (no panic)
+
+        // The mock keeps no diagnostics file: DiagPath(None) keeps the
+        // Settings caption honest.
+        drop(app.update(Message::DiagPath(None)));
+        assert!(app.diag_path.is_none());
+        drop(app.update(Message::DiagPath(Some("/tmp/x.log".into()))));
+        assert_eq!(app.diag_path.as_deref(), Some("/tmp/x.log"));
     }
 }

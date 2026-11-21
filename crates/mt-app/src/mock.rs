@@ -107,6 +107,9 @@ impl MockService {
             exit_probe_url: "http://ip-api.com/json".to_string(),
             close_to_tray: false,
             always_on_top: false,
+            kill_switch: false,
+            diagnostics: false,
+            speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
         };
         let inner = Inner {
             state: ServiceState::Disconnected,
@@ -697,14 +700,146 @@ impl MtService for MockService {
         self.tx.subscribe()
     }
 
+    async fn profile_details(&self, id: &str) -> Result<mt_service::ProfileDetails, String> {
+        let inner = self.inner.lock().await;
+        let p = inner
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| format!("no profile matches {id:?}"))?;
+        let (security, sni, fingerprint, public_key, short_id, spider_x) = match &p.security {
+            mt_links::Security::Reality {
+                sni,
+                fingerprint,
+                public_key,
+                short_id,
+                spider_x,
+            } => (
+                "reality",
+                sni.clone(),
+                fingerprint.clone(),
+                public_key.clone(),
+                short_id.clone(),
+                spider_x.clone().unwrap_or_default(),
+            ),
+            mt_links::Security::Tls { sni, .. } => (
+                "tls",
+                sni.clone().unwrap_or_default(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            mt_links::Security::None => (
+                "none",
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        };
+        Ok(mt_service::ProfileDetails {
+            id: p.id.clone(),
+            tag: p.tag.clone(),
+            remark: p.remark.clone(),
+            protocol: format!("{:?}", p.protocol).to_ascii_lowercase(),
+            address: p.address.clone(),
+            port: p.port.to_string(),
+            identity: p.identity.clone(),
+            security: security.to_string(),
+            sni,
+            fingerprint,
+            public_key,
+            short_id,
+            spider_x,
+        })
+    }
+
+    async fn update_profile(
+        &self,
+        id: &str,
+        edit: mt_service::ProfileDetails,
+    ) -> Result<mt_service::ProfileView, String> {
+        if edit.tag.trim().is_empty() {
+            return Err("name cannot be empty".to_string());
+        }
+        edit.port
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| format!("port must be a number 0-65535 ({:?})", edit.port))?;
+        if edit.identity.trim().is_empty() {
+            return Err("identity (UUID/password) cannot be empty".to_string());
+        }
+        let mut inner = self.inner.lock().await;
+        let active = inner.active.clone();
+        let p = inner
+            .profiles
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| format!("no profile matches {id:?}"))?;
+        p.tag = edit.tag.trim().to_string();
+        p.remark = edit.remark.trim().to_string();
+        p.address = edit.address.trim().to_string();
+        p.port = edit.port.trim().parse().expect("validated above");
+        p.identity = edit.identity.trim().to_string();
+        if let mt_links::Security::Reality {
+            sni,
+            fingerprint,
+            public_key,
+            short_id,
+            spider_x,
+        } = &mut p.security
+        {
+            *sni = edit.sni.trim().to_string();
+            *fingerprint = edit.fingerprint.trim().to_string();
+            *public_key = edit.public_key.trim().to_string();
+            *short_id = edit.short_id.trim().to_string();
+            let spider = edit.spider_x.trim().to_string();
+            *spider_x = (!spider.is_empty()).then_some(spider);
+        }
+        let view = view_of(p, &active);
+        drop(inner);
+        self.log("INFO", "profile edited (mock)");
+        Ok(view)
+    }
+
+    async fn speed_test(&self, _id: Option<String>) -> Result<mt_service::SpeedTestInfo, String> {
+        // Simulated throughput (no real network in mock builds).
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let (mbps, secs, tag, live) = {
+            let mut g = self.inner.lock().await;
+            let mbps = 40.0 + MockService::rng_below(&mut g, 90) as f64;
+            let live = matches!(g.state, ServiceState::Connected);
+            let tag = g
+                .active
+                .as_deref()
+                .and_then(|a| g.profiles.iter().find(|p| p.id == a))
+                .map(|p| p.tag.clone())
+                .unwrap_or_else(|| "mock".to_string());
+            (mbps, 0.8, tag, live)
+        };
+        self.log(
+            "INFO",
+            &format!("speed test finished ({mbps:.0} Mbps simulated)"),
+        );
+        Ok(mt_service::SpeedTestInfo {
+            mbps,
+            mbytes: mbps * secs / 8.0,
+            seconds: secs,
+            profile_tag: tag,
+            via_temp_tunnel: !live,
+        })
+    }
+
     async fn exit_probe(&self) -> Result<ExitInfo, String> {
         // Simulated identity (RFC 5737 documentation range — clearly fake,
         // no real network in mock builds). The exit IS the seed server:
-        // single hop, matching production's happy path.
+        // single hop, matching production's happy path. S19: works while
+        // DISCONNECTED too — via_temp_tunnel marks the simulated
+        // temporary-probe path (production spawns a real one).
         let inner = self.inner.lock().await;
-        if inner.state != ServiceState::Connected {
-            return Err("not connected".to_string());
-        }
+        let live = matches!(inner.state, ServiceState::Connected);
         let endpoint = inner
             .profiles
             .iter()
@@ -719,7 +854,13 @@ impl MtService for MockService {
             asn: "AS64512 Example Telecom".to_string(),
             server_endpoint: endpoint,
             direct_exit: true,
+            via_temp_tunnel: !live,
         })
+    }
+
+    async fn diagnostics_path(&self) -> Option<String> {
+        // The mock keeps no files; the Settings screen shows its caption.
+        None
     }
 }
 

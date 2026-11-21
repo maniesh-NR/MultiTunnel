@@ -6,6 +6,10 @@
 //!   shape (`version` / `active` / `profiles`);
 //! - `upsert` dedupes by `(protocol, address, port, identity)` and keeps the
 //!   EXISTING id so references stay stable; returns the effective id;
+//! - `update` (S19) replaces one profile BY ID in place — the id, the
+//!   list position and the `active` pointer are all preserved, and NO
+//!   dedupe runs (an explicit edit may legitimately collide with another
+//!   entry; merging is the user's call, not ours);
 //! - `remove` clears `active` when it pointed at the removed id;
 //! - `set_active(Some(id))` is rejected (false, no change) for unknown ids,
 //!   `set_active(None)` always succeeds.
@@ -98,6 +102,22 @@ impl ProfileStore {
             self.active = None;
         }
         removed
+    }
+
+    /// S19: replace one profile by id, IN PLACE (same list position, same
+    /// id, `active` untouched). The replacement's `id` field is ignored —
+    /// the stored id wins, exactly like `upsert` keeps the existing id on
+    /// a metadata refresh. Returns false (no change) for an unknown id.
+    /// No dedupe: an explicit edit that collides with another profile's
+    /// `(protocol, address, port, identity)` is the user's choice; a later
+    /// re-import of the same link still merges via `upsert`.
+    pub fn update(&mut self, id: &str, mut replacement: Profile) -> bool {
+        let Some(slot) = self.profiles.iter_mut().find(|p| p.id == id) else {
+            return false;
+        };
+        replacement.id = id.to_string();
+        *slot = replacement;
+        true
     }
 
     /// Set the active profile by id (or clear it). An unknown id is
@@ -332,6 +352,73 @@ mod tests {
         assert!(store.remove(&id));
         assert!(store.active.is_none(), "active cleared with the profile");
         assert_eq!(store.list().len(), 1);
+    }
+
+    #[test]
+    fn update_replaces_in_place_keeping_id_position_and_active() {
+        let mut store = ProfileStore::default();
+        let id_a = store.upsert(profile(
+            "id-a",
+            "tag-a",
+            "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        ));
+        store.upsert(profile(
+            "id-b",
+            "tag-b",
+            "11111111-2222-3333-4444-555555555555",
+        ));
+        assert!(store.set_active(Some(&id_a)), "set active");
+
+        // Edit A: new address + tag; a FRESH uuid in the id field must be
+        // ignored (the stored id wins).
+        let mut edited = profile(
+            "fresh-uuid",
+            "edited-a",
+            "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        );
+        edited.address = "198.51.100.7".to_string();
+        edited.port = 8443;
+        assert!(store.update(&id_a, edited));
+
+        assert_eq!(store.list().len(), 2, "no append on edit");
+        assert_eq!(store.list()[0].id, id_a, "id preserved");
+        assert_eq!(store.list()[0].tag, "edited-a");
+        assert_eq!(store.list()[0].address, "198.51.100.7");
+        assert_eq!(store.list()[0].port, 8443);
+        assert_eq!(store.active.as_deref(), Some(id_a.as_str()), "active kept");
+
+        // Unknown id: rejected, nothing changes.
+        assert!(!store.update("no-such-id", profile("x", "x", "x")));
+        assert_eq!(store.list().len(), 2);
+    }
+
+    #[test]
+    fn update_colliding_with_another_profile_is_kept() {
+        // An explicit edit may duplicate another entry's dedupe key — the
+        // store keeps BOTH (merging is the user's call, not ours).
+        let mut store = ProfileStore::default();
+        let id_a = store.upsert(profile(
+            "id-a",
+            "tag-a",
+            "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        ));
+        store.upsert(profile(
+            "id-b",
+            "tag-b",
+            "11111111-2222-3333-4444-555555555555",
+        ));
+        let mut edited = profile(
+            "id-a",
+            "tag-a-clone",
+            "11111111-2222-3333-4444-555555555555",
+        );
+        edited.address = "203.0.113.10".to_string();
+        assert!(store.update(&id_a, edited));
+        assert_eq!(store.list().len(), 2, "no silent merge on explicit edit");
+        assert_eq!(
+            store.list()[0].identity,
+            "11111111-2222-3333-4444-555555555555"
+        );
     }
 
     #[test]

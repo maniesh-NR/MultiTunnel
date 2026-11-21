@@ -88,6 +88,15 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > totals, live speeds), the tray/taskbar icons are transparent with a
 > bigger mark, and Settings gained a full accent COLOR WHEEL plus a
 > System / Light / Dark appearance mode (System follows the OS).
+>
+> v0.13: servers can be EDITED after the fact (Servers → Edit: name,
+> remark, address, port, UUID and the REALITY fields), the exit-IP check
+> and a new Speed test work even while DISCONNECTED (they spawn a
+> temporary probe tunnel through the active server), Settings gained a
+> KILL SWITCH (fail-closed: if the tunnel dies on its own, the system
+> proxy blocks traffic instead of silently going direct) and a
+> DIAGNOSTICS mode that writes one paste-ready support log file
+> (connection lifecycle + engine output, credentials redacted).
 
 **SMOKE TEST — this is the first time the GUI binary runs on real Windows.**
 The development sandbox is Linux; the window has been cross-compiled and

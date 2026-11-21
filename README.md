@@ -374,6 +374,30 @@ GUI, no new dependencies):
   color-scheme), re-checked every few seconds while the app runs. A
   survey of the multipath-bonding literature (BLEST, ECF, MP-QUIC…) and
   how it maps onto the scheduler shipped alongside in `docs/research/`.
+- **Server editing, offline probes, kill switch, diagnostics (v0.13)**:
+  every server card gained an **Edit** button — name, remark, address,
+  port, UUID and the REALITY fields (SNI, fingerprint, public key, short
+  ID, spiderX) are editable after import; the id, the active selection and
+  the list position are preserved, and an edit that would break a profile
+  that used to connect is rejected with the reason. The Status tab's
+  **Check exit IP** and the new **Speed test** work even while
+  DISCONNECTED: both spawn a temporary probe tunnel through the active
+  server (the same engine path a latency test uses) and tear it down
+  after — the card shows whether the answer came through the live tunnel
+  or a temporary one. The speed test downloads a payload through the
+  server (URL configurable in Advanced settings) and reports Mbps, volume
+  and duration; tunnel setup is excluded from the rate. Settings →
+  Network gained a **kill switch**: when the tunnel dies on its own while
+  MultiTunnel owns the system proxy, the proxy is re-pointed at a dead
+  loopback port so traffic FAILS instead of silently leaking direct
+  (fail-closed); connecting again — or toggling the switch off, or a
+  manual disconnect — restores normal operation. Settings → Diagnostics
+  writes one **paste-ready support log** (`diagnostics-<timestamp>.log`
+  in the log folder): connection lifecycle events, engine output (log
+  level forced to `debug` for the session), link health and a redacted
+  settings/profile summary — UUIDs, passwords and public keys never
+  appear in it. Turn it on, reproduce a connection issue, then paste the
+  file into a support chat.
 - **Quick Settings on right-click**: the tray menu is built fresh from
   live state — Connect/Disconnect (state-reflecting), the server list
   (radio-checked on the active profile), Open MultiTunnel and Exit.

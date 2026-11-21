@@ -124,8 +124,8 @@ use mt_net::{
 };
 use mt_platform::NetAdapter;
 use mt_service::{
-    AdapterView, ExitInfo, LinkStatus, MtService, ProfileView, RuleView, ServiceEvent,
-    ServiceState, SettingsView, StatusSnapshot,
+    AdapterView, ExitInfo, LinkStatus, MtService, ProfileDetails, ProfileView, RuleView,
+    ServiceEvent, ServiceState, SettingsView, SpeedTestInfo, StatusSnapshot,
 };
 use tokio::sync::broadcast;
 
@@ -148,6 +148,26 @@ const BIND_POLL: Duration = Duration::from_millis(10);
 const EVENT_BUFFER: usize = 256;
 /// The flow the engine pins (mt-engine hardcodes vision in its config).
 const ENGINE_FLOW: &str = "xtls-rprx-vision";
+/// S19: overall budget for one exit-IP probe (unchanged; the temp-tunnel
+/// variant also pays engine spawn inside this budget).
+const EXIT_PROBE_BUDGET: Duration = Duration::from_secs(12);
+/// S19: exit probe body cap (the identity document is tiny).
+const EXIT_PROBE_MAX_BYTES: u64 = 64 * 1024;
+/// S19: overall budget for one speed test (transfer time only; the
+/// temp-tunnel setup also pays inside this window when offline).
+const SPEED_TEST_BUDGET: Duration = Duration::from_secs(30);
+/// S19: stop reading after this many bytes even if the server has more.
+const SPEED_TEST_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// S19: per-read stall limit inside a speed test — a server that trickles
+/// slower than this yields the partial measurement instead of hanging.
+const SPEED_TEST_STALL: Duration = Duration::from_secs(5);
+/// S19: the kill switch's black-hole proxy target — a loopback port
+/// nothing legitimately listens on (discard). With the system proxy
+/// pointed here, WinINET consumers get instant connection-refused
+/// instead of silently going DIRECT after a spontaneous tunnel death
+/// (fail-closed). Reuses `sysproxy::set` so the ORIGINAL pre-tunnel
+/// snapshot stays intact for the eventual restore.
+const KILL_SWITCH_BLACKHOLE_PROXY: &str = "127.0.0.1:9";
 
 /// Filesystem locations the service works with (injected in tests).
 #[derive(Debug, Clone)]
@@ -570,6 +590,9 @@ impl Default for SettingsFile {
                 exit_probe_url: "http://ip-api.com/json".to_string(),
                 close_to_tray: false,
                 always_on_top: false,
+                kill_switch: false,
+                diagnostics: false,
+                speed_test_url: default_speed_test_url(),
             },
             // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
             // settings.json must carry private-CIDR → direct rules, mirroring
@@ -587,6 +610,12 @@ impl Default for SettingsFile {
 /// Current settings schema version (D20 = 1: stock failover →
 /// round-robin; D23 = 2: stock round-robin → balanced).
 const SETTINGS_VERSION: u32 = 2;
+
+/// S19: the default speed-test URL (mirrors the mt-service serde default
+/// so a fresh SettingsFile and a freshly-parsed one agree).
+fn default_speed_test_url() -> String {
+    "http://speed.cloudflare.com/__down?bytes=25000000".to_string()
+}
 
 impl SettingsFile {
     fn load(path: &Path) -> Self {
@@ -748,6 +777,11 @@ impl Core {
     }
 
     fn emit(&self, ev: ServiceEvent) {
+        // S19: every GUI-visible line doubles into the diagnostics file
+        // (no-op when the mode is off).
+        if let ServiceEvent::LogLine(line) = &ev {
+            crate::diagnostics::line("GUI", line);
+        }
         let _ = self.events.send(ev);
     }
 
@@ -874,7 +908,16 @@ impl RealService {
 
         let settings = SettingsFile::load(&self.core.paths.settings_file());
         // S9: refresh the engine log level BEFORE links are built.
-        *wlock(&self.core.engine_log_level) = Some(settings.settings.log_level.clone());
+        // S19: diagnostics mode forces `debug` for the session (the whole
+        // point is capturing enough signal for a support conversation).
+        if crate::diagnostics::is_on() {
+            *wlock(&self.core.engine_log_level) = Some("debug".to_string());
+            self.core.emit(ServiceEvent::LogLine(
+                "INFO  diagnostics: engine log level forced to debug for this session".into(),
+            ));
+        } else {
+            *wlock(&self.core.engine_log_level) = Some(settings.settings.log_level.clone());
+        }
         let store = match self.core.load_store() {
             Ok(s) => s,
             Err(e) => {
@@ -1224,13 +1267,60 @@ async fn pump(
 }
 
 /// D5 fail-open give-up (v0.2 supervisor semantics for restart exhaustion):
-/// restore the system proxy, retire the session, mark `Failed`, and stop
-/// the server. Best-effort throughout — the user's browsing keeps working.
+/// retire the session, mark `Failed`, and stop the server. The system
+/// proxy hand-off depends on the S19 kill switch:
+///
+/// - **kill switch OFF** (the pre-S19 D5 behavior): the system proxy is
+///   RESTORED — the user's browsing keeps working, traffic silently goes
+///   direct (fail-open by design).
+/// - **kill switch ON**: the proxy is re-pointed at
+///   [`KILL_SWITCH_BLACKHOLE_PROXY`] — a dead loopback port. WinINET
+///   consumers then FAIL instead of leaking outside the tunnel
+///   (fail-closed). The original pre-tunnel snapshot stays on disk
+///   (keep-first), so a later connect's step-0 self-heal or an explicit
+///   disconnect still restores the true pre-tunnel state. Apps that use
+///   the SOCKS/HTTP listeners directly are fail-closed either way: the
+///   listeners die with the session and proxied connections were already
+///   refused when all links were down.
+///
+/// Best-effort throughout — the app never dies invisibly (D15).
 async fn give_up(core: &Core, shutdown: &tokio::sync::watch::Sender<bool>) {
-    tracing::warn!("supervisor: all tunnel links exhausted — giving up (fail-open)");
-    if core.sysproxy_set.swap(false, Ordering::SeqCst) {
-        if let Err(e) = crate::sysproxy::restore(&core.paths.state_dir) {
-            tracing::warn!("system proxy restore failed: {e}");
+    tracing::warn!("supervisor: all tunnel links exhausted — giving up");
+    if core.sysproxy_set.load(Ordering::SeqCst) {
+        let kill_switch = SettingsFile::load(&core.paths.settings_file())
+            .settings
+            .kill_switch;
+        if kill_switch {
+            // Keep sysproxy_set TRUE: we still own the proxy state (the
+            // black hole IS ours); the next explicit disconnect or connect
+            // self-heal restores it.
+            let override_list = crate::config::default_proxy_override();
+            match crate::sysproxy::set(
+                KILL_SWITCH_BLACKHOLE_PROXY,
+                &override_list,
+                &core.paths.state_dir,
+            ) {
+                Ok(()) => {
+                    core.emit(ServiceEvent::LogLine(
+                        "KILL SWITCH engaged: the tunnel died on its own — system traffic is \
+                         now BLOCKED (fail-closed) instead of leaking direct. Connect again \
+                         to resume, or toggle the kill switch off in Settings."
+                            .into(),
+                    ));
+                }
+                Err(e) => {
+                    // The registry still points at OUR dead local listener
+                    // — still fail-closed, just less tidy.
+                    core.emit(ServiceEvent::LogLine(format!(
+                        "KILL SWITCH: could not engage the black-hole proxy ({e}) — the stale \
+                         proxy entry keeps blocking traffic (fail-closed)"
+                    )));
+                }
+            }
+        } else if core.sysproxy_set.swap(false, Ordering::SeqCst) {
+            if let Err(e) = crate::sysproxy::restore(&core.paths.state_dir) {
+                tracing::warn!("system proxy restore failed: {e}");
+            }
         }
     }
     // Retire the session so status/profiles views stop reporting the dead
@@ -1238,7 +1328,7 @@ async fn give_up(core: &Core, shutdown: &tokio::sync::watch::Sender<bool>) {
     // the last server Arc → run() exits).
     drop(lock(&core.session).take());
     core.emit(ServiceEvent::LogLine(
-        "all tunnel links down — disconnected (system proxy restored)".into(),
+        "all tunnel links down — disconnected".into(),
     ));
     core.set_state(ServiceState::Failed);
     let _ = shutdown.send(true);
@@ -1316,9 +1406,6 @@ impl Core {
         lock(&self.bytes).clear();
     }
 }
-
-/// Overall budget for one exit-IP probe (D18).
-const EXIT_PROBE_BUDGET: Duration = Duration::from_secs(12);
 
 /// Parse a plain-HTTP probe URL into `(host, port, path)` (D18). Only
 /// `http://` URLs are accepted — by design (no TLS stack in the tree).
@@ -1452,6 +1539,17 @@ impl MtService for RealService {
             // so the in-flight flow aborts right after its probe.
             if self.core.get_state() == ServiceState::Connecting {
                 self.core.disconnect_requested.store(true, Ordering::SeqCst);
+            }
+            // S19: an explicit disconnect must ALSO release a kill-switch
+            // black-hole (or any proxy state we still own from a session
+            // that already died) — the user asked to stop tunneling, not
+            // to keep the network blocked.
+            if self.core.sysproxy_set.swap(false, Ordering::SeqCst) {
+                if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
+                    tracing::warn!("system proxy restore failed: {e}");
+                }
+                self.core
+                    .emit(ServiceEvent::LogLine("system proxy restored".into()));
             }
             return;
         };
@@ -1616,6 +1714,13 @@ impl MtService for RealService {
                 settings.exit_probe_url
             ));
         }
+        // S19: the speed-test URL lives under the same plain-HTTP rule.
+        if parse_http_url(&settings.speed_test_url).is_none() {
+            return Err(format!(
+                "speed test URL must be plain http:// ({:?})",
+                settings.speed_test_url
+            ));
+        }
         if settings.probe_target.split(':').count() != 2 {
             return Err(format!(
                 "probe target must be host:port ({:?})",
@@ -1634,6 +1739,10 @@ impl MtService for RealService {
         // Module note 15: `bonded_adapters` belongs to the Adapters screen
         // (`set_bonded_adapters`); a possibly-stale GUI settings copy must
         // never clobber a fresh selection — persist the server-side value.
+        // S19: remember the diagnostics + kill-switch transitions to act
+        // on them AFTER the (successful) persist below.
+        let diagnostics_changed = file.settings.diagnostics != settings.diagnostics;
+        let kill_switch_disabled = file.settings.kill_switch && !settings.kill_switch;
         let mut settings = settings;
         settings.bonded_adapters = file.settings.bonded_adapters.clone();
         file.settings = settings.clone();
@@ -1646,6 +1755,43 @@ impl MtService for RealService {
             ));
             self.disconnect().await;
             self.connect().await;
+        }
+        // S19: diagnostics mode transitions (only after a successful save —
+        // a rejected settings change never touches the log file).
+        if diagnostics_changed {
+            if settings.diagnostics {
+                let header = self.build_diag_header(&settings);
+                match crate::diagnostics::enable(&self.core.paths.log_dir, &header) {
+                    Ok(p) => {
+                        self.core.emit(ServiceEvent::LogLine(format!(
+                            "INFO  diagnostics mode ON — writing {}",
+                            p.display()
+                        )));
+                    }
+                    Err(e) => {
+                        self.core.emit(ServiceEvent::LogLine(format!(
+                            "WARN  diagnostics mode could not start: {e}"
+                        )));
+                    }
+                }
+            } else if let Some(p) = crate::diagnostics::disable() {
+                self.core.emit(ServiceEvent::LogLine(format!(
+                    "INFO  diagnostics mode OFF — file kept at {}",
+                    p.display()
+                )));
+            }
+        }
+        // S19: turning the kill switch off is an explicit escape hatch for
+        // an engaged black-hole (the give_up path keeps the proxy blocked
+        // while the switch stays on).
+        if kill_switch_disabled
+            && self.core.get_state() != ServiceState::Connected
+            && self.core.sysproxy_set.swap(false, Ordering::SeqCst)
+        {
+            let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
+            self.core.emit(ServiceEvent::LogLine(
+                "kill switch disabled — system proxy restored".into(),
+            ));
         }
         if autostart_changed {
             let exe = std::env::current_exe()
@@ -1723,16 +1869,17 @@ impl MtService for RealService {
     }
 
     async fn exit_probe(&self) -> Result<ExitInfo, String> {
-        // 1. Must ride the LIVE session (the whole point is the tunnel's
-        //    egress as the internet sees it, D18).
+        // 1. Prefer the LIVE session (the whole point is the tunnel's
+        //    egress as the internet sees it, D18). S19: with no live
+        //    session, fall back to a TEMPORARY probe tunnel through the
+        //    active profile — same exit identity, works while the app is
+        //    disconnected, no session left behind.
         let socks_addr = {
             let guard = lock(&self.core.session);
-            let Some(s) = guard.as_ref() else {
-                return Err("not connected".to_string());
-            };
-            s.server
-                .socks_local_addr()
-                .ok_or_else(|| "no local listener".to_string())?
+            match guard.as_ref() {
+                Some(s) => s.server.socks_local_addr(),
+                None => None,
+            }
         };
         let store = self.core.load_store_lossy();
         let Some(profile) = store
@@ -1741,15 +1888,15 @@ impl MtService for RealService {
             .and_then(|id| store.profiles.iter().find(|p| p.id == id))
             .cloned()
         else {
-            return Err("no active profile".to_string());
+            return Err("no active profile — pick a server first".to_string());
         };
         let settings = SettingsFile::load(&self.core.paths.settings_file());
         let url = settings.settings.exit_probe_url;
         let (host, port, path) =
             parse_http_url(&url).ok_or_else(|| format!("invalid exit probe URL {url:?}"))?;
-        // 2. SOCKS CONNECT through the live local listener, then a plain
-        //    HTTP/1.1 GET (no TLS stack — zero-dep rule; the client→server
-        //    leg is REALITY-encrypted and the payload is only an IP echo).
+        // 2. Plain HTTP/1.1 GET through the tunnel (no TLS stack —
+        //    zero-dep rule; the client→server leg is REALITY-encrypted
+        //    and the payload is only an IP echo).
         let target = TargetAddr {
             host: if let Ok(ip) = host.parse() {
                 Host::Ip(ip)
@@ -1759,59 +1906,486 @@ impl MtService for RealService {
             port,
         };
         let probe = async {
-            let outbound = mt_net::Socks5Outbound::new(socks_addr);
-            let mut stream = outbound.connect(&target).await?;
-            let req = format!(
-                "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: MultiTunnel/0.5\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
-            );
-            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-            stream.write_all(req.as_bytes()).await?;
-            let mut buf = Vec::new();
-            stream.read_to_end(&mut buf).await?;
-            Ok::<Vec<u8>, anyhow::Error>(buf)
+            let body = if let Some(socks) = socks_addr {
+                let outbound = mt_net::Socks5Outbound::new(socks);
+                let mut stream = outbound.connect(&target).await?;
+                http_get(&mut stream, &host, &path, EXIT_PROBE_MAX_BYTES).await?
+            } else {
+                let link = temp_link_for(&self.core, &profile)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                let mut stream = link.connect(&target).await?;
+                http_get(&mut stream, &host, &path, EXIT_PROBE_MAX_BYTES).await?
+            };
+            Ok::<Vec<u8>, anyhow::Error>(body)
         };
         let body = tokio::time::timeout(EXIT_PROBE_BUDGET, probe)
             .await
             .map_err(|_| "exit probe timed out".to_string())?
             .map_err(|e| format!("exit probe failed: {e}"))?;
-        // 3. Body = everything after the blank line.
-        let text = String::from_utf8_lossy(&body);
-        let payload = text
-            .split_once("\r\n\r\n")
-            .map(|(_, b)| b)
-            .unwrap_or(text.as_ref());
-        let json: serde_json::Value = serde_json::from_str(payload.trim_start_matches('\u{feff}'))
-            .map_err(|e| format!("exit probe response not JSON: {e}"))?;
-        let field = |k: &str| {
-            json.get(k)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        };
-        let exit_ip = field("query");
-        if exit_ip.is_empty() {
-            return Err("exit probe response carried no IP".to_string());
-        }
+        // 3. Parse the identity document.
+        let exit = parse_exit_info(&body)?;
         // 4. Direct-exit verdict: the exit IP should BE the profile server.
         //    A domain profile is resolved locally for the comparison.
         let server_endpoint = format!("{}:{}", profile.address, profile.port);
-        let direct = exit_ip == profile.address
+        let direct = exit.exit_ip == profile.address
             || std::net::ToSocketAddrs::to_socket_addrs(&server_endpoint)
-                .map(|addrs| addrs.map(|a| a.ip().to_string()).any(|ip| ip == exit_ip))
+                .map(|addrs| {
+                    addrs
+                        .map(|a| a.ip().to_string())
+                        .any(|ip| ip == exit.exit_ip)
+                })
                 .unwrap_or(false);
         Ok(ExitInfo {
-            exit_ip,
-            country: field("country"),
-            city: field("city"),
-            isp: field("isp"),
-            asn: field("as"),
+            exit_ip: exit.exit_ip,
+            country: exit.country,
+            city: exit.city,
+            isp: exit.isp,
+            asn: exit.asn,
             server_endpoint,
             direct_exit: direct,
+            via_temp_tunnel: socks_addr.is_none(),
         })
+    }
+
+    async fn speed_test(&self, id: Option<String>) -> Result<SpeedTestInfo, String> {
+        // 1. Resolve the target profile: explicit id (or tag), else the
+        //    active one.
+        let store = self.core.load_store().map_err(|e| e.to_string())?;
+        let profile = match id {
+            Some(id) => find_profile(&store, &id)
+                .cloned()
+                .ok_or_else(|| format!("no profile matches {id:?}"))?,
+            None => store
+                .active
+                .as_deref()
+                .and_then(|a| store.profiles.iter().find(|p| p.id == a))
+                .cloned()
+                .ok_or_else(|| "no active profile — pick a server first".to_string())?,
+        };
+        let settings = SettingsFile::load(&self.core.paths.settings_file());
+        let url = settings.settings.speed_test_url;
+        let (host, port, path) =
+            parse_http_url(&url).ok_or_else(|| format!("invalid speed test URL {url:?}"))?;
+        let target = TargetAddr {
+            host: if let Ok(ip) = host.parse() {
+                Host::Ip(ip)
+            } else {
+                Host::Domain(host.clone())
+            },
+            port,
+        };
+        // 2. The LIVE session only counts when it belongs to the target
+        //    (the active profile) — otherwise a temporary tunnel through
+        //    the target profile.
+        let is_active = store.active.as_deref() == Some(profile.id.as_str());
+        let live_socks = if is_active {
+            lock(&self.core.session)
+                .as_ref()
+                .and_then(|s| s.server.socks_local_addr())
+        } else {
+            None
+        };
+        let via_temp = live_socks.is_none();
+        let connect = async {
+            Ok::<_, anyhow::Error>(if let Some(socks) = live_socks {
+                let outbound = mt_net::Socks5Outbound::new(socks);
+                outbound.connect(&target).await?
+            } else {
+                let link = temp_link_for(&self.core, &profile)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                link.connect(&target).await?
+            })
+        };
+        // 3. Download: the clock starts AFTER the connect (tunnel setup —
+        //    possibly an engine spawn — must not pollute the rate).
+        let connect = tokio::time::timeout(SPEED_TEST_BUDGET, connect)
+            .await
+            .map_err(|_| "speed test: tunnel setup timed out".to_string())?
+            .map_err(|e| format!("speed test: connect failed: {e}"))?;
+        let mut stream = connect;
+        // The request itself is outside the measurement window too (it is
+        // one small write; servers answer after it lands).
+        {
+            use tokio::io::AsyncWriteExt as _;
+            let req = format!(
+                "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: MultiTunnel/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                env!("CARGO_PKG_VERSION")
+            );
+            stream
+                .write_all(req.as_bytes())
+                .await
+                .map_err(|e| format!("speed test: request failed: {e}"))?;
+        }
+        use tokio::io::AsyncReadExt as _;
+        let started = Instant::now();
+        let mut head = Vec::new();
+        let mut total: u64 = 0;
+        let mut chunk = vec![0u8; 64 * 1024];
+        let mut first = true;
+        loop {
+            if total >= SPEED_TEST_MAX_BYTES || started.elapsed() >= SPEED_TEST_BUDGET {
+                break;
+            }
+            let read = tokio::time::timeout(SPEED_TEST_STALL, stream.read(&mut chunk)).await;
+            let n = match read {
+                Ok(Ok(0)) => break,
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => {
+                    if total > 0 {
+                        break; // partial measurement stands
+                    }
+                    return Err(format!("speed test: read failed: {e}"));
+                }
+                Err(_) => break, // stall: keep what we have
+            };
+            // The response head (up to the blank line) is not payload —
+            // peel it off the first read(s).
+            if first && n > 0 {
+                head.extend_from_slice(&chunk[..n]);
+                if let Some(split) = find_head_end(&head) {
+                    // Body bytes = everything past the head end in the
+                    // WHOLE head buffer (the split may sit mid-buffer
+                    // when the head straddled reads).
+                    total += head.len() as u64 - split as u64;
+                    first = false;
+                }
+                // Still inside the head (a slow server dribbling headers):
+                // keep buffering, nothing counts yet.
+            } else {
+                total += n as u64;
+            }
+        }
+        if first && !head.is_empty() {
+            // The server closed before a complete head — nothing measured.
+            return Err("speed test: no usable response (connection closed early)".into());
+        }
+        if total == 0 {
+            return Err("speed test: no data received".into());
+        }
+        // Reject obvious HTTP errors (a captive portal answering 302/407
+        // would otherwise measure as "throughput").
+        let head_text = String::from_utf8_lossy(&head);
+        if let Some(status) = head_text.lines().next() {
+            let code = status.split_whitespace().nth(1).unwrap_or("");
+            if let Ok(code) = code.parse::<u16>() {
+                if code >= 400 {
+                    return Err(format!("speed test: server answered {code} ({status})"));
+                }
+            }
+        }
+        let seconds = started.elapsed().as_secs_f64().max(0.001);
+        let mbps = total as f64 * 8.0 / seconds / 1_000_000.0;
+        Ok(SpeedTestInfo {
+            mbps,
+            mbytes: total as f64 / (1024.0 * 1024.0),
+            seconds,
+            profile_tag: profile.tag.clone(),
+            via_temp_tunnel: via_temp,
+        })
+    }
+
+    async fn profile_details(&self, id: &str) -> Result<ProfileDetails, String> {
+        let store = self.core.load_store().map_err(|e| e.to_string())?;
+        let p = find_profile(&store, id).ok_or_else(|| format!("no profile matches {id:?}"))?;
+        Ok(details_of(p))
+    }
+
+    async fn update_profile(&self, id: &str, edit: ProfileDetails) -> Result<ProfileView, String> {
+        let mut store = self.core.load_store().map_err(|e| e.to_string())?;
+        let target = find_profile(&store, id)
+            .ok_or_else(|| format!("no profile matches {id:?}"))?
+            .id
+            .clone();
+        let original = store
+            .profiles
+            .iter()
+            .find(|p| p.id == target)
+            .cloned()
+            .expect("find_profile just matched");
+        // Apply the edits (trim; validate the primitives the engine will
+        // need — a save that would break the profile fails loud here).
+        let mut updated = original.clone();
+        let tag = edit.tag.trim().to_string();
+        if tag.is_empty() {
+            return Err("name cannot be empty".to_string());
+        }
+        updated.tag = tag;
+        updated.remark = edit.remark.trim().to_string();
+        let address = edit.address.trim().to_string();
+        if address.is_empty() {
+            return Err("server address cannot be empty".to_string());
+        }
+        updated.address = address;
+        updated.port = edit
+            .port
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| format!("port must be a number 0-65535 ({:?})", edit.port))?;
+        let identity = edit.identity.trim().to_string();
+        if identity.is_empty() {
+            return Err("identity (UUID/password) cannot be empty".to_string());
+        }
+        updated.identity = identity;
+        // Security-layer fields only apply to a REALITY profile (the dialog
+        // hides them otherwise; stale values never overwrite the store).
+        if let Security::Reality {
+            sni,
+            fingerprint,
+            public_key,
+            short_id,
+            spider_x,
+        } = &mut updated.security
+        {
+            *sni = edit.sni.trim().to_string();
+            *fingerprint = edit.fingerprint.trim().to_string();
+            *public_key = edit.public_key.trim().to_string();
+            *short_id = edit.short_id.trim().to_string();
+            let spider = edit.spider_x.trim().to_string();
+            *spider_x = (!spider.is_empty()).then_some(spider);
+        }
+        // Capability regression check: if the ORIGINAL could drive the
+        // engine, the edited one must still be able to (fail loud BEFORE
+        // the save; a profile that never could connect may be edited
+        // freely — its inability predates the edit).
+        if endpoint_from_profile(&original).is_ok() {
+            endpoint_from_profile(&updated).map_err(|e| e.to_string())?;
+        }
+        if !store.update(&target, updated.clone()) {
+            return Err(format!("no profile matches {id:?}"));
+        }
+        self.core.save_store(&store).map_err(|e| e.to_string())?;
+        let active = store.active.as_deref() == Some(target.as_str());
+        if active && self.core.get_state() == ServiceState::Connected {
+            self.core.emit(ServiceEvent::LogLine(
+                "INFO  the active server was edited — reconnect to apply".into(),
+            ));
+        }
+        Ok(view_of(&updated, active))
+    }
+
+    async fn diagnostics_path(&self) -> Option<String> {
+        crate::diagnostics::path().map(|p| p.display().to_string())
     }
 
     fn events(&self) -> broadcast::Receiver<ServiceEvent> {
         self.core.events.subscribe()
+    }
+}
+
+/// S19: find the end of the HTTP response head (`\r\n\r\n`), returning the
+/// byte offset where the BODY starts (i.e. the index just past the blank
+/// line). `None` while the head is incomplete.
+fn find_head_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)
+}
+
+/// S19: plain HTTP/1.1 GET over an established stream, capped: reads to
+/// EOF or `max_bytes` (whichever first). Shared by the exit probe (live +
+/// temp-tunnel variants) — the speed test keeps its own loop because it
+/// needs byte/time accounting the probe does not.
+async fn http_get(
+    stream: &mut mt_net::ProxyStream,
+    host: &str,
+    path: &str,
+    max_bytes: u64,
+) -> anyhow::Result<Vec<u8>> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: MultiTunnel/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    stream.write_all(req.as_bytes()).await?;
+    let mut buf = Vec::new();
+    let mut chunk = vec![0u8; 16 * 1024];
+    loop {
+        if buf.len() as u64 >= max_bytes {
+            break;
+        }
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    Ok(buf)
+}
+
+/// The parsed exit-identity document (the ip-api.com JSON shape).
+struct ExitDoc {
+    exit_ip: String,
+    country: String,
+    city: String,
+    isp: String,
+    asn: String,
+}
+
+/// S19: body → [`ExitDoc`] (shared by the live and temp-tunnel probe
+/// paths; factored out of the old inline parsing).
+fn parse_exit_info(body: &[u8]) -> Result<ExitDoc, String> {
+    let text = String::from_utf8_lossy(body);
+    let payload = text
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b)
+        .unwrap_or(text.as_ref());
+    let json: serde_json::Value = serde_json::from_str(payload.trim_start_matches('\u{feff}'))
+        .map_err(|e| format!("exit probe response not JSON: {e}"))?;
+    let field = |k: &str| {
+        json.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let exit_ip = field("query");
+    if exit_ip.is_empty() {
+        return Err("exit probe response carried no IP".to_string());
+    }
+    Ok(ExitDoc {
+        exit_ip,
+        country: field("country"),
+        city: field("city"),
+        isp: field("isp"),
+        asn: field("as"),
+    })
+}
+
+/// S19: build a one-shot link for `profile` (offline probes: exit-IP,
+/// speed test). Mirrors `test_latency`'s factory use — engines spawn
+/// lazily and die with the returned Arcs. With several bonded adapters
+/// the FIRST link (the top-priority adapter) carries the probe.
+async fn temp_link_for(core: &Core, profile: &Profile) -> Result<Arc<dyn Outbound>, String> {
+    let settings = SettingsFile::load(&core.paths.settings_file());
+    let bonded = resolve_bonded(
+        &settings.settings.bonded_adapters,
+        &mt_platform::enumerate_adapters(),
+    );
+    let mut links = core
+        .factory
+        .build(profile, &bonded)
+        .await
+        .map_err(|e| e.to_string())?;
+    links
+        .pop()
+        .ok_or_else(|| "link factory produced no links".to_string())
+}
+
+/// S19: [`Profile`] → the Edit dialog's material (credential fields
+/// included by necessity; the dialog is the only consumer).
+fn details_of(p: &Profile) -> ProfileDetails {
+    let (security, sni, fingerprint, public_key, short_id, spider_x) = match &p.security {
+        Security::Reality {
+            sni,
+            fingerprint,
+            public_key,
+            short_id,
+            spider_x,
+        } => (
+            "reality",
+            sni.clone(),
+            fingerprint.clone(),
+            public_key.clone(),
+            short_id.clone(),
+            spider_x.clone().unwrap_or_default(),
+        ),
+        Security::Tls { sni, .. } => (
+            "tls",
+            sni.clone().unwrap_or_default(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
+        Security::None => (
+            "none",
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
+    };
+    ProfileDetails {
+        id: p.id.clone(),
+        tag: p.tag.clone(),
+        remark: p.remark.clone(),
+        protocol: protocol_name(p.protocol).to_string(),
+        address: p.address.clone(),
+        port: p.port.to_string(),
+        identity: p.identity.clone(),
+        security: security.to_string(),
+        sni,
+        fingerprint,
+        public_key,
+        short_id,
+        spider_x,
+    }
+}
+
+/// S19: [`Profile`] → the GUI list row (single mapping for profiles(),
+/// import_link() and update_profile()).
+fn view_of(p: &Profile, active: bool) -> ProfileView {
+    ProfileView {
+        active,
+        id: p.id.clone(),
+        tag: p.tag.clone(),
+        protocol: protocol_name(p.protocol).to_string(),
+        endpoint: format!("{}:{}", p.address, p.port),
+        remark: p.remark.clone(),
+    }
+}
+
+impl RealService {
+    /// S19: the redacted diagnostics header — everything a support
+    /// conversation needs, nothing it must not (D9: no uuid, no password,
+    /// no public key values).
+    fn build_diag_header(&self, settings: &SettingsView) -> String {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "MultiTunnel {} diagnostics — {} ({} {})\n",
+            env!("CARGO_PKG_VERSION"),
+            fmt_utc(SystemTime::now()),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ));
+        out.push_str("=== settings (no credentials live here) ===\n");
+        out.push_str(&format!(
+            "merge_policy={} bond_mode={} socks_port={} http_port={} allow_lan={} \
+             system_proxy={} kill_switch={} log_level={}\n",
+            settings.merge_policy,
+            settings.bond_mode,
+            settings.socks_port,
+            settings.http_port,
+            settings.allow_lan,
+            settings.system_proxy,
+            settings.kill_switch,
+            settings.log_level
+        ));
+        out.push_str(&format!(
+            "probe_target={} exit_probe_url={} speed_test_url={}\n",
+            settings.probe_target, settings.exit_probe_url, settings.speed_test_url
+        ));
+        let store = self.core.load_store_lossy();
+        out.push_str("=== profiles (endpoints only — ids/secrets redacted) ===\n");
+        for p in &store.profiles {
+            let active = if store.active.as_deref() == Some(p.id.as_str()) {
+                " [active]"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "{} {}/{}:{}{}\n",
+                p.tag,
+                protocol_name(p.protocol),
+                p.address,
+                p.port,
+                active
+            ));
+        }
+        out.push_str("=== bonded adapters ===\n");
+        out.push_str(&format!("{:?}\n", settings.bonded_adapters));
+        out.push_str("=== events (GUI log lines + tracing/engine output) ===");
+        out
     }
 }
 
@@ -1981,6 +2555,9 @@ mod tests {
                 exit_probe_url: "http://ip-api.com/json".to_string(),
                 close_to_tray: false,
                 always_on_top: false,
+                kill_switch: false,
+                diagnostics: false,
+                speed_test_url: default_speed_test_url(),
             },
             rules: Vec::new(),
             socks_port: 0,
@@ -2086,8 +2663,11 @@ mod tests {
         let view = svc.import_link(VLESS_REALITY).await.expect("import");
         svc.set_active_profile(&view.tag).await.expect("set active");
 
-        // Not connected → refused.
-        assert_eq!(svc.exit_probe().await.unwrap_err(), "not connected");
+        // S19: DISCONNECTED, the probe now works through a temporary
+        // probe tunnel (the user's ask) instead of erroring.
+        let offline = svc.exit_probe().await.expect("offline probe");
+        assert_eq!(offline.exit_ip, "127.0.0.1");
+        assert!(offline.via_temp_tunnel, "no live session → temp tunnel");
 
         svc.connect().await;
         assert_eq!(svc.status().await.state, ServiceState::Connected);
@@ -2101,11 +2681,35 @@ mod tests {
         assert_eq!(info.isp, "Example Telecom");
         assert!(info.asn.contains("AS64512"));
         assert_eq!(info.server_endpoint, "203.0.113.10:443");
+        assert!(!info.via_temp_tunnel, "live session in use");
         assert!(
             !info.direct_exit,
             "203.0.113.10 profile must NOT match a 127.0.0.1 exit"
         );
         svc.disconnect().await;
+    }
+
+    #[tokio::test]
+    async fn exit_probe_without_active_profile_errors() {
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("exitnoactive");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        // Profile exists but is NOT active.
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        assert_eq!(
+            svc.exit_probe().await.unwrap_err(),
+            "no active profile — pick a server first"
+        );
+        // Sanity: activating makes it work again (temp tunnel).
+        svc.set_active_profile(&view.tag).await.expect("set active");
+        assert!(svc.exit_probe().await.is_ok());
     }
 
     #[tokio::test]
@@ -2135,6 +2739,292 @@ mod tests {
         );
         assert_eq!(info.server_endpoint, "127.0.0.1:443");
         svc.disconnect().await;
+    }
+
+    /// S19: an HTTP server serving a fixed-size body for speed tests.
+    async fn spawn_speed_server(mib: usize) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind speed server");
+        let addr = listener.local_addr().expect("speed addr");
+        let body = vec![b'x'; mib * 1024 * 1024];
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let body = body.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                    let mut buf = vec![0u8; 2048];
+                    let _ = stream.read(&mut buf).await; // drain the request head
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes()).await;
+                    let _ = stream.write_all(&body).await;
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn speed_test_measures_through_temp_tunnel_when_disconnected() {
+        let server = spawn_speed_server(2).await; // 2 MiB on loopback
+        let paths = scratch("speedtest");
+        write_settings(&paths, server.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.speed_test_url = format!("http://127.0.0.1:{}/down", server.port());
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: server,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+
+        // Disconnected → temporary probe tunnel; the clock starts after
+        // the connect, so the measured rate is the loopback body push.
+        let info = svc.speed_test(None).await.expect("speed test");
+        assert!(info.via_temp_tunnel);
+        assert_eq!(info.profile_tag, view.tag);
+        assert!((info.mbytes - 2.0).abs() < 0.05, "body ~2 MiB: {info:?}");
+        assert!(info.seconds > 0.0);
+        assert!(info.mbps > 1.0, "loopback must beat 1 Mbps: {info:?}");
+
+        // No active profile at all → a clear error.
+        svc.remove_profile(&view.id).await.expect("remove");
+        assert_eq!(
+            svc.speed_test(None).await.unwrap_err(),
+            "no active profile — pick a server first"
+        );
+
+        // A bad URL is rejected before any dialing.
+        let mut file = SettingsFile::load(&svc.core.paths.settings_file());
+        file.settings.speed_test_url = "https://no-tls.example/".to_string();
+        file.save(&svc.core.paths.settings_file()).expect("save");
+        let view2 = svc.import_link(VLESS_REALITY).await.expect("re-import");
+        svc.set_active_profile(&view2.tag).await.expect("active");
+        let err = svc.speed_test(None).await.unwrap_err();
+        assert!(err.contains("invalid speed test URL"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn speed_test_rides_live_session_for_active_profile() {
+        let server = spawn_speed_server(1).await;
+        let echo = spawn_echo().await;
+        let paths = scratch("speedlive");
+        // Probe target = echo (so connect() succeeds); speed URL = server.
+        write_settings(&paths, echo.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.speed_test_url = format!("http://127.0.0.1:{}/down", server.port());
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: server,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+        let info = svc.speed_test(None).await.expect("speed test");
+        assert!(!info.via_temp_tunnel, "active profile + live session");
+        assert!((info.mbytes - 1.0).abs() < 0.05, "1 MiB body: {info:?}");
+        svc.disconnect().await;
+    }
+
+    #[tokio::test]
+    async fn update_profile_edits_fields_and_keeps_id_and_active() {
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("editprofile");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+
+        let mut details = svc.profile_details(&view.id).await.expect("details");
+        assert_eq!(details.protocol, "vless");
+        assert_eq!(details.security, "reality");
+        assert_eq!(details.port, "443");
+        assert_eq!(details.sni, "tunnel.example.org");
+        details.tag = "renamed server".into();
+        details.remark = "my remark".into();
+        details.port = "8443".into();
+        details.sni = "new.example.org".into();
+        let updated = svc.update_profile(&view.id, details).await.expect("save");
+        assert_eq!(updated.tag, "renamed server");
+        assert_eq!(updated.endpoint, "203.0.113.10:8443");
+        assert!(updated.active, "the edited profile stays active");
+
+        // The store reloads with the same id, the edit and the active mark.
+        let store = svc.core.load_store().expect("reload");
+        assert_eq!(store.profiles.len(), 1);
+        assert_eq!(store.profiles[0].id, view.id);
+        assert_eq!(store.profiles[0].tag, "renamed server");
+        assert_eq!(store.profiles[0].port, 8443);
+        assert_eq!(store.active.as_deref(), Some(view.id.as_str()));
+        let Security::Reality { sni, .. } = &store.profiles[0].security else {
+            panic!("still reality");
+        };
+        assert_eq!(sni, "new.example.org");
+
+        // Unknown id → clear error.
+        assert!(svc.profile_details("nope").await.is_err());
+        assert!(svc
+            .update_profile("nope", svc.profile_details(&view.id).await.unwrap())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn update_profile_rejects_invalid_edits() {
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("editinvalid");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+
+        let bad = |tag: &str, port: &str, identity: &str| ProfileDetails {
+            id: view.id.clone(),
+            tag: tag.to_string(),
+            remark: String::new(),
+            protocol: "vless".to_string(),
+            address: "203.0.113.10".to_string(),
+            port: port.to_string(),
+            identity: identity.to_string(),
+            security: "reality".to_string(),
+            sni: "tunnel.example.org".to_string(),
+            fingerprint: "chrome".to_string(),
+            public_key: "k".to_string(),
+            short_id: "0123abcd".to_string(),
+            spider_x: String::new(),
+        };
+        assert!(svc
+            .update_profile(&view.id, bad("", "443", "u"))
+            .await
+            .unwrap_err()
+            .contains("name"));
+        assert!(svc
+            .update_profile(&view.id, bad("t", "not-a-port", "u"))
+            .await
+            .unwrap_err()
+            .contains("port"));
+        assert!(svc
+            .update_profile(&view.id, bad("t", "443", "  "))
+            .await
+            .unwrap_err()
+            .contains("identity"));
+        // Nothing was saved.
+        let store = svc.core.load_store().expect("reload");
+        assert_eq!(store.profiles[0].tag, view.tag, "store untouched");
+    }
+
+    #[tokio::test]
+    async fn diagnostics_mode_creates_file_and_forces_engine_debug() {
+        // The sink is process-global: hold the crate's diag test lock for
+        // the whole window.
+        let _guard = crate::diagnostics::TEST_LOCK.lock().await;
+        let _ = crate::diagnostics::disable();
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("diagmode");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+
+        // Turn the mode ON through the settings path (the real entry).
+        let mut s = svc.settings().await;
+        s.diagnostics = true;
+        svc.set_settings(s).await.expect("save with diagnostics");
+        let diag = svc.diagnostics_path().await.expect("file created");
+        assert!(diag.contains("diagnostics-"), "{diag}");
+        assert!(std::path::Path::new(&diag).is_file());
+
+        // A connect forces the ENGINE log level to debug for the session.
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+        let level = wlock(&svc.core.engine_log_level).clone();
+        assert_eq!(level.as_deref(), Some("debug"));
+
+        // GUI log lines (the connected notice) land in the file.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let text = std::fs::read_to_string(&diag).expect("read diag");
+        assert!(text.contains("MultiTunnel"), "header present");
+        assert!(text.contains("diagnostics mode started"));
+        assert!(text.contains("engine log level forced to debug"));
+        assert!(text.contains("[GUI]"), "GUI lines tee'd");
+        // Redaction: the profile UUID must never appear.
+        assert!(
+            !text.contains("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+            "no credentials in the diagnostics file"
+        );
+        svc.disconnect().await;
+
+        // Off: the path clears, the file stays.
+        let mut s = svc.settings().await;
+        s.diagnostics = false;
+        svc.set_settings(s).await.expect("save without diagnostics");
+        assert!(svc.diagnostics_path().await.is_none());
+        assert!(std::path::Path::new(&diag).is_file(), "file kept");
+    }
+
+    #[tokio::test]
+    async fn disconnect_releases_owned_proxy_state_without_a_session() {
+        // S19: after a kill-switch give-up (or any death that left
+        // sysproxy_set armed with no session), an explicit disconnect must
+        // restore the proxy instead of leaving the black-hole engaged.
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("ksrelease");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let mut events = svc.events();
+        // Simulate the post-give-up state: no session, proxy still owned.
+        svc.core.sysproxy_set.store(true, Ordering::SeqCst);
+        assert!(svc.core.session.lock().unwrap().is_none());
+        svc.disconnect().await;
+        assert!(!svc.core.sysproxy_set.load(Ordering::SeqCst));
+        let mut saw_restore = false;
+        while let Ok(ev) = events.try_recv() {
+            if let ServiceEvent::LogLine(l) = ev {
+                if l.contains("system proxy restored") {
+                    saw_restore = true;
+                }
+            }
+        }
+        assert!(saw_restore, "the restore is announced in the GUI log");
     }
 
     #[tokio::test]
@@ -2324,6 +3214,9 @@ mod tests {
             exit_probe_url: "http://ip-api.com/json".to_string(),
             close_to_tray: false,
             always_on_top: false,
+            kill_switch: false,
+            diagnostics: false, // never true here: the sink is process-global
+            speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
         };
         svc.set_settings(view.clone()).await.expect("save settings");
         assert_eq!(svc.settings().await, view);

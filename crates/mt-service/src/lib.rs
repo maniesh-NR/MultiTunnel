@@ -153,6 +153,25 @@ pub struct SettingsView {
     /// files → false (same D8 version-free migration).
     #[serde(default)]
     pub always_on_top: bool,
+    /// S19: fail-closed on spontaneous tunnel death — when the tunnel
+    /// dies on its own while the app owns the system proxy, the proxy is
+    /// repointed at a dead local port (traffic FAILS) instead of being
+    /// restored (traffic would silently go direct). A manual disconnect
+    /// always restores. Absent in files written by v0.12 and older →
+    /// false (D8 version-free migration by serde default).
+    #[serde(default)]
+    pub kill_switch: bool,
+    /// S19: diagnostics mode — while on, the service writes one
+    /// self-contained log file (connection lifecycle, engine output,
+    /// link health; credentials redacted) the user can paste into a
+    /// support chat. Absent → false (D8).
+    #[serde(default)]
+    pub diagnostics: bool,
+    /// S19: speed-test download URL (Status screen). Plain `http://` by
+    /// design — the client→server leg rides the REALITY tunnel, so the
+    /// payload needs no TLS of its own (D18's zero-TLS rule).
+    #[serde(default = "default_speed_test_url")]
+    pub speed_test_url: String,
 }
 
 /// S18: how the app resolves light vs dark appearance. Serialized as
@@ -239,6 +258,9 @@ fn default_probe_target() -> String {
 fn default_exit_probe_url() -> String {
     "http://ip-api.com/json".to_string()
 }
+fn default_speed_test_url() -> String {
+    "http://speed.cloudflare.com/__down?bytes=25000000".to_string()
+}
 
 /// Live events pushed to the GUI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +288,22 @@ pub trait MtService: Send + Sync {
     async fn set_active_profile(&self, id: &str) -> Result<(), String>;
     async fn test_latency(&self, id: &str) -> Result<u32, String>;
 
+    /// S19: the full editable material of one stored profile (the Edit
+    /// dialog's prefill). Errors are user-facing.
+    async fn profile_details(&self, id: &str) -> Result<ProfileDetails, String>;
+
+    /// S19: apply edits to a stored profile. The id and the active
+    /// selection are preserved; a live session keeps running on the old
+    /// links until the next reconnect (the service logs a reminder when
+    /// the edited profile is the active one).
+    async fn update_profile(&self, id: &str, edit: ProfileDetails) -> Result<ProfileView, String>;
+
+    /// S19: download a speed-test payload through the tunnel and report
+    /// throughput — through the LIVE session when the target is the
+    /// active profile, through a temporary probe tunnel otherwise.
+    /// `None` targets the active profile.
+    async fn speed_test(&self, id: Option<String>) -> Result<SpeedTestInfo, String>;
+
     async fn routing_rules(&self) -> Vec<RuleView>;
     async fn set_routing_rules(&self, rules: Vec<RuleView>) -> Result<(), String>;
 
@@ -286,8 +324,15 @@ pub trait MtService: Send + Sync {
     fn events(&self) -> broadcast::Receiver<ServiceEvent>;
 
     /// Probe the tunnel's EXIT identity (Status screen, D18): rides the
-    /// LIVE session, so it errors ("not connected") when disconnected.
+    /// LIVE session when one is up; S19 falls back to a temporary probe
+    /// tunnel through the active profile when the app is disconnected
+    /// (same exit identity, no session left behind).
     async fn exit_probe(&self) -> Result<ExitInfo, String>;
+
+    /// S19: the diagnostics log file currently being written (Settings
+    /// screen), if diagnostics mode is on. The file stays on disk after
+    /// the mode is turned off.
+    async fn diagnostics_path(&self) -> Option<String>;
 }
 
 /// Result of the Status-screen exit probe (D18): which IP the tunnel
@@ -310,6 +355,65 @@ pub struct ExitInfo {
     /// hop); false means an extra egress hop exists (e.g. a VPN on the
     /// server VM's default route).
     pub direct_exit: bool,
+    /// S19: true when the probe rode a TEMPORARY tunnel spawned for the
+    /// check (the app was disconnected); false when it rode the live
+    /// session. Same exit identity either way — the flag only tells the
+    /// GUI which caption to show.
+    #[serde(default)]
+    pub via_temp_tunnel: bool,
+}
+
+/// S19: the full editable material of one server profile (Servers screen
+/// → Edit dialog). `profile_details` produces the prefill; `update_profile`
+/// consumes the edited copy. Carries credential fields by necessity — it
+/// exists only for the one GUI edit round-trip and is never logged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileDetails {
+    pub id: String,
+    /// Display name (derived from the link on import; freely editable).
+    pub tag: String,
+    /// Free-form note shown under the name ("" = hidden).
+    pub remark: String,
+    /// Protocol label — "vless" | "vmess" | "trojan" | "ss" (read-only:
+    /// re-protocoling is a re-import, not an edit).
+    pub protocol: String,
+    /// Server host (domain or IP literal).
+    pub address: String,
+    /// Server port (decimal string — the dialog is a text field).
+    pub port: String,
+    /// UUID (vless/vmess) or password (trojan/ss).
+    pub identity: String,
+    /// Security label — "reality" | "tls" | "none" (read-only).
+    pub security: String,
+    /// REALITY SNI ("" for non-reality profiles).
+    pub sni: String,
+    /// REALITY uTLS fingerprint, e.g. "chrome" ("" for non-reality).
+    pub fingerprint: String,
+    /// REALITY public key ("" for non-reality).
+    pub public_key: String,
+    /// REALITY short ID ("" for non-reality).
+    pub short_id: String,
+    /// REALITY spiderX path ("" = default "/" on save).
+    pub spider_x: String,
+}
+
+/// S19: one speed-test run's outcome (Status screen → Speed test card).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeedTestInfo {
+    /// Measured download throughput, megabits per second.
+    pub mbps: f64,
+    /// Megabytes actually received (1 MiB units, one decimal of
+    /// precision in the GUI).
+    pub mbytes: f64,
+    /// Wall-clock seconds of the measured transfer (excludes tunnel
+    /// setup — the clock starts once the stream is connected).
+    pub seconds: f64,
+    /// The profile that was measured (tag).
+    pub profile_tag: String,
+    /// true = measured through a temporary probe tunnel (the app was
+    /// disconnected / another profile was picked); false = through the
+    /// live session.
+    pub via_temp_tunnel: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +882,9 @@ mod close_to_tray_migration_tests {
                 exit_probe_url: String::new(),
                 close_to_tray: false,
                 always_on_top: false,
+                kill_switch: false,
+                diagnostics: false,
+                speed_test_url: default_speed_test_url(),
             }
         }
     }
@@ -873,5 +980,53 @@ mod theme_mode_migration_tests {
         assert_eq!(ThemeMode::parse("neon", true), ThemeMode::Dark);
         assert_eq!(ThemeMode::parse("neon", false), ThemeMode::Light);
         assert_eq!(ThemeMode::parse("", true), ThemeMode::Dark);
+    }
+}
+
+#[cfg(test)]
+mod s19_migration_tests {
+    use super::*;
+
+    /// S19: settings.json written by v0.12 and older (no `kill_switch`,
+    /// `diagnostics` or `speed_test_url` keys) loads with the safe
+    /// defaults — kill switch off, diagnostics off, the stock speed-test
+    /// URL (D8 version-free migration via serde defaults).
+    #[test]
+    fn old_settings_without_s19_keys_load_with_defaults() {
+        let json = r#"{
+            "theme_seed": 42,
+            "dark_mode": false,
+            "system_proxy": true,
+            "merge_policy": "balanced",
+            "autostart": false,
+            "close_to_tray": true,
+            "always_on_top": false,
+            "log_level": "info",
+            "probe_target": "connectivitycheck.gstatic.com:80",
+            "exit_probe_url": "http://ip-api.com/json"
+        }"#;
+        let v: SettingsView = serde_json::from_str(json).expect("old settings load");
+        assert!(!v.kill_switch);
+        assert!(!v.diagnostics);
+        assert_eq!(v.speed_test_url, default_speed_test_url());
+        assert!(v.close_to_tray, "S15 field intact");
+        assert!(!v.always_on_top, "S16 field intact");
+    }
+
+    /// The S19 fields round-trip through JSON verbatim (an explicit
+    /// non-default choice persists).
+    #[test]
+    fn s19_fields_roundtrip() {
+        let mut v = SettingsView::default_settings_for_tests();
+        v.kill_switch = true;
+        v.diagnostics = true;
+        v.speed_test_url = "http://127.0.0.1:9/down".to_string();
+        let json = serde_json::to_string(&v).expect("serialize");
+        assert!(json.contains("\"kill_switch\":true"));
+        assert!(json.contains("\"diagnostics\":true"));
+        let back: SettingsView = serde_json::from_str(&json).expect("reload");
+        assert!(back.kill_switch);
+        assert!(back.diagnostics);
+        assert_eq!(back.speed_test_url, "http://127.0.0.1:9/down");
     }
 }

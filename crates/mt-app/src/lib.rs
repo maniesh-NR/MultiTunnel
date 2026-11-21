@@ -63,8 +63,8 @@ pub mod tray_win;
 pub mod mock;
 
 pub use app::{
-    run_app, run_smoke, AdapterRow, App, Flags, LogFilter, Message, ParsedPreview, RuleRow, Screen,
-    SmokeReport,
+    run_app, run_smoke, AdapterRow, App, EditDraft, EditField, Flags, LogFilter, Message,
+    ParsedPreview, RuleRow, Screen, SmokeReport,
 };
 pub use theme::MtTheme;
 

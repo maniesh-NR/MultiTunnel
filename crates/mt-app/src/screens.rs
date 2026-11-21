@@ -14,8 +14,8 @@ use iced::{Length, Padding};
 use mt_service::{ProfileView, ServiceState, ThemeMode};
 
 use crate::app::{
-    App, LatencyState, LogFilter, Message, RuleRow, Screen, TitleMenuItem, BOND_MODES, LOG_LEVELS,
-    MERGE_POLICIES, RATE_HISTORY_LEN, RULE_ACTIONS, RULE_KINDS,
+    App, EditField, LatencyState, LogFilter, Message, RuleRow, Screen, TitleMenuItem, BOND_MODES,
+    LOG_LEVELS, MERGE_POLICIES, RATE_HISTORY_LEN, RULE_ACTIONS, RULE_KINDS,
 };
 use crate::graph::{RateGraph, RateGraphStyle};
 use crate::theme as t3;
@@ -468,14 +468,20 @@ pub fn status(app: &App) -> Element<'_> {
         .height(Length::Fixed(STATUS_GRAPH_HEIGHT));
     let _ = util::fmt_bps; // rate labels live in graph.rs; kept for chips/tests
 
-    // --- exit probe card (D18) ---------------------------------------------
+    // --- exit probe card (D18; S19 works offline too) ----------------------
+    let has_active = app.profiles.iter().any(|p| p.active);
     let mut exit_col = column![
         text("Exit identity")
             .size(ts.title_m.size)
             .color(s.on_surface),
-        text("checks which IP the internet sees when the tunnel is up")
-            .size(ts.body_s.size)
-            .color(s.on_surface_variant),
+        text(if has_active {
+            "checks which IP the internet sees — connected (rides the live tunnel) or not \
+             (spawns a temporary probe tunnel)"
+        } else {
+            "checks which IP the internet sees — pick an active server first"
+        })
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
     ]
     .spacing(6);
     if app.exit_probing {
@@ -487,7 +493,7 @@ pub fn status(app: &App) -> Element<'_> {
     } else {
         exit_col = exit_col.push(m3_button(
             "Check exit IP",
-            connected,
+            has_active,
             ButtonKind::Tonal,
             Message::ExitProbe,
             app,
@@ -534,6 +540,21 @@ pub fn status(app: &App) -> Element<'_> {
                                 s.secondary_container,
                                 s.on_secondary_container
                             ),
+                            if info.via_temp_tunnel {
+                                chip(
+                                    "temporary probe tunnel",
+                                    app,
+                                    s.surface_container_high,
+                                    s.on_surface_variant,
+                                )
+                            } else {
+                                chip(
+                                    "live tunnel",
+                                    app,
+                                    s.tertiary_container,
+                                    s.on_tertiary_container,
+                                )
+                            },
                         ]
                         .spacing(8)
                         .align_y(iced::Alignment::Center),
@@ -555,6 +576,98 @@ pub fn status(app: &App) -> Element<'_> {
         }
     }
     let exit_card = container(exit_col.spacing(8).padding(16))
+        .style(t3::card(s, s.surface_container_low))
+        .width(Length::Fill);
+
+    // --- speed test card (S19) ---------------------------------------------
+    let mut speed_col = column![
+        text("Speed test").size(ts.title_m.size).color(s.on_surface),
+        text(if has_active {
+            "downloads a test payload through the active server — the live tunnel when \
+             connected, a temporary probe tunnel otherwise (single carrier; setup is \
+             excluded from the rate)"
+        } else {
+            "downloads a test payload through the active server — pick an active server first"
+        })
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
+    ]
+    .spacing(6);
+    if app.speed_testing {
+        speed_col = speed_col.push(
+            text("testing… (up to 30 s)")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant),
+        );
+    } else {
+        speed_col = speed_col.push(m3_button(
+            "Run speed test",
+            has_active,
+            ButtonKind::Tonal,
+            Message::SpeedTest,
+            app,
+        ));
+    }
+    if let Some(res) = &app.speed {
+        match res {
+            Ok(info) => {
+                speed_col = speed_col
+                    .push(
+                        row![
+                            text(format!("{:.1} Mbps", info.mbps))
+                                .size(ts.headline_s.size)
+                                .color(s.on_surface),
+                            horizontal_space().width(Length::Fill),
+                            chip(
+                                format!("{:.1} MB in {:.1} s", info.mbytes, info.seconds),
+                                app,
+                                s.secondary_container,
+                                s.on_secondary_container
+                            ),
+                            chip(
+                                util::short(&info.profile_tag, 24),
+                                app,
+                                s.surface_container_high,
+                                s.on_surface_variant
+                            ),
+                            if info.via_temp_tunnel {
+                                chip(
+                                    "temporary probe tunnel",
+                                    app,
+                                    s.surface_container_high,
+                                    s.on_surface_variant,
+                                )
+                            } else {
+                                chip(
+                                    "live tunnel",
+                                    app,
+                                    s.tertiary_container,
+                                    s.on_tertiary_container,
+                                )
+                            },
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .push(
+                        text(
+                            "measures the DOWNLOAD path through this server; the engine's \
+                             per-adapter graphs show the live spread while connected",
+                        )
+                        .size(ts.label_m.size)
+                        .color(s.on_surface_variant),
+                    );
+            }
+            Err(e) => {
+                speed_col = speed_col.push(
+                    text(format!("speed test failed: {e}"))
+                        .size(ts.body_s.size)
+                        .color(s.error),
+                );
+            }
+        }
+    }
+    let speed_card = container(speed_col.spacing(8).padding(16))
         .style(t3::card(s, s.surface_container_low))
         .width(Length::Fill);
 
@@ -690,6 +803,7 @@ pub fn status(app: &App) -> Element<'_> {
     // --- ONE page scrollable below the frame (S13) ---------------------
     let mut below = column![].spacing(12).width(Length::Fill);
     below = below.push(exit_card);
+    below = below.push(speed_card);
     below = below.push(bottom_card);
     let page_scroll = scrollable(container(below).width(Length::Fill))
         .width(Length::Fill)
@@ -1018,6 +1132,13 @@ fn profile_card<'a>(app: &'a App, p: &'a ProfileView) -> Element<'a> {
             app
         ),
         m3_button(
+            "Edit",
+            true,
+            ButtonKind::Text,
+            Message::EditServer(p.id.clone()),
+            app
+        ),
+        m3_button(
             "Test latency",
             true,
             ButtonKind::Text,
@@ -1056,6 +1177,209 @@ fn profile_card<'a>(app: &'a App, p: &'a ProfileView) -> Element<'a> {
         .style(t3::card(s, s.surface_container_low))
         .width(Length::Fill)
         .into()
+}
+
+// ---------------------------------------------------------------------------
+// S19: server Edit dialog (full-window modal)
+// ---------------------------------------------------------------------------
+
+/// One `[label | text field]` row of the edit form.
+fn edit_field_row<'a>(
+    app: &'a App,
+    label: &'a str,
+    value: &'a str,
+    field: EditField,
+    placeholder: &'a str,
+    secret: bool,
+) -> iced::widget::Row<'a, Message> {
+    let s = app.theme.scheme;
+    let ts = app.theme.ts;
+    let mut input = text_input(placeholder, value)
+        .on_input(move |t| Message::EditField(field, t))
+        .padding(6)
+        .width(Length::Fixed(260.0))
+        .style(t3::text_field(s));
+    if secret {
+        input = input.on_submit(Message::EditSave).size(ts.body_s.size); // credentials read a touch smaller
+    } else {
+        input = input.on_submit(Message::EditSave);
+    }
+    row![
+        text(label)
+            .size(app.theme.ts.body_m.size)
+            .color(s.on_surface_variant)
+            .width(Length::Fixed(150.0)),
+        input,
+    ]
+    .spacing(10)
+    .align_y(iced::Alignment::Center)
+}
+
+/// S19: the server Edit dialog — a full-window modal layer (the S16
+/// title-menu overlay discipline): a dim backdrop that cancels on click,
+/// with a centered card carrying the editable fields. REALITY-only fields
+/// render only for REALITY profiles (the service ignores them otherwise).
+pub fn edit_overlay(app: &App) -> Element<'_> {
+    let s = app.theme.scheme;
+    let ts = app.theme.ts;
+    let Some(d) = &app.edit else {
+        // Not open (the caller gates on edit.is_some(); render nothing
+        // clickable either way).
+        return container(vertical_space().height(Length::Shrink))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    };
+
+    let mut form = column![
+        text(format!("Edit server — {} · {}", d.protocol, d.security))
+            .size(ts.title_m.size)
+            .color(s.on_surface),
+        edit_field_row(app, "name", &d.tag, EditField::Tag, "server name", false),
+        edit_field_row(
+            app,
+            "remark",
+            &d.remark,
+            EditField::Remark,
+            "free-form note",
+            false
+        ),
+        edit_field_row(
+            app,
+            "address",
+            &d.address,
+            EditField::Address,
+            "host or IP",
+            false
+        ),
+        edit_field_row(app, "port", &d.port, EditField::Port, "1-65535", false),
+        edit_field_row(
+            app,
+            "identity (UUID)",
+            &d.identity,
+            EditField::Identity,
+            "vless UUID",
+            true
+        ),
+    ]
+    .spacing(10);
+
+    if d.is_reality() {
+        form = form.push(
+            text("REALITY security (vless+reality+tcp)")
+                .size(ts.label_l.size)
+                .color(s.on_surface_variant),
+        );
+        form = form.push(edit_field_row(
+            app,
+            "SNI",
+            &d.sni,
+            EditField::Sni,
+            "server name indication",
+            false,
+        ));
+        form = form.push(edit_field_row(
+            app,
+            "fingerprint",
+            &d.fingerprint,
+            EditField::Fingerprint,
+            "uTLS fingerprint (chrome…)",
+            false,
+        ));
+        form = form.push(edit_field_row(
+            app,
+            "public key",
+            &d.public_key,
+            EditField::PublicKey,
+            "pbk",
+            true,
+        ));
+        form = form.push(edit_field_row(
+            app,
+            "short ID",
+            &d.short_id,
+            EditField::ShortId,
+            "sid",
+            false,
+        ));
+        form = form.push(edit_field_row(
+            app,
+            "spiderX",
+            &d.spider_x,
+            EditField::SpiderX,
+            "empty = /",
+            false,
+        ));
+    } else {
+        form = form.push(
+            text("security fields apply to REALITY profiles only")
+                .size(ts.label_m.size)
+                .color(s.on_surface_variant),
+        );
+    }
+
+    if let Some(err) = &d.error {
+        form = form.push(
+            container(
+                text(format!("save failed: {err}"))
+                    .size(ts.body_s.size)
+                    .color(s.on_error_container),
+            )
+            .padding(10)
+            .style(t3::card(s, s.error_container))
+            .width(Length::Fill),
+        );
+    }
+
+    form = form.push(
+        row![
+            m3_button(
+                if d.saving { "saving…" } else { "Save" },
+                !d.saving,
+                ButtonKind::Filled,
+                Message::EditSave,
+                app
+            ),
+            m3_button("Cancel", true, ButtonKind::Text, Message::EditCancel, app),
+            text("editing the ACTIVE server applies on the next reconnect")
+                .size(ts.label_m.size)
+                .color(s.on_surface_variant),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center),
+    );
+
+    // Scrollable so the form never overflows short windows.
+    let card = container(
+        scrollable(column![form].spacing(4).width(Length::Fill))
+            .height(Length::Fill)
+            .width(Length::Fill),
+    )
+    .padding(20)
+    .style(t3::card(s, s.surface_container_low))
+    .width(Length::Fixed(520.0))
+    .height(Length::Fill)
+    .max_height(560.0);
+
+    // Dim backdrop: click cancels; the card centers.
+    let backdrop = mouse_area(
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .padding(24)
+            .style(move |_t| iced::widget::container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.45,
+                ))),
+                ..Default::default()
+            }),
+    )
+    .on_press(Message::EditCancel)
+    .interaction(iced::mouse::Interaction::Pointer);
+
+    backdrop.into()
 }
 
 // ---------------------------------------------------------------------------
@@ -1659,6 +1983,22 @@ pub fn settings(app: &App) -> Element<'_> {
             .size(28.0)
             .on_toggle(Message::SystemProxyToggled)
             .style(t3::switch(s)),
+        toggler(app.settings.kill_switch)
+            .label("kill switch (block traffic if the tunnel dies)")
+            .size(28.0)
+            .on_toggle(Message::KillSwitchToggled)
+            .style(t3::switch(s)),
+        text(
+            "on: when the tunnel dies on its own, the system proxy is pointed at a \
+             dead local port — apps FAIL instead of silently leaking outside the \
+             tunnel (fail-closed). Connect again to resume, or toggle this off to \
+             restore direct traffic. A MANUAL disconnect always restores. Guards \
+             system-proxy traffic; apps using the SOCKS/HTTP port already fail \
+             closed while the tunnel is down. off (default): the proxy is \
+             restored on a spontaneous death and traffic goes direct (fail-open).",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
         row![
             text("merge policy")
                 .size(ts.body_m.size)
@@ -1802,6 +2142,19 @@ pub fn settings(app: &App) -> Element<'_> {
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center),
+        row![
+            text("speed test URL")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant)
+                .width(Length::Fixed(210.0)),
+            text_input("http://host/path", &app.settings.speed_test_url)
+                .on_input(Message::SpeedUrlChanged)
+                .padding(6)
+                .width(Length::Fixed(240.0))
+                .style(t3::text_field(s)),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
         text("stream mode splits every connection's bytes across the bonded adapters and merges them on the server (needs the mt-merge-server daemon and an Xray finalRules allow for the merge port on the server — re-run server/setup-xray-reality.sh; falls back to per-connection when unreachable)")
             .size(ts.body_s.size)
             .color(s.on_surface_variant),
@@ -1853,6 +2206,44 @@ pub fn settings(app: &App) -> Element<'_> {
     ]
     .spacing(10);
 
+    // Diagnostics card (S19) ------------------------------------------------
+    let diag_caption = match &app.diag_path {
+        Some(p) => format!("currently writing: {p}"),
+        None => "the file is created when the mode turns on (its path also lands \
+                 in the Logs tab)"
+            .to_string(),
+    };
+    let diagnostics_card = column![
+        text("Diagnostics")
+            .size(ts.title_m.size)
+            .color(s.on_surface),
+        toggler(app.settings.diagnostics)
+            .label("diagnostics mode (verbose support log)")
+            .size(28.0)
+            .on_toggle(Message::DiagnosticsToggled)
+            .style(t3::switch(s)),
+        text(
+            "on: one timestamped file per session in the log folder collects \
+             connection lifecycle events, engine output (log level forced to \
+             debug), link health and a redacted settings/profile summary — \
+             paste it into a chat for connection-issue analysis. off: the file \
+             stops growing but stays on disk.",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
+        text(diag_caption)
+            .size(ts.body_s.size)
+            .color(s.on_surface_variant),
+        m3_button(
+            "Open log folder",
+            true,
+            ButtonKind::Outlined,
+            Message::OpenLogsFolder,
+            app
+        ),
+    ]
+    .spacing(10);
+
     let mut col = column![
         container(appearance)
             .padding(16)
@@ -1871,6 +2262,10 @@ pub fn settings(app: &App) -> Element<'_> {
             .style(t3::card(s, s.surface_container_low))
             .width(Length::Fill),
         container(window_tray)
+            .padding(16)
+            .style(t3::card(s, s.surface_container_low))
+            .width(Length::Fill),
+        container(diagnostics_card)
             .padding(16)
             .style(t3::card(s, s.surface_container_low))
             .width(Length::Fill),

@@ -23,6 +23,7 @@
 
 pub mod config;
 pub mod core_proc;
+pub mod diagnostics;
 pub mod elevate;
 pub mod error;
 pub mod fsutil;
