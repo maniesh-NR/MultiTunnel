@@ -253,66 +253,74 @@ async fn carrier_death_mid_stream_fails_over_without_data_loss() {
         }
     }
 
-    let (daemon_addr, _daemon) = spawn_daemon().await;
-    let echo = spawn_echo().await;
+    // Runner-flake hardening (S19, LEDGER 2026-11-21): this test failed
+    // or wedged on ubuntu runners three documented times (green locally,
+    // green in sibling runs of the SAME commit). A hard deadline turns a
+    // silent 54-minute wedge into a loud one-minute failure.
+    tokio::time::timeout(Duration::from_secs(90), async {
+        let (daemon_addr, _daemon) = spawn_daemon().await;
+        let echo = spawn_echo().await;
 
-    let held: Arc<std::sync::Mutex<Vec<std::net::TcpStream>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
-    let wifi: Arc<dyn Outbound> = Arc::new(HoldingLink {
-        name: "Wi-Fi",
-        daemon: daemon_addr,
-        held: Arc::clone(&held),
-    });
-    let lte: Arc<dyn Outbound> = Arc::new(FakeEngineLink {
-        name: "LTE",
-        daemon: daemon_addr,
-        dials: Arc::new(AtomicUsize::new(0)),
-        fail_next: Arc::new(AtomicBool::new(false)),
-    });
-    let bond = BondOutbound::new(vec![wifi, lte], merge_target(daemon_addr));
-    bond.ensure_carriers(Duration::from_secs(5))
-        .await
-        .expect("carriers established");
+        let held: Arc<std::sync::Mutex<Vec<std::net::TcpStream>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let wifi: Arc<dyn Outbound> = Arc::new(HoldingLink {
+            name: "Wi-Fi",
+            daemon: daemon_addr,
+            held: Arc::clone(&held),
+        });
+        let lte: Arc<dyn Outbound> = Arc::new(FakeEngineLink {
+            name: "LTE",
+            daemon: daemon_addr,
+            dials: Arc::new(AtomicUsize::new(0)),
+            fail_next: Arc::new(AtomicBool::new(false)),
+        });
+        let bond = BondOutbound::new(vec![wifi, lte], merge_target(daemon_addr));
+        bond.ensure_carriers(Duration::from_secs(5))
+            .await
+            .expect("carriers established");
 
-    let payload = blob(512 * 1024, 0x5A);
-    let mut stream = bond.connect(&tcp_target(echo)).await.expect("connect");
+        let payload = blob(512 * 1024, 0x5A);
+        let mut stream = bond.connect(&tcp_target(echo)).await.expect("connect");
 
-    // Write the first half, let it spread over both carriers, then kill
-    // every Wi-Fi carrier socket (FIN → both ends mark the carrier dead).
-    let half = payload.len() / 2;
-    stream
-        .write_all(&payload[..half])
-        .await
-        .expect("first half");
-    tokio::time::sleep(Duration::from_millis(250)).await;
-    {
-        let mut sockets = held.lock().unwrap();
-        assert!(!sockets.is_empty(), "Wi-Fi carrier socket held");
-        for s in sockets.drain(..) {
-            let _ = s.shutdown(StdShutdown::Both);
+        // Write the first half, let it spread over both carriers, then kill
+        // every Wi-Fi carrier socket (FIN → both ends mark the carrier dead).
+        let half = payload.len() / 2;
+        stream
+            .write_all(&payload[..half])
+            .await
+            .expect("first half");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        {
+            let mut sockets = held.lock().unwrap();
+            assert!(!sockets.is_empty(), "Wi-Fi carrier socket held");
+            for s in sockets.drain(..) {
+                let _ = s.shutdown(StdShutdown::Both);
+            }
         }
-    }
-    // The write side must still work through the surviving carrier.
-    stream
-        .write_all(&payload[half..])
-        .await
-        .expect("second half");
-    stream.shutdown().await.expect("shutdown");
+        // The write side must still work through the surviving carrier.
+        stream
+            .write_all(&payload[half..])
+            .await
+            .expect("second half");
+        stream.shutdown().await.expect("shutdown");
 
-    let mut received = Vec::with_capacity(payload.len());
-    let _ = stream.read_to_end(&mut received).await;
-    assert_eq!(
-        received.len(),
-        payload.len(),
-        "failover must not lose bytes (got {}/{})",
-        received.len(),
-        payload.len()
-    );
-    assert_eq!(received, payload, "failover integrity");
-    // The respawn must have re-dialed the Wi-Fi carrier.
-    let snap = bond.carrier_snapshot();
-    assert_eq!(snap.len(), 2, "both slots still present");
-    bond.shutdown();
+        let mut received = Vec::with_capacity(payload.len());
+        let _ = stream.read_to_end(&mut received).await;
+        assert_eq!(
+            received.len(),
+            payload.len(),
+            "failover must not lose bytes (got {}/{})",
+            received.len(),
+            payload.len()
+        );
+        assert_eq!(received, payload, "failover integrity");
+        // The respawn must have re-dialed the Wi-Fi carrier.
+        let snap = bond.carrier_snapshot();
+        assert_eq!(snap.len(), 2, "both slots still present");
+        bond.shutdown();
+    })
+    .await
+    .expect("deadline: carrier_death wedged (documented runner flake — see LEDGER)");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -345,26 +353,33 @@ async fn refused_target_surfaces_as_connection_reset() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn domain_targets_dial_through_the_daemon() {
-    let (daemon_addr, _daemon) = spawn_daemon().await;
-    let echo = spawn_echo().await;
-    let (links, _a, _b) = bond_links(daemon_addr);
-    let bond = BondOutbound::new(links, merge_target(daemon_addr));
-    bond.ensure_carriers(Duration::from_secs(5))
-        .await
-        .expect("carriers established");
+    // Runner-flake hardening (S19, LEDGER 2026-11-21): wedged >54 min on
+    // an ubuntu runner while green locally and in the sibling run of the
+    // same commit. Deadline: loud failure instead of an hourly hang.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let (daemon_addr, _daemon) = spawn_daemon().await;
+        let echo = spawn_echo().await;
+        let (links, _a, _b) = bond_links(daemon_addr);
+        let bond = BondOutbound::new(links, merge_target(daemon_addr));
+        bond.ensure_carriers(Duration::from_secs(5))
+            .await
+            .expect("carriers established");
 
-    // localhost:port resolves inside the daemon's dial_target.
-    let target = TargetAddr {
-        host: Host::Domain("localhost".to_string()),
-        port: echo.port(),
-    };
-    let mut stream = bond.connect(&target).await.expect("connect");
-    stream.write_all(b"hello bond").await.expect("write");
-    stream.shutdown().await.expect("shutdown");
-    let mut received = Vec::new();
-    stream.read_to_end(&mut received).await.expect("read");
-    assert_eq!(received, b"hello bond");
-    bond.shutdown();
+        // localhost:port resolves inside the daemon's dial_target.
+        let target = TargetAddr {
+            host: Host::Domain("localhost".to_string()),
+            port: echo.port(),
+        };
+        let mut stream = bond.connect(&target).await.expect("connect");
+        stream.write_all(b"hello bond").await.expect("write");
+        stream.shutdown().await.expect("shutdown");
+        let mut received = Vec::new();
+        stream.read_to_end(&mut received).await.expect("read");
+        assert_eq!(received, b"hello bond");
+        bond.shutdown();
+    })
+    .await
+    .expect("deadline: domain_targets wedged (documented runner flake — see LEDGER)");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
