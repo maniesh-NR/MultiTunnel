@@ -166,8 +166,15 @@ const SPEED_TEST_STALL: Duration = Duration::from_secs(5);
 /// pointed here, WinINET consumers get instant connection-refused
 /// instead of silently going DIRECT after a spontaneous tunnel death
 /// (fail-closed). Reuses `sysproxy::set` so the ORIGINAL pre-tunnel
-/// snapshot stays intact for the eventual restore.
+/// snapshot stays intact for the eventual restore. While engaged the
+/// app also BINDS the port (see [`spawn_blackhole`]) so a local process
+/// cannot pre-bind it and turn the black hole into its own proxy.
 const KILL_SWITCH_BLACKHOLE_PROXY: &str = "127.0.0.1:9";
+/// S19 (review fix): the port [`KILL_SWITCH_BLACKHOLE_PROXY`] names.
+/// Windows does not reserve ports < 1024 for admins, so an unprivileged
+/// app can own it; on hosts where the bind fails the dead-port semantics
+/// (instant connection-refused) still hold.
+const KILL_SWITCH_BLACKHOLE_PORT: u16 = 9;
 
 /// Filesystem locations the service works with (injected in tests).
 #[derive(Debug, Clone)]
@@ -762,6 +769,11 @@ struct Core {
     /// Per-link `(up, down)` byte totals accrued from `ConnClosed` events.
     bytes: Mutex<HashMap<String, (u64, u64)>>,
     sysproxy_set: AtomicBool,
+    /// S19 (review fix): the kill switch's black-hole listener — while
+    /// engaged we OWN [`KILL_SWITCH_BLACKHOLE_PORT`] so a local process
+    /// cannot pre-bind it and turn the black hole into its own proxy.
+    /// Accept loop drops every connection; the watch sender stops it.
+    blackhole: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     disconnect_requested: AtomicBool,
     restarts: AtomicU32,
 }
@@ -855,6 +867,7 @@ impl RealService {
                 session: Mutex::new(None),
                 bytes: Mutex::new(HashMap::new()),
                 sysproxy_set: AtomicBool::new(false),
+                blackhole: Mutex::new(None),
                 disconnect_requested: AtomicBool::new(false),
                 restarts: AtomicU32::new(0),
             }),
@@ -903,8 +916,10 @@ impl RealService {
         // 0. Stale sysproxy self-heal (v0.2 connect step 0 / D5,
         //    S6-REV-C P1-3b): a previous run that died without disconnecting
         //    may have left the registry pointing at a dead local listener.
-        //    Best-effort — a failure never blocks connecting.
+        //    Best-effort — a failure never blocks connecting. This also
+        //    clears any KILL SWITCH black-hole from a previous session.
         let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
+        stop_blackhole(&self.core);
 
         let settings = SettingsFile::load(&self.core.paths.settings_file());
         // S9: refresh the engine log level BEFORE links are built.
@@ -1266,6 +1281,56 @@ async fn pump(
     }
 }
 
+/// S19 (review fix): bind + OWN the black-hole port while the kill
+/// switch is engaged. The accept loop drops every connection the moment
+/// it lands — nothing legible ever flows. A bind failure is non-fatal:
+/// the unbound port still refuses connections (dead-port semantics, still
+/// fail-closed); only the local pre-bind guarantee is lost. On Windows an
+/// unprivileged process may bind port 9; dev hosts without that right
+/// simply take the fallback.
+async fn spawn_blackhole(core: &Core) {
+    let addr = SocketAddr::from(([127, 0, 0, 1], KILL_SWITCH_BLACKHOLE_PORT));
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(
+                "kill switch: could not own the black-hole port {addr} ({e}) \
+                 — dead-port fallback (still fail-closed)"
+            );
+            return;
+        }
+    };
+    let (tx, mut rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                changed = rx.changed() => {
+                    if changed.is_err() || *rx.borrow() {
+                        break;
+                    }
+                }
+                accepted = listener.accept() => {
+                    if accepted.is_err() {
+                        break;
+                    }
+                    // The accepted socket drops here BY DESIGN — the
+                    // connection is swallowed, never read, never answered.
+                }
+            }
+        }
+    });
+    *lock(&core.blackhole) = Some(tx);
+}
+
+/// S19 (review fix): stop the black-hole listener (every proxy-restore
+/// path: explicit disconnect, the kill-switch toggle-off escape hatch,
+/// and the connect step-0 self-heal).
+fn stop_blackhole(core: &Core) {
+    if let Some(tx) = lock(&core.blackhole).take() {
+        let _ = tx.send(true);
+    }
+}
+
 /// D5 fail-open give-up (v0.2 supervisor semantics for restart exhaustion):
 /// retire the session, mark `Failed`, and stop the server. The system
 /// proxy hand-off depends on the S19 kill switch:
@@ -1301,6 +1366,10 @@ async fn give_up(core: &Core, shutdown: &tokio::sync::watch::Sender<bool>) {
                 &core.paths.state_dir,
             ) {
                 Ok(()) => {
+                    // Review fix: OWN the port so a local process cannot
+                    // pre-bind it and turn the black hole into a proxy of
+                    // its own (the accept loop swallows connections).
+                    spawn_blackhole(core).await;
                     core.emit(ServiceEvent::LogLine(
                         "KILL SWITCH engaged: the tunnel died on its own — system traffic is \
                          now BLOCKED (fail-closed) instead of leaking direct. Connect again \
@@ -1548,6 +1617,7 @@ impl MtService for RealService {
                 if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
                     tracing::warn!("system proxy restore failed: {e}");
                 }
+                stop_blackhole(&self.core);
                 self.core
                     .emit(ServiceEvent::LogLine("system proxy restored".into()));
             }
@@ -1565,6 +1635,7 @@ impl MtService for RealService {
             if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
                 tracing::warn!("system proxy restore failed: {e}");
             }
+            stop_blackhole(&self.core);
         }
         self.core.bytes_reset();
         self.core.set_state(ServiceState::Disconnected);
@@ -1789,6 +1860,7 @@ impl MtService for RealService {
             && self.core.sysproxy_set.swap(false, Ordering::SeqCst)
         {
             let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
+            stop_blackhole(&self.core);
             self.core.emit(ServiceEvent::LogLine(
                 "kill switch disabled — system proxy restored".into(),
             ));
@@ -3025,6 +3097,44 @@ mod tests {
             }
         }
         assert!(saw_restore, "the restore is announced in the GUI log");
+    }
+
+    /// S19 (review fix): spawn_blackhole OWNS the port while engaged (a
+    /// local process cannot pre-bind it) and stop_blackhole releases it —
+    /// the accept loop swallows connections (an open TCP dial to it lands
+    /// and closes immediately instead of being answered by anyone else).
+    /// On hosts where binding port 9 is not permitted the spawn is a
+    /// documented no-op fallback (dev/linux root-only port).
+    #[tokio::test]
+    async fn blackhole_listener_owns_and_releases_the_port() {
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("blackhole");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        // Engage.
+        spawn_blackhole(&svc.core).await;
+        let guard_taken = svc.core.blackhole.lock().unwrap().is_some();
+        if guard_taken {
+            // The port answers to US: a connect lands (accepted + dropped).
+            let dial = tokio::net::TcpStream::connect("127.0.0.1:9").await;
+            assert!(dial.is_ok(), "our own listener owns the port");
+            // Release: the next connect is refused again.
+            stop_blackhole(&svc.core);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let refused = tokio::net::TcpStream::connect("127.0.0.1:9").await;
+            assert!(refused.is_err(), "port released after stop");
+        } else {
+            // Documented fallback host (e.g. Linux without CAP_NET_BIND_SERVICE):
+            // dead-port semantics — nothing listens, connects are refused.
+            let refused = tokio::net::TcpStream::connect("127.0.0.1:9").await;
+            assert!(refused.is_err(), "fallback keeps the port dead");
+        }
     }
 
     #[tokio::test]

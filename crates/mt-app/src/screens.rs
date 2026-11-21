@@ -802,6 +802,32 @@ pub fn status(app: &App) -> Element<'_> {
 
     // --- ONE page scrollable below the frame (S13) ---------------------
     let mut below = column![].spacing(12).width(Length::Fill);
+    // S19 (review fix): a KILL SWITCH banner when the tunnel FAILED with
+    // the switch armed — the state give_up() leaves the machine in.
+    if crate::app::kill_switch_banner_visible(
+        snap.as_ref()
+            .map_or(ServiceState::Disconnected, |s| s.state),
+        app.settings.kill_switch,
+    ) {
+        below = below.push(
+            container(
+                column![
+                    text("KILL SWITCH ACTIVE — traffic is blocked")
+                        .size(ts.title_s.size)
+                        .color(s.on_error_container),
+                    text(
+                        "the tunnel died on its own, so system traffic is being blocked \n                         (fail-closed) instead of leaking outside the tunnel. Connect again \n                         to resume, or turn the kill switch off in Settings → Network.",
+                    )
+                    .size(ts.body_s.size)
+                    .color(s.on_error_container),
+                ]
+                .spacing(4),
+            )
+            .padding(14)
+            .style(t3::card(s, s.error_container))
+            .width(Length::Fill),
+        );
+    }
     below = below.push(exit_card);
     below = below.push(speed_card);
     below = below.push(bottom_card);

@@ -642,6 +642,13 @@ pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// S19 (review fix): should the Status screen show the KILL SWITCH banner?
+/// Pure gate (unit-tested): the switch is armed AND the tunnel FAILED —
+/// the give_up path engages the black hole exactly in that state.
+pub fn kill_switch_banner_visible(state: ServiceState, kill_switch: bool) -> bool {
+    kill_switch && state == ServiceState::Failed
+}
+
 impl App {
     /// Bare constructor with empty state (service loads fill it).
     pub fn new(service: Arc<dyn MtService>, flags: Flags) -> Self {
@@ -1682,6 +1689,9 @@ impl App {
                     return self.load_profiles();
                 }
                 Err(e) => {
+                    // Review fix: surface the failure in the Logs tab too —
+                    // the dialog error is easy to dismiss and lose.
+                    util::push_log(&mut self.logs, format!("WARN  server edit failed: {e}"));
                     if let Some(d) = self.edit.as_mut() {
                         d.saving = false;
                         d.error = Some(e);
@@ -1713,10 +1723,17 @@ impl App {
             }
             Message::DiagnosticsToggled(v) => {
                 self.settings.diagnostics = v;
+                // Review fix: CHAIN the path refresh after the save — a
+                // batch could observe the pre-toggle path (stale caption).
                 let save = self.save_settings(self.settings.clone());
-                // The service creates/closes the file during the save;
-                // refresh the displayed path right after.
-                return iced::Task::batch([save, self.fetch_diag_path()]);
+                let svc = Arc::clone(&self.service);
+                return save.then(move |_| {
+                    let svc = Arc::clone(&svc);
+                    iced::Task::perform(
+                        async move { svc.diagnostics_path().await },
+                        Message::DiagPath,
+                    )
+                });
             }
             Message::DiagPath(p) => self.diag_path = p,
             Message::OpenLogsFolder => {
@@ -3273,5 +3290,40 @@ mod tests {
         assert!(app.diag_path.is_none());
         drop(app.update(Message::DiagPath(Some("/tmp/x.log".into()))));
         assert_eq!(app.diag_path.as_deref(), Some("/tmp/x.log"));
+    }
+
+    /// S19 (review fix): the KILL SWITCH banner gate — visible exactly
+    /// when the switch is armed AND the tunnel FAILED (the give_up state).
+    #[test]
+    fn kill_switch_banner_gate() {
+        use mt_service::ServiceState as St;
+        assert!(crate::app::kill_switch_banner_visible(St::Failed, true));
+        assert!(!crate::app::kill_switch_banner_visible(St::Failed, false));
+        assert!(!crate::app::kill_switch_banner_visible(St::Connected, true));
+        assert!(!crate::app::kill_switch_banner_visible(
+            St::Disconnected,
+            true
+        ));
+        assert!(!crate::app::kill_switch_banner_visible(
+            St::Connecting,
+            true
+        ));
+    }
+
+    /// S19 (review fix): a failed server edit ALSO lands in the Logs tab.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn edit_save_failure_is_logged() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        let id = app.profiles[0].id.clone();
+        let details = app.service.profile_details(&id).await.expect("details");
+        drop(app.update(Message::EditLoaded(id, Ok(details))));
+        drop(app.update(Message::EditSaved(Err("boom".into()))));
+        assert!(app
+            .logs
+            .iter()
+            .any(|l| l.contains("server edit failed: boom")));
+        assert!(app.edit.is_some(), "dialog stays open with the error");
     }
 }
