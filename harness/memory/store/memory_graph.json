@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "52f1d3c 2026-11-21T15:07:33Z",
+  "as_of": "4923566 2026-11-22T04:05:27Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 275,
-  "edge_count": 282,
+  "node_count": 279,
+  "edge_count": 286,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -691,6 +691,26 @@
       "passages": [
         {
           "text": "backup(s15-ops-gitattributes): 2026-11-20T08:08:08Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:4923566",
+      "type": "commit",
+      "title": "s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 \"Personal Access Token does not have Copilot Requests permission\" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI).",
+      "tags": [
+        "2026-11-22"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "4923566"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 \"Personal Access Token does not have Copilot Requests permission\" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI).",
           "kind": "title"
         }
       ]
@@ -4744,6 +4764,31 @@
       ]
     },
     {
+      "id": "ledger:s20",
+      "type": "ledger",
+      "title": "Stage s20 ledger",
+      "tags": [
+        "s20",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s20"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-22T04:20Z | COPILOT CODE REVIEW COMPLETED (the S19 leftover): the cloud Copilot reviewer finally ran from this sandbox via POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review — the user's runbook pointed at the standalone @github/copilot CLI, which is installed and network-verified but hard-blocked by the PAT: api.individual.githubcopilot.com answers 401 \"Personal Access Token does not have \\\"Copilot Requests\\\" permission\" (authentic server response, NOT a proxy block; the permission can only be added by editing the PAT in the GitHub web UI — told the user exactly that). The REST code-review endpoint needs only pull-requests:write, which the PAT has.",
+          "kind": "body"
+        },
+        {
+          "text": "2026-11-22T04:16Z | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "ledger:s3",
       "type": "ledger",
       "title": "Stage s3 ledger",
@@ -5423,6 +5468,10 @@
       ],
       "passages": [
         {
+          "text": "- **Stage**: S20 CLOSED — the S19 leftover (Copilot code review) COMPLETED and shipped as v0.13.1 (tag on 4923566, release run 44983522874 SUCCESS, ci ×2 green, assets download-verified). The cloud Copilot reviewer ran via `POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review` (needs only pull-requests:write, which the PAT has): effort ladder per the fallback instruction — max → quota-rejected, balanced → quota-rejected, **lite → ran**. Round 1 (on 52f1d3c): 12 findings (5 High: step-0 self-heal never cleared sysproxy_set → no-snapshot restore disables a user's pre-existing proxy; give_up unserialized with disconnect → black-hole re-installed AFTER an explicit disconnect; set-BEFORE-bind → a foreign port-9 owner receives the blocked traffic; listener stopped even when restore failed → stranded block, no retry, false \"restored\" log; diag header wrote user URLs verbatim → credential leak. 7 Medium: live diag toggle misses engine debug, failed enable leaves the toggle on, probes ride a session that is not the target profile, unbounded head buffer, port-0 edit, unvalidated REALITY edits, pop() = lowest-priority adapter). All 12 fixed (Core::proxy_mtx serializes every proxy hand-off with the bind hoisted out of the lock; bind-before-set with no-set-on-bind- failure; restore-first release + retry; redact_url; diag-on-live reconnect; failed-enable revert; Session.profile_id pins both probes; 64 KiB head cap; port-0 + REALITY structural validation; first-link selection). Round 2 (lite, on the fixes): CLEAN PASS, zero comments.",
+          "kind": "body"
+        },
+        {
           "text": "- **Stage**: S19 CLOSED — v0.13.0 released and verified (tag run 44910934439 SUCCESS ~7 min; CI all-green on the rerun after the documented mt-bond runner-flake round — LEDGER 15:10Z).",
           "kind": "body"
         }
@@ -5612,6 +5661,26 @@
       "passages": [
         {
           "text": "Release v0.13.0: tag points at commit 3da17ad.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "release:v0.13.1",
+      "type": "release",
+      "title": "Release v0.13.1 (tagged 4923566)",
+      "tags": [
+        "v0.13.1"
+      ],
+      "sources": [
+        {
+          "file": "git:tags/v0.13.1",
+          "anchor": "4923566"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Release v0.13.1: tag points at commit 4923566.",
           "kind": "body"
         }
       ]
@@ -6493,6 +6562,122 @@
         {
           "text": "## Answers to the orchestrator's specific questions",
           "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "report:s20-copilot-review-transcript",
+      "type": "report",
+      "title": "S20 Copilot code review transcript (v0.13.1, PR #1)",
+      "tags": [
+        "agent-reports"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/agent-reports/s20-copilot-review-transcript.md",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "# S20 Copilot code review transcript (v0.13.1, PR #1)",
+          "kind": "title"
+        },
+        {
+          "text": "Reviewer: copilot-pull-request-reviewer[bot] via the REST endpoint POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review.",
+          "kind": "body"
+        },
+        {
+          "text": "Effort ladder (per the fallback instruction): `max` → rejected by the account's remaining quota; `balanced` → rejected; `lite` → ran. The standalone @github/copilot CLI path stayed blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 — authentic server response; the permission can only be added by editing the PAT in the GitHub web UI).",
+          "kind": "body"
+        },
+        {
+          "text": "---",
+          "kind": "body"
+        },
+        {
+          "text": "## Round 1 — effort Lite, commit 52f1d3c",
+          "kind": "title"
+        },
+        {
+          "text": "### Review summary",
+          "kind": "title"
+        },
+        {
+          "text": "### 🟡 Changes recommended",
+          "kind": "title"
+        },
+        {
+          "text": "Multiple unresolved critical correctness and security issues remain, including kill-switch races and failed restoration handling that can leave traffic misrouted, plus diagnostic URL leakage of credentials.",
+          "kind": "body"
+        },
+        {
+          "text": "<details open> <summary><strong>12 open issues</strong></summary>",
+          "kind": "body"
+        },
+        {
+          "text": "- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Clear proxy ownership after kill-switch self-heal](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411193) · New - <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Serialize kill-switch proxy changes with disconnect](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411210) · New - <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img ",
+          "kind": "body"
+        },
+        {
+          "text": "<sub>Review effort: Lite</sub> ```",
+          "kind": "body"
+        },
+        {
+          "text": "### Findings and discussion",
+          "kind": "title"
+        },
+        {
+          "text": "#### [4656411193] src/real_service.rs L922",
+          "kind": "title"
+        },
+        {
+          "text": "**Copilot:** The self-heal restores the OS proxy and stops the black-hole, but it never clears `core.sysproxy_set`. After a kill-switch failure, the next connect with `system_proxy` disabled leaves this flag set; a later disconnect then calls `restore()` with no snapshot and can disable the user's pre-existing proxy instead of leaving it untouched. Reset the ownership flag together with this self-heal.",
+          "kind": "body"
+        },
+        {
+          "text": "**Maintainer:** **Fixed in 4923566.** The step-0 self-heal now clears `sysproxy_set` on a successful restore (and — new this round — keeps the flag AND the listener when the restore fails, so the next disconnect retries instead of stranding a black-holed proxy). Regression test: `connect_selfheal_clears_stale_proxy_ownership`.",
+          "kind": "body"
+        },
+        {
+          "text": "#### [4656411210] src/real_service.rs L1363",
+          "kind": "title"
+        },
+        {
+          "text": "**Copilot:** This check-and-set is not serialized with `disconnect()`: after `give_up` loads `kill_switch = true`, an explicit disconnect can swap `sysproxy_set` to false and restore the snapshot, then this awaited `sysproxy::set` can still install the black-hole and leave `sysproxy_set` true after disconnect has returned. That can re-block traffic even though the user explicitly disconnected. Serialize proxy hand-off with disconnect, or re-check ownership/settings after every awaited step and roll back if the session was released.",
+          "kind": "body"
+        },
+        {
+          "text": "**Maintainer:** **Fixed in 4923566.** New `Core::proxy_mtx` (std Mutex) is held across every proxy hand-off: `give_up`'s engage/restore decision, both disconnect branches, the kill-switch toggle-off escape hatch, the step-0 self-heal and the connect-time arming. `give_up` re-reads the flag under the lock, so the disconnect-then-re-block interleaving is gone. The black-hole bind is hoisted OUT of the lock (it awaits), so no std lock is ever held across an await — the crate's standing rule.",
+          "kind": "body"
+        },
+        {
+          "text": "#### [4656411223] src/real_service.rs L1367",
+          "kind": "title"
+        },
+        {
+          "text": "**Copilot:** The proxy is pointed at `127.0.0.1:9` before `spawn_blackhole` binds that port. A local process can therefore bind the port in this window (or already own it); `sysproxy::set` succeeds, the subsequent bind fails, and WinINET traffic is sent to that process rather than a fail-closed listener. Bind and retain the listener before changing the system proxy, and only engage the kill switch if ownership succeeds (or otherwise use a per-run listener address that is reserved first).",
+          "kind": "body"
+        },
+        {
+          "text": "**Maintainer:** **Fixed in 4923566.** The order is now bind → set: `bind_blackhole()` runs before any registry write, and `sysproxy::set` only executes when ownership is proven. On a bind failure the stale entry (which refuses) keeps blocking and nothing is ever routed to a foreign listener; on a `set` failure after a successful bind the freshly-bound listener is released. `spawn_blackhole` was split into `bind_blackhole` + `engage_blackhole` to make the locked section fully synchronous.",
+          "kind": "body"
+        },
+        {
+          "text": "#### [4656411231] src/real_service.rs L1620",
+          "kind": "title"
+        },
+        {
+          "text": "**Copilot:** The no-session disconnect path clears `sysproxy_set` before restoring, then stops the black-hole listener even when `restore` returns an error. In that failure case the system proxy can still point at `127.0.0.1:9`, but the listener is gone and the ownership flag is false, so later disconnects will not retry and the unconditional \"system proxy restored\" log is false. Keep the kill-switch ownership/listener until restore succeeds and surface a failed restore instead of claiming success.",
+          "kind": "body"
+        },
+        {
+          "text": "This issue also appears in the following locations of the same file: - line 1635 - line 1860",
+          "kind": "body"
+        },
+        {
+          "text": "**Maintainer:** **Fixed in 4923566 (all three sites).** Every restore path now matches on the result: `Ok` clears the flag, stops the listener and logs “restored”; `Err` keeps the flag AND the listener (still fail-closed), emits an `ERROR system proxy restore failed … retry` GUI log line, and the same path retries on the next disconnect/toggle. The “system proxy restored” line only appears after a successful restore. Note: the failure branch is Windows-registry-only, so it is covered by review rather than a Linux unit test — the retry semantics themselves are what the tests pin.",
+          "kind": "body"
         }
       ]
     },
@@ -8997,6 +9182,18 @@
       "evidence": "project ledger"
     },
     {
+      "src": "ledger:s20",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
+      "src": "ledger:s20",
+      "dst": "release:v0.13.1",
+      "rel": "released_in",
+      "evidence": "2026-11-22T04:16Z | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED."
+    },
+    {
       "src": "ledger:s3",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -9201,6 +9398,12 @@
       "evidence": "git tag v0.13.0"
     },
     {
+      "src": "release:v0.13.1",
+      "dst": "commit:4923566",
+      "rel": "built_from",
+      "evidence": "git tag v0.13.1"
+    },
+    {
       "src": "release:v0.2.0",
       "dst": "commit:06881a6",
       "rel": "built_from",
@@ -9317,6 +9520,12 @@
     {
       "src": "report:s2-rev-c-round2",
       "dst": "ledger:s2",
+      "rel": "reports_on",
+      "evidence": "filename stage prefix"
+    },
+    {
+      "src": "report:s20-copilot-review-transcript",
+      "dst": "ledger:s20",
       "rel": "reports_on",
       "evidence": "filename stage prefix"
     },
