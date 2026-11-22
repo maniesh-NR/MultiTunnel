@@ -398,6 +398,25 @@ GUI, no new dependencies):
   settings/profile summary — UUIDs, passwords and public keys never
   appear in it. Turn it on, reproduce a connection issue, then paste the
   file into a support chat.
+- **v0.13.1 — Copilot code-review hardening**: a GitHub Copilot review
+  pass over the v0.13 changes produced twelve findings, all addressed.
+  The kill switch now proves ownership of the black-hole port BEFORE the
+  system proxy is re-pointed at it (a foreign process can never receive
+  the blocked traffic), the proxy hand-off is serialized with
+  disconnect (no re-block after an explicit disconnect), a failed
+  restore keeps the block and retries on the next disconnect, and the
+  connect self-heal clears stale ownership (a leftover flag could
+  otherwise disable a user's pre-existing proxy). Diagnostics redact
+  URL credentials (userinfo/query never reach the support file), a
+  failed log-file start reverts the toggle, and enabling the mode on a
+  live session reconnects it so the engines actually log at `debug`.
+  The exit-IP check and speed test only ride a live session that was
+  built from the selected server (switching servers without
+  reconnecting now falls back to a temporary probe tunnel), offline
+  probes use the top-priority bonded adapter, the speed test caps the
+  response head independently of the payload limit, and the Edit dialog
+  rejects port 0 and structurally invalid REALITY fields (empty SNI,
+  malformed public key / short ID).
 - **Quick Settings on right-click**: the tray menu is built fresh from
   live state — Connect/Disconnect (state-reflecting), the server list
   (radio-checked on the active profile), Open MultiTunnel and Exit.

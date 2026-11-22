@@ -152,7 +152,9 @@ fn valid_uuid(s: &str) -> bool {
 }
 
 /// base64url alphabet WITHOUT padding: A-Z a-z 0-9 '-' '_'.
-fn is_base64url(c: u8) -> bool {
+/// S20: crate-visible — the profile EDIT path reuses the exact structural
+/// rule the link parser enforces on `pbk=`.
+pub(crate) fn is_base64url(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'-' || c == b'_'
 }
 

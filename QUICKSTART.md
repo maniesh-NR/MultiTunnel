@@ -97,6 +97,17 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > proxy blocks traffic instead of silently going direct) and a
 > DIAGNOSTICS mode that writes one paste-ready support log file
 > (connection lifecycle + engine output, credentials redacted).
+>
+> v0.13.1 (Copilot code-review round): kill-switch hardening — the
+> black-hole port is owned BEFORE the proxy points at it, the proxy
+> hand-off is serialized with disconnect, a failed restore keeps the
+> block and retries, and a stale ownership flag can no longer disable a
+> pre-existing proxy; diagnostics now redact URL credentials, reconnect
+> a live session when enabled (so engines log at debug) and revert the
+> toggle if the log file cannot be created; exit-IP/speed probes only
+> ride a live session that belongs to the selected server and offline
+> probes use the top-priority bonded adapter; the Edit dialog rejects
+> port 0 and invalid REALITY fields.
 
 **SMOKE TEST — this is the first time the GUI binary runs on real Windows.**
 The development sandbox is Linux; the window has been cross-compiled and

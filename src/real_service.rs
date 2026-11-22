@@ -161,6 +161,12 @@ const SPEED_TEST_MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// S19: per-read stall limit inside a speed test — a server that trickles
 /// slower than this yields the partial measurement instead of hanging.
 const SPEED_TEST_STALL: Duration = Duration::from_secs(5);
+/// S20 (Copilot round 2): the response-head buffer in a speed test is
+/// capped INDEPENDENTLY of the 64 MiB payload limit — until `\r\n\r\n`
+/// is found nothing counts toward `total`, so an endpoint streaming a
+/// header-less byte flood would otherwise grow the buffer for the whole
+/// 30 s budget. A legitimate HTTP head never approaches 64 KiB.
+const SPEED_TEST_MAX_HEAD: usize = 64 * 1024;
 /// S19: the kill switch's black-hole proxy target — a loopback port
 /// nothing legitimately listens on (discard). With the system proxy
 /// pointed here, WinINET consumers get instant connection-refused
@@ -746,6 +752,12 @@ fn default_lan_rules() -> Vec<Rule> {
 /// One live connect session (server + its tasks + lifecycle signals).
 struct Session {
     server: Arc<ProxyServer>,
+    /// S20 (Copilot round 2): the profile this session was BUILT from —
+    /// the active profile can be switched without reconnecting, and the
+    /// exit probe / speed test must only ride the live listeners when
+    /// they actually belong to the target profile (otherwise the old
+    /// tunnel's exit gets reported against the new profile's endpoint).
+    profile_id: String,
     /// S9: present when stream bonding engaged — the per-carrier status
     /// surface AND the owner of the per-adapter engines.
     bond: Option<Arc<BondOutbound>>,
@@ -769,6 +781,14 @@ struct Core {
     /// Per-link `(up, down)` byte totals accrued from `ConnClosed` events.
     bytes: Mutex<HashMap<String, (u64, u64)>>,
     sysproxy_set: AtomicBool,
+    /// S20 (Copilot round 2): serializes every system-proxy hand-off
+    /// (give_up's kill-switch engage, both disconnect restore paths, the
+    /// kill-switch toggle-off escape hatch, connect step-0 self-heal and
+    /// the connect-time arming) so a `give_up` racing an explicit
+    /// disconnect can never re-install the black-hole AFTER the disconnect
+    /// already restored the user's proxy. Std lock, never held across an
+    /// await (the black-hole BIND is hoisted out, see `give_up`).
+    proxy_mtx: Mutex<()>,
     /// S19 (review fix): the kill switch's black-hole listener — while
     /// engaged we OWN [`KILL_SWITCH_BLACKHOLE_PORT`] so a local process
     /// cannot pre-bind it and turn the black hole into its own proxy.
@@ -867,6 +887,7 @@ impl RealService {
                 session: Mutex::new(None),
                 bytes: Mutex::new(HashMap::new()),
                 sysproxy_set: AtomicBool::new(false),
+                proxy_mtx: Mutex::new(()),
                 blackhole: Mutex::new(None),
                 disconnect_requested: AtomicBool::new(false),
                 restarts: AtomicU32::new(0),
@@ -918,8 +939,25 @@ impl RealService {
         //    may have left the registry pointing at a dead local listener.
         //    Best-effort — a failure never blocks connecting. This also
         //    clears any KILL SWITCH black-hole from a previous session.
-        let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
-        stop_blackhole(&self.core);
+        //    S20 (Copilot round 2): under the proxy lock — and the OWNERSHIP
+        //    flag clears with a successful restore. Leaving it set after
+        //    the self-heal consumed the snapshot meant a later disconnect
+        //    "restored" with no snapshot, which DISABLES the user's
+        //    pre-existing proxy instead of leaving it untouched.
+        {
+            let _guard = lock(&self.core.proxy_mtx);
+            let engaged = self.core.sysproxy_set.load(Ordering::SeqCst);
+            if crate::sysproxy::restore(&self.core.paths.state_dir).is_ok() {
+                self.core.sysproxy_set.store(false, Ordering::SeqCst);
+                stop_blackhole(&self.core);
+            } else if !engaged {
+                // Nothing owned — release any dangling listener.
+                stop_blackhole(&self.core);
+            }
+            // engaged && restore failed: keep the flag AND the listener —
+            // the proxy still points at the black hole (fail-closed) and
+            // the next disconnect retries the restore.
+        }
 
         let settings = SettingsFile::load(&self.core.paths.settings_file());
         // S9: refresh the engine log level BEFORE links are built.
@@ -1140,6 +1178,7 @@ impl RealService {
 
         let session = Session {
             server,
+            profile_id: profile.id.clone(),
             bond,
             shutdown: shutdown_tx,
             run_handle,
@@ -1162,6 +1201,9 @@ impl RealService {
         // System proxy AFTER Connected, non-fatal (step 5 of the v0.2
         // connect_sequence discipline). Skipped for ephemeral binds (port 0
         // in settings — the tests' mode; a registry write would be pointless).
+        // S20 (Copilot round 2): under the proxy lock — an explicit
+        // disconnect landing mid-connect must never observe a half-armed
+        // proxy hand-off.
         if settings.settings.system_proxy && settings.socks_port != 0 && settings.http_port != 0 {
             let http_addr = lock(&self.core.session)
                 .as_ref()
@@ -1170,6 +1212,7 @@ impl RealService {
                 // The v0.2 full LAN-bypass override (S6-REV-C P1-4): LAN and
                 // loopback hosts must never ride the tunnel.
                 let override_list = crate::config::default_proxy_override();
+                let _guard = lock(&self.core.proxy_mtx);
                 match crate::sysproxy::set(
                     &http.to_string(),
                     &override_list,
@@ -1288,18 +1331,31 @@ async fn pump(
 /// fail-closed); only the local pre-bind guarantee is lost. On Windows an
 /// unprivileged process may bind port 9; dev hosts without that right
 /// simply take the fallback.
-async fn spawn_blackhole(core: &Core) {
+///
+/// S20 (Copilot round 2): split into [`bind_blackhole`] (the async bind,
+/// hoisted OUT of the proxy lock) and [`engage_blackhole`] (the sync
+/// accept-loop install) so `give_up` can bind FIRST and only point the
+/// system proxy at the port once ownership is proven — the old order
+/// (set-then-bind) left a window where a local process could own port 9
+/// and receive the black-holed traffic.
+async fn bind_blackhole() -> Option<tokio::net::TcpListener> {
     let addr = SocketAddr::from(([127, 0, 0, 1], KILL_SWITCH_BLACKHOLE_PORT));
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => l,
+    match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => Some(l),
         Err(e) => {
             tracing::warn!(
                 "kill switch: could not own the black-hole port {addr} ({e}) \
                  — dead-port fallback (still fail-closed)"
             );
-            return;
+            None
         }
-    };
+    }
+}
+
+/// S20 (Copilot round 2): install the accept loop for an ALREADY-BOUND
+/// listener and record it in [`Core::blackhole`]. Sync by design — called
+/// with the proxy lock held (the bind was done beforehand).
+fn engage_blackhole(core: &Core, listener: tokio::net::TcpListener) {
     let (tx, mut rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
         loop {
@@ -1348,47 +1404,80 @@ fn stop_blackhole(core: &Core) {
 ///   listeners die with the session and proxied connections were already
 ///   refused when all links were down.
 ///
+/// S20 (Copilot round 2) hardening:
+/// - the black-hole port is BOUND FIRST — `sysproxy::set` only runs once
+///   ownership is proven, so a local process that owns port 9 can never
+///   receive the black-holed traffic (the stale proxy entry keeps
+///   blocking instead, which is still fail-closed);
+/// - the whole hand-off runs under [`Core::proxy_mtx`], so an explicit
+///   `disconnect()` can no longer restore the user's proxy in the window
+///   between `give_up`'s flag read and its registry write (which used to
+///   re-install the black-hole AFTER the disconnect had returned).
+///
 /// Best-effort throughout — the app never dies invisibly (D15).
 async fn give_up(core: &Core, shutdown: &tokio::sync::watch::Sender<bool>) {
     tracing::warn!("supervisor: all tunnel links exhausted — giving up");
-    if core.sysproxy_set.load(Ordering::SeqCst) {
-        let kill_switch = SettingsFile::load(&core.paths.settings_file())
-            .settings
-            .kill_switch;
-        if kill_switch {
-            // Keep sysproxy_set TRUE: we still own the proxy state (the
-            // black hole IS ours); the next explicit disconnect or connect
-            // self-heal restores it.
-            let override_list = crate::config::default_proxy_override();
-            match crate::sysproxy::set(
-                KILL_SWITCH_BLACKHOLE_PROXY,
-                &override_list,
-                &core.paths.state_dir,
-            ) {
-                Ok(()) => {
-                    // Review fix: OWN the port so a local process cannot
-                    // pre-bind it and turn the black hole into a proxy of
-                    // its own (the accept loop swallows connections).
-                    spawn_blackhole(core).await;
+    // Bind BEFORE any registry write (and outside the proxy lock — the
+    // bind awaits). Ownership is proven up front; the listener is dropped
+    // unused whenever the decisions below do not engage the kill switch.
+    let listener = bind_blackhole().await;
+    {
+        let _guard = lock(&core.proxy_mtx);
+        if core.sysproxy_set.load(Ordering::SeqCst) {
+            let kill_switch = SettingsFile::load(&core.paths.settings_file())
+                .settings
+                .kill_switch;
+            if kill_switch {
+                // Keep sysproxy_set TRUE: we still own the proxy state (the
+                // black hole IS ours); the next explicit disconnect or
+                // connect self-heal restores it.
+                let override_list = crate::config::default_proxy_override();
+                if let Some(listener) = listener {
+                    match crate::sysproxy::set(
+                        KILL_SWITCH_BLACKHOLE_PROXY,
+                        &override_list,
+                        &core.paths.state_dir,
+                    ) {
+                        Ok(()) => {
+                            // Review fix: OWN the port so a local process
+                            // cannot pre-bind it and turn the black hole
+                            // into a proxy of its own (the accept loop
+                            // swallows connections).
+                            engage_blackhole(core, listener);
+                            core.emit(ServiceEvent::LogLine(
+                                "KILL SWITCH engaged: the tunnel died on its own — system traffic is \
+                                 now BLOCKED (fail-closed) instead of leaking direct. Connect again \
+                                 to resume, or toggle the kill switch off in Settings."
+                                    .into(),
+                            ));
+                        }
+                        Err(e) => {
+                            // The registry still points at OUR dead local
+                            // listener — still fail-closed, just less tidy.
+                            // The freshly-bound listener is useless now
+                            // (nothing points at port 9): release it.
+                            drop(listener);
+                            core.emit(ServiceEvent::LogLine(format!(
+                                "KILL SWITCH: could not engage the black-hole proxy ({e}) — the stale \
+                                 proxy entry keeps blocking traffic (fail-closed)"
+                            )));
+                        }
+                    }
+                } else {
+                    // S20 (Copilot round 2): port 9 is owned by someone else
+                    // (or unbindable) — do NOT point the system proxy at
+                    // it; the stale entry keeps refusing (fail-closed).
                     core.emit(ServiceEvent::LogLine(
-                        "KILL SWITCH engaged: the tunnel died on its own — system traffic is \
-                         now BLOCKED (fail-closed) instead of leaking direct. Connect again \
-                         to resume, or toggle the kill switch off in Settings."
+                        "KILL SWITCH: could not own the black-hole port — the stale proxy entry \
+                         keeps blocking traffic (fail-closed; nothing is routed to a foreign \
+                         listener)"
                             .into(),
                     ));
                 }
-                Err(e) => {
-                    // The registry still points at OUR dead local listener
-                    // — still fail-closed, just less tidy.
-                    core.emit(ServiceEvent::LogLine(format!(
-                        "KILL SWITCH: could not engage the black-hole proxy ({e}) — the stale \
-                         proxy entry keeps blocking traffic (fail-closed)"
-                    )));
+            } else if core.sysproxy_set.swap(false, Ordering::SeqCst) {
+                if let Err(e) = crate::sysproxy::restore(&core.paths.state_dir) {
+                    tracing::warn!("system proxy restore failed: {e}");
                 }
-            }
-        } else if core.sysproxy_set.swap(false, Ordering::SeqCst) {
-            if let Err(e) = crate::sysproxy::restore(&core.paths.state_dir) {
-                tracing::warn!("system proxy restore failed: {e}");
             }
         }
     }
@@ -1497,6 +1586,31 @@ pub fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
         return None;
     }
     Some((host.to_string(), port, path))
+}
+
+/// S20 (Copilot round 2): a support-file-safe rendering of a
+/// user-configurable URL — scheme + host + port + path ONLY. Userinfo
+/// (`http://user:pass@host/`), query strings (`?token=...`) and
+/// fragments are stripped: those slots routinely carry API keys in
+/// custom probe/speed endpoints, and the diagnostics file is designed
+/// to be pasted into a chat verbatim. An unparseable URL renders as a
+/// fixed placeholder (never echoed — the raw value may embed a secret).
+fn redact_url(url: &str) -> String {
+    match parse_http_url(url) {
+        Some((host, port, path)) => {
+            // parse_http_url leaves userinfo attached to the host
+            // ("user:pass@host") — strip everything up to the last '@'.
+            let host = match host.rsplit_once('@') {
+                Some((_, h)) => h.to_string(),
+                None => host,
+            };
+            // Path only up to the query ('?' — parse_http_url keeps it in
+            // the path) and the fragment ('#').
+            let path = path.split(['?', '#']).next().unwrap_or("/").to_string();
+            format!("http://{host}:{port}{path}")
+        }
+        None => "<redacted (invalid URL)>".to_string(),
+    }
 }
 
 /// `host:port` → [`TargetAddr`] (IP literals become [`Host::Ip`]; brackets
@@ -1613,13 +1727,30 @@ impl MtService for RealService {
             // black-hole (or any proxy state we still own from a session
             // that already died) — the user asked to stop tunneling, not
             // to keep the network blocked.
-            if self.core.sysproxy_set.swap(false, Ordering::SeqCst) {
-                if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
-                    tracing::warn!("system proxy restore failed: {e}");
+            // S20 (Copilot round 2): under the proxy lock, and the
+            // ownership/listener are only released when the restore
+            // SUCCEEDED — a failed restore keeps the black-hole engaged
+            // (fail-closed) and this same path retries on the next
+            // disconnect; the "restored" log line is only truthful then.
+            {
+                let _guard = lock(&self.core.proxy_mtx);
+                if self.core.sysproxy_set.load(Ordering::SeqCst) {
+                    match crate::sysproxy::restore(&self.core.paths.state_dir) {
+                        Ok(()) => {
+                            self.core.sysproxy_set.store(false, Ordering::SeqCst);
+                            stop_blackhole(&self.core);
+                            self.core
+                                .emit(ServiceEvent::LogLine("system proxy restored".into()));
+                        }
+                        Err(e) => {
+                            tracing::warn!("system proxy restore failed: {e}");
+                            self.core.emit(ServiceEvent::LogLine(format!(
+                                "ERROR system proxy restore failed: {e} — the kill switch stays \
+                                 engaged; disconnect again to retry"
+                            )));
+                        }
+                    }
                 }
-                stop_blackhole(&self.core);
-                self.core
-                    .emit(ServiceEvent::LogLine("system proxy restored".into()));
             }
             return;
         };
@@ -1631,11 +1762,25 @@ impl MtService for RealService {
         drop(session.shutdown); // run() also exits when the sender drops
         let _ = session.run_handle.await;
         let _ = session.pump_handle.await;
-        if self.core.sysproxy_set.swap(false, Ordering::SeqCst) {
-            if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
-                tracing::warn!("system proxy restore failed: {e}");
+        // S20 (Copilot round 2): same locked, restore-first discipline as
+        // the no-session branch above.
+        {
+            let _guard = lock(&self.core.proxy_mtx);
+            if self.core.sysproxy_set.load(Ordering::SeqCst) {
+                match crate::sysproxy::restore(&self.core.paths.state_dir) {
+                    Ok(()) => {
+                        self.core.sysproxy_set.store(false, Ordering::SeqCst);
+                        stop_blackhole(&self.core);
+                    }
+                    Err(e) => {
+                        tracing::warn!("system proxy restore failed: {e}");
+                        self.core.emit(ServiceEvent::LogLine(format!(
+                            "ERROR system proxy restore failed: {e} — the kill switch stays \
+                             engaged; disconnect again to retry"
+                        )));
+                    }
+                }
             }
-            stop_blackhole(&self.core);
         }
         self.core.bytes_reset();
         self.core.set_state(ServiceState::Disconnected);
@@ -1711,13 +1856,16 @@ impl MtService for RealService {
             &settings.settings.bonded_adapters,
             &mt_platform::enumerate_adapters(),
         );
-        let mut links = self
+        let links = self
             .core
             .factory
             .build(&profile, &bonded)
             .await
             .map_err(|e| e.to_string())?;
-        let Some(link) = links.pop() else {
+        // S20 (Copilot round 2): the FIRST link is the top-priority
+        // adapter (engine_specs_for preserves the user's order) — pop()
+        // used to probe through the lowest-priority one.
+        let Some(link) = links.first().cloned() else {
             return Err("link factory produced no links".to_string());
         };
         let target = parse_probe_target(&settings.probe_target)
@@ -1814,19 +1962,22 @@ impl MtService for RealService {
         // on them AFTER the (successful) persist below.
         let diagnostics_changed = file.settings.diagnostics != settings.diagnostics;
         let kill_switch_disabled = file.settings.kill_switch && !settings.kill_switch;
+        // S20 (Copilot round 2): the engines only pick up the debug log
+        // level at SPAWN time, so enabling diagnostics while CONNECTED
+        // must reconnect — otherwise the file silently misses the engine
+        // debug output the UI promises.
+        let diag_enabled_live = !file.settings.diagnostics
+            && settings.diagnostics
+            && self.core.get_state() == ServiceState::Connected;
+        // S20: only set when the sink actually started (a failed + reverted
+        // enable must NOT trigger the live reconnect below).
+        let mut diag_started = false;
         let mut settings = settings;
         settings.bonded_adapters = file.settings.bonded_adapters.clone();
         file.settings = settings.clone();
         file.sync_legacy();
         file.save(&self.core.paths.settings_file())
             .map_err(|e| e.to_string())?;
-        if dataplane_changed && self.core.get_state() == ServiceState::Connected {
-            self.core.emit(ServiceEvent::LogLine(
-                "data-plane settings changed — reconnecting".into(),
-            ));
-            self.disconnect().await;
-            self.connect().await;
-        }
         // S19: diagnostics mode transitions (only after a successful save —
         // a rejected settings change never touches the log file).
         if diagnostics_changed {
@@ -1834,14 +1985,27 @@ impl MtService for RealService {
                 let header = self.build_diag_header(&settings);
                 match crate::diagnostics::enable(&self.core.paths.log_dir, &header) {
                     Ok(p) => {
+                        diag_started = true;
                         self.core.emit(ServiceEvent::LogLine(format!(
                             "INFO  diagnostics mode ON — writing {}",
                             p.display()
                         )));
                     }
                     Err(e) => {
+                        // S20 (Copilot round 2): the toggle must not stay
+                        // persisted-ON with no sink behind it (the UI
+                        // would show the mode enabled while nothing is
+                        // written, and a later settings save would skip
+                        // the enable because the diff vanished). Revert
+                        // the persisted flag and say so.
+                        file.settings.diagnostics = false;
+                        file.sync_legacy();
+                        if let Err(save_err) = file.save(&self.core.paths.settings_file()) {
+                            tracing::warn!("reverting the diagnostics toggle failed: {save_err}");
+                        }
                         self.core.emit(ServiceEvent::LogLine(format!(
-                            "WARN  diagnostics mode could not start: {e}"
+                            "ERROR diagnostics mode could not start: {e} — the toggle was \
+                             reverted; fix the cause and enable it again"
                         )));
                     }
                 }
@@ -1852,18 +2016,49 @@ impl MtService for RealService {
                 )));
             }
         }
+        // Reconnect when the LIVE data plane changed, or when diagnostics
+        // was enabled on a live session (S20: the engines re-read their
+        // log level only at spawn — see diag_enabled_live above). Both
+        // AFTER the diagnostics transition so connect_flow sees the new
+        // sink state.
+        if (dataplane_changed || (diag_enabled_live && diag_started))
+            && self.core.get_state() == ServiceState::Connected
+        {
+            self.core.emit(ServiceEvent::LogLine(if dataplane_changed {
+                "data-plane settings changed — reconnecting".into()
+            } else {
+                "diagnostics on — reconnecting so the engines log at debug".into()
+            }));
+            self.disconnect().await;
+            self.connect().await;
+        }
         // S19: turning the kill switch off is an explicit escape hatch for
         // an engaged black-hole (the give_up path keeps the proxy blocked
-        // while the switch stays on).
-        if kill_switch_disabled
-            && self.core.get_state() != ServiceState::Connected
-            && self.core.sysproxy_set.swap(false, Ordering::SeqCst)
-        {
-            let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
-            stop_blackhole(&self.core);
-            self.core.emit(ServiceEvent::LogLine(
-                "kill switch disabled — system proxy restored".into(),
-            ));
+        // while the switch stays on). S20 (Copilot round 2): under the
+        // proxy lock, restore-first — ownership and the listener are only
+        // released on a successful restore, so a failed escape hatch can
+        // be retried instead of stranding a black-holed proxy with no
+        // owner.
+        if kill_switch_disabled && self.core.get_state() != ServiceState::Connected {
+            let _guard = lock(&self.core.proxy_mtx);
+            if self.core.sysproxy_set.load(Ordering::SeqCst) {
+                match crate::sysproxy::restore(&self.core.paths.state_dir) {
+                    Ok(()) => {
+                        self.core.sysproxy_set.store(false, Ordering::SeqCst);
+                        stop_blackhole(&self.core);
+                        self.core.emit(ServiceEvent::LogLine(
+                            "kill switch disabled — system proxy restored".into(),
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!("system proxy restore failed: {e}");
+                        self.core.emit(ServiceEvent::LogLine(format!(
+                            "ERROR system proxy restore failed: {e} — the black hole stays \
+                             engaged; toggle the kill switch off again to retry"
+                        )));
+                    }
+                }
+            }
         }
         if autostart_changed {
             let exe = std::env::current_exe()
@@ -1946,13 +2141,10 @@ impl MtService for RealService {
         //    session, fall back to a TEMPORARY probe tunnel through the
         //    active profile — same exit identity, works while the app is
         //    disconnected, no session left behind.
-        let socks_addr = {
-            let guard = lock(&self.core.session);
-            match guard.as_ref() {
-                Some(s) => s.server.socks_local_addr(),
-                None => None,
-            }
-        };
+        //    S20 (Copilot round 2): the live listeners only count when the
+        //    session was BUILT from this profile — the active profile can
+        //    be switched without reconnecting, and the old tunnel's exit
+        //    must never be reported against the new profile's endpoint.
         let store = self.core.load_store_lossy();
         let Some(profile) = store
             .active
@@ -1961,6 +2153,13 @@ impl MtService for RealService {
             .cloned()
         else {
             return Err("no active profile — pick a server first".to_string());
+        };
+        let socks_addr = {
+            let guard = lock(&self.core.session);
+            match guard.as_ref() {
+                Some(s) if s.profile_id == profile.id => s.server.socks_local_addr(),
+                _ => None,
+            }
         };
         let settings = SettingsFile::load(&self.core.paths.settings_file());
         let url = settings.settings.exit_probe_url;
@@ -2047,17 +2246,15 @@ impl MtService for RealService {
             },
             port,
         };
-        // 2. The LIVE session only counts when it belongs to the target
-        //    (the active profile) — otherwise a temporary tunnel through
-        //    the target profile.
-        let is_active = store.active.as_deref() == Some(profile.id.as_str());
-        let live_socks = if is_active {
-            lock(&self.core.session)
-                .as_ref()
-                .and_then(|s| s.server.socks_local_addr())
-        } else {
-            None
-        };
+        // 2. The LIVE session only counts when it was BUILT from the
+        //    target profile (S20, Copilot round 2 — the active profile can
+        //    be switched without reconnecting, so matching on "is the
+        //    target the active one" is not enough); otherwise a temporary
+        //    tunnel through the target profile.
+        let live_socks = lock(&self.core.session)
+            .as_ref()
+            .filter(|s| s.profile_id == profile.id)
+            .and_then(|s| s.server.socks_local_addr());
         let via_temp = live_socks.is_none();
         let connect = async {
             Ok::<_, anyhow::Error>(if let Some(socks) = live_socks {
@@ -2122,6 +2319,17 @@ impl MtService for RealService {
                     // when the head straddled reads).
                     total += head.len() as u64 - split as u64;
                     first = false;
+                } else if head.len() > SPEED_TEST_MAX_HEAD {
+                    // S20 (Copilot round 2): still inside the head past
+                    // 64 KiB — no legitimate HTTP head is this big. Cap
+                    // INDEPENDENTLY of the payload limit: until the
+                    // terminator is found nothing counts toward `total`,
+                    // so a header-less byte flood would otherwise grow
+                    // this buffer for the whole 30 s budget.
+                    return Err(format!(
+                        "speed test: malformed response (no header end within {} KiB)",
+                        SPEED_TEST_MAX_HEAD / 1024
+                    ));
                 }
                 // Still inside the head (a slow server dribbling headers):
                 // keep buffering, nothing counts yet.
@@ -2194,7 +2402,16 @@ impl MtService for RealService {
             .port
             .trim()
             .parse::<u16>()
-            .map_err(|_| format!("port must be a number 0-65535 ({:?})", edit.port))?;
+            .map_err(|_| format!("port must be a number 1-65535 ({:?})", edit.port))?;
+        // S20 (Copilot round 2): u16::parse happily accepts 0, but a
+        // server port of 0 is meaningless (imported links reject it; the
+        // engine would only fail later at connect time).
+        if updated.port == 0 {
+            return Err(format!(
+                "port 0 is not a valid server port ({:?}) — use 1-65535",
+                edit.port
+            ));
+        }
         let identity = edit.identity.trim().to_string();
         if identity.is_empty() {
             return Err("identity (UUID/password) cannot be empty".to_string());
@@ -2220,9 +2437,38 @@ impl MtService for RealService {
         // Capability regression check: if the ORIGINAL could drive the
         // engine, the edited one must still be able to (fail loud BEFORE
         // the save; a profile that never could connect may be edited
-        // freely — its inability predates the edit).
+        // freely — its inability predates the edit). S20 (Copilot round
+        // 2): for convertible profiles the edited REALITY material gets
+        // the SAME structural validation the link parser enforces — an
+        // empty SNI, a wrong-length/non-base64url public key or an
+        // invalid short ID must not silently reach the Xray config.
         if endpoint_from_profile(&original).is_ok() {
             endpoint_from_profile(&updated).map_err(|e| e.to_string())?;
+            if let Security::Reality {
+                sni,
+                fingerprint: _,
+                public_key,
+                short_id,
+                spider_x: _,
+            } = &updated.security
+            {
+                if sni.is_empty() {
+                    return Err("sni cannot be empty (the REALITY serverName)".to_string());
+                }
+                if public_key.len() != 43 || !public_key.bytes().all(crate::vless::is_base64url) {
+                    return Err(format!(
+                        "public key must be 43 unpadded base64url characters \
+                         (a 32-byte X25519 key); got {}",
+                        public_key.len()
+                    ));
+                }
+                if short_id.len() > 16 || !short_id.bytes().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(format!(
+                        "short id must be empty or 1-16 hex characters; got {}",
+                        short_id.len()
+                    ));
+                }
+            }
         }
         if !store.update(&target, updated.clone()) {
             return Err(format!("no profile matches {id:?}"));
@@ -2325,20 +2571,24 @@ fn parse_exit_info(body: &[u8]) -> Result<ExitDoc, String> {
 /// S19: build a one-shot link for `profile` (offline probes: exit-IP,
 /// speed test). Mirrors `test_latency`'s factory use — engines spawn
 /// lazily and die with the returned Arcs. With several bonded adapters
-/// the FIRST link (the top-priority adapter) carries the probe.
+/// the FIRST link (the top-priority adapter) carries the probe — S20
+/// (Copilot round 2): `engine_specs_for` preserves the user's priority
+/// order, and `pop()` used to silently select the LAST (lowest-priority)
+/// link instead.
 async fn temp_link_for(core: &Core, profile: &Profile) -> Result<Arc<dyn Outbound>, String> {
     let settings = SettingsFile::load(&core.paths.settings_file());
     let bonded = resolve_bonded(
         &settings.settings.bonded_adapters,
         &mt_platform::enumerate_adapters(),
     );
-    let mut links = core
+    let links = core
         .factory
         .build(profile, &bonded)
         .await
         .map_err(|e| e.to_string())?;
     links
-        .pop()
+        .into_iter()
+        .next()
         .ok_or_else(|| "link factory produced no links".to_string())
 }
 
@@ -2435,7 +2685,9 @@ impl RealService {
         ));
         out.push_str(&format!(
             "probe_target={} exit_probe_url={} speed_test_url={}\n",
-            settings.probe_target, settings.exit_probe_url, settings.speed_test_url
+            settings.probe_target,
+            redact_url(&settings.exit_probe_url),
+            redact_url(&settings.speed_test_url)
         ));
         let store = self.core.load_store_lossy();
         out.push_str("=== profiles (endpoints only — ids/secrets redacted) ===\n");
@@ -3099,12 +3351,15 @@ mod tests {
         assert!(saw_restore, "the restore is announced in the GUI log");
     }
 
-    /// S19 (review fix): spawn_blackhole OWNS the port while engaged (a
+    /// S19 (review fix): the black-hole OWNERS the port while engaged (a
     /// local process cannot pre-bind it) and stop_blackhole releases it —
     /// the accept loop swallows connections (an open TCP dial to it lands
     /// and closes immediately instead of being answered by anyone else).
-    /// On hosts where binding port 9 is not permitted the spawn is a
+    /// On hosts where binding port 9 is not permitted the bind is a
     /// documented no-op fallback (dev/linux root-only port).
+    /// S20 (Copilot round 2): the bind and the engage are separate steps —
+    /// give_up binds FIRST and only points the proxy at the port once
+    /// ownership is proven.
     #[tokio::test]
     async fn blackhole_listener_owns_and_releases_the_port() {
         let exit = spawn_exit_echo("127.0.0.1").await;
@@ -3117,10 +3372,12 @@ mod tests {
                 fail: false,
             }),
         );
-        // Engage.
-        spawn_blackhole(&svc.core).await;
-        let guard_taken = svc.core.blackhole.lock().unwrap().is_some();
-        if guard_taken {
+        // Engage (bind first, then install the accept loop — the give_up
+        // order).
+        if let Some(listener) = bind_blackhole().await {
+            engage_blackhole(&svc.core, listener);
+            let guard_taken = svc.core.blackhole.lock().unwrap().is_some();
+            assert!(guard_taken, "engage records the listener");
             // The port answers to US: a connect lands (accepted + dropped).
             let dial = tokio::net::TcpStream::connect("127.0.0.1:9").await;
             assert!(dial.is_ok(), "our own listener owns the port");
@@ -3135,6 +3392,393 @@ mod tests {
             let refused = tokio::net::TcpStream::connect("127.0.0.1:9").await;
             assert!(refused.is_err(), "fallback keeps the port dead");
         }
+    }
+
+    /// S20 (Copilot round 2, high finding): the connect step-0 self-heal
+    /// must CLEAR `sysproxy_set` together with the restore — after a
+    /// kill-switch give-up + reconnect, a stale-true flag made a later
+    /// no-session disconnect "restore" with no snapshot (which DISABLES
+    /// the user's pre-existing proxy instead of leaving it untouched).
+    #[tokio::test]
+    async fn connect_selfheal_clears_stale_proxy_ownership() {
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("selfheal");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("active");
+        // Simulate the post-give-up state: ownership armed, no session.
+        svc.core.sysproxy_set.store(true, Ordering::SeqCst);
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+        assert!(
+            !svc.core.sysproxy_set.load(Ordering::SeqCst),
+            "the step-0 self-heal consumed the snapshot — ownership MUST clear"
+        );
+        svc.disconnect().await;
+        assert!(!svc.core.sysproxy_set.load(Ordering::SeqCst));
+    }
+
+    /// S20 (Copilot round 2, medium findings): the edit dialog must reject
+    /// port 0 and REALITY material the link parser would refuse — an empty
+    /// SNI, a wrong-length/non-base64url public key or an invalid short ID
+    /// must not silently reach the Xray config.
+    #[tokio::test]
+    async fn update_profile_rejects_port_zero_and_invalid_reality() {
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("editreality");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("active");
+
+        // Port 0 parses as u16 but is not a server port.
+        let mut d = svc.profile_details(&view.id).await.expect("details");
+        d.port = "0".into();
+        let err = svc.update_profile(&view.id, d).await.unwrap_err();
+        assert!(err.contains("port 0"), "{err}");
+        // Empty SNI.
+        let mut d = svc.profile_details(&view.id).await.expect("details");
+        d.sni = "   ".into();
+        let err = svc.update_profile(&view.id, d).await.unwrap_err();
+        assert!(err.contains("sni"), "{err}");
+        // Wrong-length public key.
+        let mut d = svc.profile_details(&view.id).await.expect("details");
+        d.public_key = "short".into();
+        let err = svc.update_profile(&view.id, d).await.unwrap_err();
+        assert!(err.contains("public key"), "{err}");
+        // Non-hex short id.
+        let mut d = svc.profile_details(&view.id).await.expect("details");
+        d.short_id = "zzzz".into();
+        let err = svc.update_profile(&view.id, d).await.unwrap_err();
+        assert!(err.contains("short id"), "{err}");
+        // A fully valid edit still saves; an EMPTY short id is legal
+        // (the parser allows `sid=` empty).
+        let mut d = svc.profile_details(&view.id).await.expect("details");
+        d.short_id = "".into();
+        d.tag = "still fine".into();
+        let updated = svc.update_profile(&view.id, d).await.expect("valid edit");
+        assert_eq!(updated.tag, "still fine");
+        // Nothing from the rejected edits leaked into the store.
+        let store = svc.core.load_store().expect("reload");
+        assert_eq!(store.profiles[0].tag, "still fine");
+        assert_eq!(store.profiles[0].port, 443);
+    }
+
+    /// S20 (Copilot round 2, high finding): user-configurable URLs carry
+    /// credentials in userinfo/query — the diagnostics header must render
+    /// host:port:path only (the file is pasted into chats verbatim).
+    #[tokio::test]
+    async fn diag_header_redacts_url_credentials() {
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("diagredact");
+        write_settings(&paths, exit.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let mut s = svc.settings().await;
+        s.exit_probe_url = "http://user:hunter2@probe.example.com:8080/path?token=T0PS3CRET".into();
+        s.speed_test_url = "http://speed.example.com/down?key=abc123#frag".into();
+        let header = svc.build_diag_header(&s);
+        assert!(header.contains("probe.example.com:8080/path"), "{header}");
+        assert!(header.contains("speed.example.com:80/down"), "{header}");
+        for secret in ["hunter2", "user:", "T0PS3CRET", "abc123", "#frag"] {
+            assert!(!header.contains(secret), "leaked {secret:?} in:\n{header}");
+        }
+        // Unparseable URLs never echo the raw value.
+        s.exit_probe_url = "not a url at all".into();
+        let header = svc.build_diag_header(&s);
+        assert!(header.contains("<redacted (invalid URL)>"), "{header}");
+        assert!(!header.contains("not a url"), "{header}");
+    }
+
+    /// S20 (Copilot round 2, medium finding): until `\r\n\r\n` is found
+    /// nothing counts toward the 64 MiB payload cap — an endpoint flooding
+    /// header-less bytes must hit the independent 64 KiB head cap fast
+    /// instead of growing the buffer for the whole 30 s budget.
+    #[tokio::test]
+    async fn speed_test_rejects_a_header_flood() {
+        // A server that answers with 256 KiB of header-less bytes and then
+        // holds the connection open.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind flood");
+        let flood = listener.local_addr().expect("flood addr");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                    let mut buf = vec![0u8; 1024];
+                    let _ = stream.read(&mut buf).await; // drain the request
+                    let flood = vec![b'x'; 256 * 1024];
+                    let _ = stream.write_all(&flood).await;
+                    // Keep the connection open (no EOF, no \r\n\r\n).
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                    }
+                });
+            }
+        });
+        let paths = scratch("flood");
+        write_settings(&paths, flood.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.speed_test_url = format!("http://127.0.0.1:{}/down", flood.port());
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: flood,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("active");
+        let started = Instant::now();
+        let err = svc.speed_test(None).await.unwrap_err();
+        assert!(err.contains("malformed response"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the head cap must fire long before the 30 s budget"
+        );
+    }
+
+    /// S20 (Copilot round 2, medium finding): the exit probe and speed test
+    /// may only ride the LIVE listeners when the session was built from the
+    /// target profile — switching the active profile without reconnecting
+    /// must fall back to the temporary tunnel (not report the old tunnel's
+    /// exit against the new profile's endpoint).
+    #[tokio::test]
+    async fn probes_fall_back_when_active_profile_switched() {
+        let exit = spawn_exit_echo("198.51.100.7").await;
+        let echo = spawn_echo().await;
+        let paths = scratch("switched");
+        // Probe target = echo (so connect() succeeds); exit URL = exit echo.
+        write_settings(&paths, echo.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.exit_probe_url = format!("http://127.0.0.1:{}/json", exit.port());
+        file.settings.speed_test_url = format!("http://127.0.0.1:{}/down", exit.port());
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let a = svc.import_link(VLESS_REALITY).await.expect("import A");
+        let b = svc
+            .import_link(
+                &VLESS_REALITY
+                    .replace("203.0.113.10", "203.0.113.11")
+                    .replace("synthetic-reality", "second-server"),
+            )
+            .await
+            .expect("import B");
+        svc.set_active_profile(&a.tag).await.expect("active A");
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+        // Matching session → the probe rides the live listeners.
+        let live = svc.exit_probe().await.expect("live probe");
+        assert!(!live.via_temp_tunnel, "session matches the active profile");
+        // Switch the active profile WITHOUT reconnecting → both probes
+        // must report the temporary-tunnel path.
+        svc.set_active_profile(&b.tag).await.expect("active B");
+        let temp = svc.exit_probe().await.expect("temp probe");
+        assert!(
+            temp.via_temp_tunnel,
+            "stale session must not pose as B's tunnel"
+        );
+        let speed = svc
+            .speed_test(Some(b.id.clone()))
+            .await
+            .expect("temp speed");
+        assert!(speed.via_temp_tunnel, "speed test ditto");
+        // And an explicit target that DOES match the session still rides it.
+        let live_speed = svc
+            .speed_test(Some(a.id.clone()))
+            .await
+            .expect("live speed");
+        assert!(!live_speed.via_temp_tunnel);
+        svc.disconnect().await;
+    }
+
+    /// S20 (Copilot round 2, medium finding): `engine_specs_for` preserves
+    /// the user's bonded-adapter priority order — the one-shot probe link
+    /// must be the FIRST (top-priority), not whatever `pop()` produced.
+    #[tokio::test]
+    async fn temp_link_uses_the_top_priority_first_link() {
+        let first_exit = spawn_exit_echo("203.0.113.7").await;
+        let second_exit = spawn_exit_echo("203.0.113.9").await;
+        let paths = scratch("templink");
+        write_settings(&paths, first_exit.port(), false);
+        struct TwoLinkFactory {
+            first: SocketAddr,
+            second: SocketAddr,
+        }
+        #[async_trait::async_trait]
+        impl LinkFactory for TwoLinkFactory {
+            async fn build(
+                &self,
+                _profile: &Profile,
+                _bonded: &[BondedAdapter],
+            ) -> anyhow::Result<Vec<Arc<dyn Outbound>>> {
+                Ok(vec![
+                    Arc::new(FakeLinkNamed {
+                        name: "first [Wi-Fi]".into(),
+                        echo: self.first,
+                    }) as Arc<dyn Outbound>,
+                    Arc::new(FakeLinkNamed {
+                        name: "second [LTE]".into(),
+                        echo: self.second,
+                    }),
+                ])
+            }
+        }
+        let svc = RealService::with(
+            paths,
+            Arc::new(TwoLinkFactory {
+                first: first_exit,
+                second: second_exit,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        let store = svc.core.load_store().expect("store");
+        let profile = store
+            .profiles
+            .iter()
+            .find(|p| p.id == view.id)
+            .cloned()
+            .expect("profile");
+        let link = temp_link_for(&svc.core, &profile)
+            .await
+            .expect("one-shot link");
+        assert_eq!(
+            link.name(),
+            "first [Wi-Fi]",
+            "the FIRST link carries the probe"
+        );
+        // Prove it end-to-end: the chosen link dials the FIRST exit echo.
+        let target = TargetAddr {
+            host: Host::Domain("irrelevant.example".into()),
+            port: 80,
+        };
+        let mut stream = link.connect(&target).await.expect("connect");
+        let body = http_get(&mut stream, "irrelevant.example", "/", EXIT_PROBE_MAX_BYTES)
+            .await
+            .expect("http get");
+        let exit = parse_exit_info(&body).expect("identity");
+        assert_eq!(exit.exit_ip, "203.0.113.7", "rode the top-priority link");
+    }
+
+    /// S20 (Copilot round 2, medium finding): a failed `diagnostics::enable`
+    /// (e.g. the log dir is unwritable) must REVERT the persisted toggle —
+    /// the UI must never show the mode enabled with no file being written
+    /// and no retry path.
+    #[tokio::test]
+    async fn diagnostics_enable_failure_reverts_the_toggle() {
+        let _guard = crate::diagnostics::TEST_LOCK.lock().await;
+        let _ = crate::diagnostics::disable();
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let paths = scratch("diagfail");
+        write_settings(&paths, exit.port(), false);
+        // Make the log dir unusable: a FILE where the dir should be.
+        std::fs::create_dir_all(&paths.config_dir).expect("base");
+        std::fs::write(&paths.log_dir, b"not a directory").expect("block log dir");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let mut events = svc.events();
+        let mut s = svc.settings().await;
+        s.diagnostics = true;
+        svc.set_settings(s).await.expect("settings still save");
+        // The persisted toggle is back OFF.
+        let reloaded = SettingsFile::load(&svc.core.paths.settings_file());
+        assert!(!reloaded.settings.diagnostics, "toggle reverted on failure");
+        assert!(svc.diagnostics_path().await.is_none());
+        let mut saw_revert = false;
+        while let Ok(ev) = events.try_recv() {
+            if let ServiceEvent::LogLine(l) = ev {
+                if l.contains("could not start") && l.contains("reverted") {
+                    saw_revert = true;
+                }
+            }
+        }
+        assert!(
+            saw_revert,
+            "the failure + revert is announced in the GUI log"
+        );
+    }
+
+    /// S20 (Copilot round 2, medium finding): engines only read the debug
+    /// log level at SPAWN time — enabling diagnostics on a LIVE session
+    /// must reconnect, or the file silently misses the engine debug output
+    /// the UI promises.
+    #[tokio::test]
+    async fn diagnostics_enable_while_connected_reconnects() {
+        let _guard = crate::diagnostics::TEST_LOCK.lock().await;
+        let _ = crate::diagnostics::disable();
+        let exit = spawn_exit_echo("127.0.0.1").await;
+        let echo = spawn_echo().await;
+        let paths = scratch("diaglive");
+        write_settings(&paths, echo.port(), false);
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: exit,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("active");
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+        let restarts_before = svc.core.restarts.load(Ordering::SeqCst);
+
+        let mut s = svc.settings().await;
+        s.diagnostics = true;
+        svc.set_settings(s).await.expect("enable diagnostics");
+
+        // The session was rebuilt at debug level.
+        assert_eq!(
+            svc.status().await.state,
+            ServiceState::Connected,
+            "the reconnect restores the session"
+        );
+        assert!(
+            svc.core.restarts.load(Ordering::SeqCst) > restarts_before,
+            "the live session reconnected"
+        );
+        let level = wlock(&svc.core.engine_log_level).clone();
+        assert_eq!(level.as_deref(), Some("debug"));
+        assert!(svc.diagnostics_path().await.is_some());
+        svc.disconnect().await;
+        let mut s = svc.settings().await;
+        s.diagnostics = false;
+        svc.set_settings(s).await.expect("disable diagnostics");
+        assert!(svc.diagnostics_path().await.is_none());
     }
 
     #[tokio::test]
