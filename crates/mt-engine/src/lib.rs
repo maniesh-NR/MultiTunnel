@@ -47,7 +47,7 @@ use serde_json::json;
 
 pub mod engine;
 
-pub use engine::{EngineCommand, EngineError, EnginePolicy, ManagedEngine};
+pub use engine::{engine_file_stem, EngineCommand, EngineError, EnginePolicy, ManagedEngine};
 
 /// A VLESS+REALITY server endpoint (mirror of the root `config::Server`
 /// semantics; field names are the engine's own).

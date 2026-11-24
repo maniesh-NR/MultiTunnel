@@ -141,7 +141,10 @@ pub const DEFAULT_PROBE_TARGET: &str = "connectivitycheck.gstatic.com:80";
 /// download; the engine downloads only via `locator.ensure()`).
 const CONNECT_PROBE_BUDGET: Duration = Duration::from_secs(15);
 /// How long `connect` waits for the server listeners to bind.
-const BIND_WAIT: Duration = Duration::from_secs(2);
+const BIND_WAIT: Duration = Duration::from_secs(8);
+// S21: BIND_WAIT covers the server's own bind-retry budget
+// (mt-net BIND_RETRY_BUDGET, 5 s) plus polling margin — a reconnect that
+// races lingering-socket teardown waits, it does not fail.
 /// Bind-wait poll slice.
 const BIND_POLL: Duration = Duration::from_millis(10);
 /// `ServiceEvent` broadcast buffer (slow GUI receivers lag, never block).
@@ -789,6 +792,12 @@ struct Core {
     /// already restored the user's proxy. Std lock, never held across an
     /// await (the black-hole BIND is hoisted out, see `give_up`).
     proxy_mtx: Mutex<()>,
+    /// S21 P0 fix (H3): serializes every profiles.json read-modify-write
+    /// (import/remove/set_active/update). The GUI runs iced message tasks
+    /// concurrently and the CLI can race the GUI process; without this
+    /// lock two interleaved load→mutate→save cycles could lose an update
+    /// (or collide on the shared per-PID temp name).
+    store_mtx: Mutex<()>,
     /// S19 (review fix): the kill switch's black-hole listener — while
     /// engaged we OWN [`KILL_SWITCH_BLACKHOLE_PORT`] so a local process
     /// cannot pre-bind it and turn the black hole into its own proxy.
@@ -888,6 +897,7 @@ impl RealService {
                 bytes: Mutex::new(HashMap::new()),
                 sysproxy_set: AtomicBool::new(false),
                 proxy_mtx: Mutex::new(()),
+                store_mtx: Mutex::new(()),
                 blackhole: Mutex::new(None),
                 disconnect_requested: AtomicBool::new(false),
                 restarts: AtomicU32::new(0),
@@ -1805,9 +1815,14 @@ impl MtService for RealService {
 
     async fn import_link(&self, link: &str) -> Result<ProfileView, String> {
         let profile = parse_share_link(link).map_err(|e| e.to_string())?;
+        // S21 P0 fix (H3): the load→upsert→save cycle is serialized with
+        // the other store mutations (lock never held across an await —
+        // the whole section below is synchronous filesystem work).
+        let _store_guard = lock(&self.core.store_mtx);
         let mut store = self.core.load_store().map_err(|e| e.to_string())?;
         let id = store.upsert(profile.clone());
         self.core.save_store(&store).map_err(|e| e.to_string())?;
+        drop(_store_guard);
         Ok(ProfileView {
             active: store.active.as_deref() == Some(id.as_str()),
             id,
@@ -1819,6 +1834,7 @@ impl MtService for RealService {
     }
 
     async fn remove_profile(&self, id: &str) -> Result<(), String> {
+        let _store_guard = lock(&self.core.store_mtx); // S21 H3 serialization
         let mut store = self.core.load_store().map_err(|e| e.to_string())?;
         let target = find_profile(&store, id)
             .ok_or_else(|| format!("no profile matches {id:?}"))?
@@ -1833,6 +1849,7 @@ impl MtService for RealService {
     }
 
     async fn set_active_profile(&self, id: &str) -> Result<(), String> {
+        let _store_guard = lock(&self.core.store_mtx); // S21 H3 serialization
         let mut store = self.core.load_store().map_err(|e| e.to_string())?;
         let target = find_profile(&store, id)
             .ok_or_else(|| format!("no profile matches {id:?}"))?
@@ -2373,6 +2390,7 @@ impl MtService for RealService {
     }
 
     async fn update_profile(&self, id: &str, edit: ProfileDetails) -> Result<ProfileView, String> {
+        let _store_guard = lock(&self.core.store_mtx); // S21 H3 serialization
         let mut store = self.core.load_store().map_err(|e| e.to_string())?;
         let target = find_profile(&store, id)
             .ok_or_else(|| format!("no profile matches {id:?}"))?
@@ -3913,6 +3931,101 @@ mod tests {
         let snap = svc.status().await;
         assert_eq!(snap.state, ServiceState::Disconnected);
         assert_eq!(svc.session_addrs(), (None, None));
+    }
+
+    /// S21 P0 regression (user report: "it stops working when a second
+    /// connection is added — the application must be restarted").
+    ///
+    /// Repro: connect, hold ONE live client connection open (a browser
+    /// keep-alive through the proxy), then run the exact Status-picker
+    /// switch sequence (import second profile → set_active_profile →
+    /// disconnect → connect, as `StatusServerPicked` does).
+    ///
+    /// Platform note: on WINDOWS the lingering connection's socket pins the
+    /// 10808 local endpoint and the re-bind fails `WSAEADDRINUSE`, landing
+    /// `Failed` — dead tunnel until restart (Linux tolerates a listen re-
+    /// bind over non-listening sockets, which is why this sandbox alone
+    /// cannot reproduce the bind refusal). The platform-independent
+    /// observable of the SAME defect is asserted here: the lingering
+    /// client connection MUST be force-closed at the end of the drain
+    /// grace (EOF on the client end). Pre-fix the connection task was
+    /// never aborted and the client socket stayed ESTABLISHED forever.
+    #[tokio::test]
+    async fn picker_switch_with_lingering_client_reconnects() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let echo = spawn_echo().await;
+        let paths = scratch("picker-switch");
+        write_settings(&paths, echo.port(), false);
+        let svc = RealService::with(paths, Arc::new(FakeFactory { echo, fail: false }));
+
+        let a = svc.import_link(VLESS_REALITY).await.expect("import A");
+        svc.set_active_profile(&a.tag).await.expect("activate A");
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+
+        // The "browser": one long-lived connection through the proxy, held
+        // OPEN across the whole switch (keep-alive; we never close it).
+        // A reader parks on it and reports when the connection ENDS.
+        let target = TargetAddr {
+            host: Host::Domain("idle.example".to_string()),
+            port: echo.port(),
+        };
+        let (socks, _) = svc.session_addrs();
+        let held_client = Socks5Outbound::new(socks.expect("socks bound"));
+        let held = held_client
+            .connect(&target)
+            .await
+            .expect("open held connection");
+        let (eof_tx, eof_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let mut s = held;
+            let mut buf = [0u8; 64];
+            loop {
+                match s.read(&mut buf).await {
+                    Ok(0) | Err(_) => {
+                        let _ = eof_tx.send(());
+                        break;
+                    }
+                    Ok(_) => continue,
+                }
+            }
+        });
+
+        // The user adds a SECOND server (same #fragment tag — also the H2
+        // shape) and picks it in the Status picker while connected.
+        let b_link = VLESS_REALITY.replace("@203.0.113.10:", "@203.0.113.11:");
+        let b = svc.import_link(&b_link).await.expect("import B");
+        assert_ne!(a.id, b.id, "two distinct profiles exist");
+        svc.set_active_profile(&b.tag).await.expect("activate B");
+        svc.disconnect().await;
+        svc.connect().await;
+
+        let snap = svc.status().await;
+        assert_eq!(
+            snap.state,
+            ServiceState::Connected,
+            "reconnect with a lingering client connection must succeed (P0 fix)"
+        );
+
+        // The P0 mechanism observable: the lingering connection was
+        // force-closed when the drain grace expired (the client sees EOF).
+        // Pre-fix nothing ever aborted the connection task and this read
+        // stayed pending forever.
+        let closed = tokio::time::timeout(Duration::from_secs(5), eof_rx).await;
+        assert!(
+            matches!(closed, Ok(Ok(()))),
+            "lingering client connection must be force-closed at the end of the drain grace"
+        );
+
+        // And the data plane serves NEW connections again.
+        let (socks, _) = svc.session_addrs();
+        let client = Socks5Outbound::new(socks.expect("socks re-bound"));
+        let mut stream = client.connect(&target).await.expect("new socks connect");
+        stream.write_all(b"ping").await.expect("write");
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).await.expect("echo read");
+        assert_eq!(&buf, b"ping");
     }
 
     #[tokio::test]

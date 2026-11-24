@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "4923566 2026-11-22T04:05:27Z",
+  "as_of": "c0d8f15 2026-11-22T04:16:12Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 279,
-  "edge_count": 286,
+  "node_count": 281,
+  "edge_count": 287,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -211,6 +211,26 @@
       "passages": [
         {
           "text": "backup(s5-open): 2026-11-16T14:20:11Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:0bdfaf4",
+      "type": "commit",
+      "title": "s20 close: LEDGER + Playbook (S20 CLOSED — Copilot review completed, v0.13.1 shipped), transcript archive",
+      "tags": [
+        "2026-11-22"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "0bdfaf4"
+        }
+      ],
+      "passages": [
+        {
+          "text": "s20 close: LEDGER + Playbook (S20 CLOSED — Copilot review completed, v0.13.1 shipped), transcript archive",
           "kind": "title"
         }
       ]
@@ -1671,6 +1691,26 @@
       "passages": [
         {
           "text": "backup(protocol-init): 2026-11-19T15:43:44Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:c0d8f15",
+      "type": "commit",
+      "title": "backup(s20-close-v0.13.1): 2026-11-22T04:16:12Z [no changes]",
+      "tags": [
+        "2026-11-22"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "c0d8f15"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s20-close-v0.13.1): 2026-11-22T04:16:12Z [no changes]",
           "kind": "title"
         }
       ]
@@ -8442,6 +8482,12 @@
       "dst": "ledger:s8",
       "rel": "part_of",
       "evidence": "subject stage label (s8)"
+    },
+    {
+      "src": "commit:c0d8f15",
+      "dst": "ledger:s20",
+      "rel": "part_of",
+      "evidence": "subject stage label (s20)"
     },
     {
       "src": "commit:c2a46a8",

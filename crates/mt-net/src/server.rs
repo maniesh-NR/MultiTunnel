@@ -90,6 +90,18 @@ const DEFAULT_PROBE_TARGET: TargetAddr = TargetAddr {
 const EVENT_BUFFER: usize = 1024;
 const PUMP_BUF: usize = 16 * 1024;
 const ACCEPT_RETRY: Duration = Duration::from_millis(50);
+/// How long `run` retries a listener bind before giving up (S21 P0 fix).
+/// A mid-traffic reconnect can race the kernel tearing down the aborted
+/// in-flight connections' sockets; a brief retry absorbs that window.
+/// Genuine conflicts (a foreign process owns the port) still fail, just
+/// ~5 s later instead of instantly.
+pub const BIND_RETRY_BUDGET: Duration = Duration::from_secs(5);
+/// Delay between bind retries.
+const BIND_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+/// Prune dead abort handles from the tracking list when it grows past
+/// this many entries (each completed connection leaves a harmless no-op
+/// handle behind — abort on a finished task does nothing).
+const CONN_TRACK_PRUNE: usize = 4096;
 /// How long [`graceful_close`] drains the peer's in-flight bytes before
 /// the final close (Windows RST prevention — see its docs).
 const ERROR_CLOSE_DRAIN: Duration = Duration::from_millis(250);
@@ -130,6 +142,16 @@ struct Shared {
     idle: Notify,
     socks_local: OnceLock<SocketAddr>,
     http_local: OnceLock<SocketAddr>,
+    /// S21 P0 fix: abort handles for every in-flight connection task.
+    /// Historically these tasks were untracked, so a shutdown drained for
+    /// [`DRAIN_GRACE`] and then RETURNED WITH LIVE CONNECTIONS — each one
+    /// still holding a local endpoint of the listener ports (e.g.
+    /// 127.0.0.1:10808). The next `run` could then no longer re-bind those
+    /// ports (no SO_REUSEADDR anywhere): every reconnect after adding a
+    /// second profile landed `Failed` and the tunnel was dead until the
+    /// whole app restarted. Tracked handles let the shutdown path FORCE-
+    /// close whatever the grace period could not drain.
+    conns: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
 impl Default for Shared {
@@ -141,6 +163,7 @@ impl Default for Shared {
             idle: Notify::new(),
             socks_local: OnceLock::new(),
             http_local: OnceLock::new(),
+            conns: std::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -238,10 +261,10 @@ impl ProxyServer {
     /// immediately and drain in-flight connections briefly. Bind failures
     /// are the only `Err` path (e.g. port already in use).
     pub async fn run(self: Arc<Self>, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
-        let socks_listener = TcpListener::bind(self.socks_addr)
+        let socks_listener = Self::bind_with_retry(self.socks_addr)
             .await
             .with_context(|| format!("bind socks listener {}", self.socks_addr))?;
-        let http_listener = TcpListener::bind(self.http_addr)
+        let http_listener = Self::bind_with_retry(self.http_addr)
             .await
             .with_context(|| format!("bind http listener {}", self.http_addr))?;
         let socks_local = socks_listener.local_addr()?;
@@ -299,10 +322,75 @@ impl ProxyServer {
             active = self.shared.active.load(Ordering::SeqCst),
             "shutdown: listeners closed; draining connections"
         );
-        let _ = timeout(DRAIN_GRACE, self.wait_idle()).await;
+        let drained = timeout(DRAIN_GRACE, self.wait_idle()).await.is_ok();
+        if !drained {
+            // S21 P0 fix: force-close whatever the grace period could not
+            // drain. Every lingering task pins its accepted socket — whose
+            // LOCAL endpoint sits on a listener port — and would keep the
+            // next `run` from re-binding ("tunnel dies until restart").
+            // Aborting drops the sockets (RST/FIN at the kernel); the bind
+            // retry below covers the microscopic teardown race.
+            let forced = self.abort_lingering_conns();
+            tracing::info!(
+                forced,
+                "shutdown: drain grace expired — force-closed lingering connections"
+            );
+        }
         tracing::info!("mt-net proxy server stopped");
         self.emit(ProxyEvent::Stopped);
         Ok(())
+    }
+
+    /// Abort every tracked in-flight connection task; returns how many
+    /// were still running (aborting a finished task is a documented
+    /// no-op). Completed connections leave dead handles behind; the
+    /// push-side pruning keeps the list bounded.
+    fn abort_lingering_conns(&self) -> usize {
+        let mut conns = self.shared.conns.lock().unwrap_or_else(|p| p.into_inner());
+        let mut forced = 0;
+        conns.retain(|h| {
+            if h.is_finished() {
+                false
+            } else {
+                h.abort();
+                forced += 1;
+                false
+            }
+        });
+        forced
+    }
+
+    /// Register a freshly spawned connection task for shutdown tracking.
+    fn track_conn(&self, handle: &tokio::task::JoinHandle<()>) {
+        let mut conns = self.shared.conns.lock().unwrap_or_else(|p| p.into_inner());
+        if conns.len() >= CONN_TRACK_PRUNE {
+            conns.retain(|h| !h.is_finished());
+        }
+        conns.push(handle.abort_handle());
+    }
+
+    /// Bind a listener, retrying briefly on failure (S21 P0 fix — see
+    /// [`BIND_RETRY_BUDGET`]).
+    async fn bind_with_retry(addr: SocketAddr) -> std::io::Result<TcpListener> {
+        let deadline = tokio::time::Instant::now() + BIND_RETRY_BUDGET;
+        let mut attempt = 0u32;
+        loop {
+            match TcpListener::bind(addr).await {
+                Ok(l) => {
+                    if attempt > 0 {
+                        tracing::info!(%addr, attempts = attempt + 1,
+                            "listener bound after retries (lingering sockets drained)");
+                    }
+                    return Ok(l);
+                }
+                Err(e) if tokio::time::Instant::now() < deadline => {
+                    attempt += 1;
+                    tracing::debug!(%addr, attempt, "bind retrying after {e}");
+                    tokio::time::sleep(BIND_RETRY_INTERVAL).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     async fn wait_idle(&self) {
@@ -539,7 +627,15 @@ impl ProxyServer {
             Arc::clone(&self.shared.down_total),
             link_counter,
         ));
+        // S21 P0 fix: the pumps are DETACHED children of this task — if a
+        // shutdown force-close aborts THIS task, dropping their JoinHandles
+        // would leave them running and keep the socket halves (and the
+        // listener-port local endpoint) open forever. Abort them when this
+        // future dies, whichever way it dies (drop of the guard runs on the
+        // normal path too — aborting a finished task is a no-op).
+        let pumps_guard = AbortPumpsOnDrop(vec![pump_up.abort_handle(), pump_down.abort_handle()]);
         let (ra, rb) = join_pumps(pump_up, pump_down).await;
+        drop(pumps_guard);
         for r in [&ra, &rb] {
             if let Err(e) = r {
                 tracing::trace!(target = %target, link, "tunnel half ended: {e}");
@@ -601,6 +697,18 @@ fn bump(conn: &AtomicU64, global: &AtomicU64, per_link: Option<&AtomicU64>, n: u
     }
 }
 
+/// S21 P0 fix: abort the tunnel's pump tasks when the owning connection
+/// task dies (see the `pumps_guard` in [`ProxyServer::tunnel`]).
+struct AbortPumpsOnDrop(Vec<tokio::task::AbortHandle>);
+
+impl Drop for AbortPumpsOnDrop {
+    fn drop(&mut self) {
+        for h in &self.0 {
+            h.abort();
+        }
+    }
+}
+
 /// Await both pumps: when the first one finishes with an ERROR, abort the
 /// other; a clean first finish keeps the other relaying until its own EOF.
 async fn join_pumps(
@@ -632,7 +740,7 @@ async fn accept_loop(server: Arc<ProxyServer>, listener: TcpListener, kind: Inbo
                 let _ = stream.set_nodelay(true); // interactive proxy traffic
                 server.shared.active.fetch_add(1, Ordering::SeqCst);
                 let s2 = Arc::clone(&server);
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     match kind {
                         InboundKind::Socks => s2.handle_socks(stream, peer).await,
                         InboundKind::Http => s2.handle_http(stream, peer).await,
@@ -641,6 +749,9 @@ async fn accept_loop(server: Arc<ProxyServer>, listener: TcpListener, kind: Inbo
                         s2.shared.idle.notify_waiters();
                     }
                 });
+                // S21 P0 fix: track the task so a later shutdown can force-
+                // close it (its socket holds a listener-port local endpoint).
+                server.track_conn(&handle);
             }
             Err(e) => {
                 // Never unwrap-panic a listener (fail-open): log, breathe,

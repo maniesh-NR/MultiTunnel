@@ -238,6 +238,478 @@ Every change closes only after ALL of these (CI runs them too):
 ## Recent Progress & Git Activity
 
 ```diff
+### Commit: 0bdfaf4 - s20 close: LEDGER + Playbook (S20 CLOSED — Copilot review completed, v0.13.1 shipped), transcript archive (Z User, 2026-11-22)
+diff --git a/harness/memory/LEDGER.md b/harness/memory/LEDGER.md
+index ee6160f..62d858e 100755
+--- a/harness/memory/LEDGER.md
++++ b/harness/memory/LEDGER.md
+@@ -216,3 +216,5 @@
+ 2026-11-21T08:30Z | s18 | OPS: the ci run on the s18 commit (44879546922) — lint/cross-check/test(ubuntu) all green; the windows test leg sat 69 min inside cargo test with no live logs fetchable mid-run → CANCELLED per the S11/S17 ops protocol. Verdict: 100%-cold rust-cache, not a wedge — the s18 commit changed Cargo.lock (version bumps + windows-sys feature), no windows job with that lock had ever completed, so Swatinem/rust-cache had nothing to restore and the leg compiled ~450 crates from zero (the exact S17 attempt-1 signature, cancelled at 68 min). Same-commit green proof on a REAL windows-latest runner exists: release run 44879546925's build-windows leg ran fmt + clippy + cargo test + packaging and PASSED (its zip is the verified v0.12.0 artifact). No rerun: the next ci.yml run would face the same cold cache (the release workflow's cache is keyed to a different workflow file); the S13 precedent (slow-cold cancelled, green proof elsewhere, no rerun) applies. The NEXT stage's ci will find the cache the release job saved for ITS key only — expect one more cold windows leg on the next Cargo.lock change.
+ 2026-11-21T14:20Z | s19 | IMPLEMENTED (six asks, v0.13.0): (1) server editing — Servers per-card Edit → full-window modal (S16 overlay discipline; dim backdrop cancels), mt-service ProfileDetails round-trip, ProfileStore::update by id (id/position/active preserved, no dedupe on explicit edit), primitive + capability-regression validation (a never-convertible profile edits freely); (2) exit-IP while OFFLINE — temp_link_for() one-shot factory link through the active profile, ExitInfo.via_temp_tunnel chip; (3) speed test — live session for the active profile else temp tunnel, settings.speed_test_url (cloudflare __down 25MB default, plain-HTTP verified), clock starts after connect, 5s stall/30s budget/64MiB caps, ≥400 rejected, SpeedTestInfo chips; (4) diagnostics mode — src/diagnostics.rs redacted paste-ready file (header + LogLine tee + hand-rolled global tracing subscriber, no tracing-subscriber dep, engine level forced debug, redaction test-pinned), Settings card + Open log folder; (5) kill switch — give_up() fail-closed at 127.0.0.1:9, review fix: app BINDS the port while engaged (spawn_blackhole swallows connections; dead-port fallback documented), stop_blackhole on every restore path (both disconnect branches, toggle-off, connect step-0), explicit disconnect restores with no session, Status "KILL SWITCH ACTIVE" banner (Failed+armed, pure gate tested); (6) code review — Copilot unavailable (no entitlement → reviewer silently dropped; models.github.ai proxy-intercepted "OK"), 3-round discussion-based review on the strongest reachable model instead, 4 valid findings fixed (port pre-bind ownership, banner, edit-failure logging, chained diag-path refresh), 7 assessed non-issues documented (transcript /tmp/s19-review-transcript.md, copied to harness/memory/agent-reports/s19-review-transcript.md); review PR #1 (base v0.12-line) left open for an entitled-machine Copilot pass. 466/0 (+19); gates fmt/clippy host+windows-gnu; iced 6/0; smoke 0; rig sf=1.0+1.5 (52.0 Mbps chips, offline exit-IP chip, modal fields, rename→save, Cancel+backdrop, kill-switch + diagnostics toggles, banner gate unit-tested); PE32+ ×4 (multitunnel 19.2MB, mt-app 14.9MB, tray 10.1MB, merge-server 2.4MB) + ELF ×2. LESSONS: z-ai CLI --thinking broken; window is 1080x720 (clicks beyond x=1080 miss); locate-then-click per scroll position; ENOSPC — stage binaries before wiping target trees.
+ 2026-11-21T15:10Z | s19 | RELEASED v0.13.0 (tag run 44910934439 SUCCESS ~7 min; assets verified by download+unzip: multitunnel-v0.13.0-windows-x64.zip 6,506,263 B, 11-entry manifest integrity OK, README/QUICKSTART/server scripts carried; mt-merge-server x86_64 1,826,272 B + aarch64 1,860,808 B; zip staged in sandbox download/v0.13.0-staging/). CI SAGA: the push leg failed on mt-bond carrier_death (documented runner flake, 4th occurrence) → rerun wedged 54 min inside domain_targets_dial (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 5/6 tests ok, domain_targets 'over 60 seconds', cargo+integration orphans killed) → HARDENED both tests with 60-90 s deadlines (bodies untouched; a wedge now fails in a minute with a LEDGER pointer) → next push run: BOTH tests failed loudly on runners (windows carrier_death 'no live bond carrier', ubuntu domain_targets deadline) while the same-commit PR run was fully green and local 2-core taskset stress (8× integration at test-threads=6) stayed 0-fail → rerun: ALL FOUR JOBS GREEN. ROOT-CAUSE LEAD (backlog, top priority): pick_carrier's 'no live bond carrier' = usable() empty = Wi-Fi dead + LTE flagged !alive mid-death-replay — a carrier-lifecycle race in PRE-EXISTING S11/S18 mt-bond code, GitHub-runner-only (slower I/O scheduling), never reproduced locally; investigate the death handler's replay path + LTE alive-flag transitions on a runner-like environment. Review PR #1 commented + left open.
++2026-11-22T04:20Z | s20 | COPILOT CODE REVIEW COMPLETED (the S19 leftover): the cloud Copilot reviewer finally ran from this sandbox via POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review — the user's runbook pointed at the standalone @github/copilot CLI, which is installed and network-verified but hard-blocked by the PAT: api.individual.githubcopilot.com answers 401 "Personal Access Token does not have \"Copilot Requests\" permission" (authentic server response, NOT a proxy block; the permission can only be added by editing the PAT in the GitHub web UI — told the user exactly that). The REST code-review endpoint needs only pull-requests:write, which the PAT has. Effort ladder per the fallback instruction: max → quota-rejected ("insufficient remaining quota"), balanced → quota-rejected, LITE → ran (review 6010002263 on 52f1d3c): 12 findings (5 High: step-0 self-heal never cleared sysproxy_set → later no-snapshot restore DISABLES a user's pre-existing proxy; give_up check-and-set unserialized with disconnect → black-hole re-installed AFTER an explicit disconnect; proxy pointed at 127.0.0.1:9 BEFORE the bind → a foreign port-9 owner receives the blocked traffic; black-hole listener stopped even when restore FAILED → stranded blocked proxy, no retry, false "restored" log; diag header wrote user URLs verbatim → credential leak in the paste-ready file; 7 Medium: diag-on-while-connected misses engine debug, failed enable leaves persisted toggle on, exit probe/speed test ride a session that is not the target profile, unbounded pre-\r\n\r\n head buffer, port-0 edit accepted, edited REALITY material unvalidated, temp_link_for pop() = lowest-priority adapter). ALL 12 fixed in 4923566: step-0 clears ownership on successful restore (keeps flag+listener on failure for retry); new Core::proxy_mtx serializes every proxy hand-off (give_up/disconnect×2/toggle-off/step-0/arming; the black-hole BIND hoisted outside the lock so no std lock crosses an await — spawn_blackhole split into bind_blackhole+engage_blackhole); bind-BEFORE-set with no-set-on-bind-failure (stale refused entry keeps blocking, nothing routes to a foreign listener); restore-first release on all paths with ERROR log + retry on failure; redact_url() (scheme://host:port/path, userinfo/query/fragment stripped, invalid → placeholder); diag-on-live reconnects (engine level is spawn-time-only); failed enable reverts the persisted toggle; Session.profile_id pins the live-session match for BOTH probes; SPEED_TEST_MAX_HEAD 64 KiB independent cap; port-0 + REALITY structural validation (vless parser rules, is_base64url now crate-visible; fingerprint deliberately unchecked = import parity); first-link selection (temp_link_for AND test_latency). ROUND 2 (lite, on 4923566): CLEAN PASS — review 6010239912, zero inline comments. PR #1: 12 per-finding maintainer replies + summary, CLOSED. Transcript: harness/memory/agent-reports/s20-copilot-review-transcript.md. TESTS 474/0 (+8: connect_selfheal_clears_stale_proxy_ownership, update_profile_rejects_port_zero_and_invalid_reality, diag_header_redacts_url_credentials, speed_test_rejects_a_header_flood, probes_fall_back_when_active_profile_switched, temp_link_uses_the_top_priority_first_link, diagnostics_enable_failure_reverts_the_toggle, diagnostics_enable_while_connected_reconnects). Gates: fmt clean; clippy host + windows-gnu -D warnings clean; vendored iced 6/0; mt-app --smoke 0; rig launch+alive+render-healthy (82% non-white, 1738 colors — zero GUI code changed this round); zigbuild PE32+ ×4 + ELF ×2. SANDBOX RESTORE NOTES: rustc 1.100.0 reinstalled (rustup minimal), tools/pypkgs ziglang wheel was INCOMPLETE (libc only musl/wasi — stddef.h compile failure; reinstalled 0.14.1 from PyPI), python-xlib reinstalled, /tmp/xkblibs re-extracted from the my-project root debs; DISK: /tmp/mt-target debug trees wiped twice (ENOSPC at 94% — stage release binaries before wiping, per the S19 lesson).
++2026-11-22T04:16Z | s20 | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED.
+diff --git a/harness/memory/agent-reports/s20-copilot-review-transcript.md b/harness/memory/agent-reports/s20-copilot-review-transcript.md
+new file mode 100644
+index 0000000..9645403
+--- /dev/null
++++ b/harness/memory/agent-reports/s20-copilot-review-transcript.md
+@@ -0,0 +1,166 @@
++# S20 Copilot code review transcript (v0.13.1, PR #1)
++
++Reviewer: copilot-pull-request-reviewer[bot] via the REST endpoint
++POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review.
++
++Effort ladder (per the fallback instruction): `max` → rejected by the
++account's remaining quota; `balanced` → rejected; `lite` → ran.
++The standalone @github/copilot CLI path stayed blocked: the fine-grained
++PAT lacks the "Copilot Requests" permission
++(api.individual.githubcopilot.com 401 — authentic server response; the
++permission can only be added by editing the PAT in the GitHub web UI).
++
++
++---
++
++## Round 1 — effort Lite, commit 52f1d3c
++
++### Review summary
++
++```
++<!-- ccr-overview-v2 -->
++
++### 🟡 Changes recommended
++
++Multiple unresolved critical correctness and security issues remain, including kill-switch races and failed restoration handling that can leave traffic misrouted, plus diagnostic URL leakage of credentials.
++
++<details open>
++<summary><strong>12 open issues</strong></summary>
++
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Clear proxy ownership after kill-switch self-heal](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411193) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Serialize kill-switch proxy changes with disconnect](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411210) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Bind the kill-switch listener before setting the system proxy](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411223) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Keep the kill-switch listener until proxy restore succeeds](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411231) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Redact secrets from user-configurable diagnostic URLs](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411240) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Apply debug logging when diagnostics is enabled live](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411265) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Recover the diagnostics toggle when sink startup fails](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411279) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Match the live session profile before probing its exit IP](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411287) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Cap incomplete HTTP response headers](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411295) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Reject server port zero when editing profiles](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411304) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Validate edited REALITY fields before saving](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411318) · New
++- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Select the top-priority adapter for offline tests](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411330) · New
++</details>
++
++<sub>Review effort: Lite</sub>
++```
++
++
++### Findings and discussion
++
++
++#### [4656411193] src/real_service.rs L922
++
++**Copilot:** The self-heal restores the OS proxy and stops the black-hole, but it never clears `core.sysproxy_set`. After a kill-switch failure, the next connect with `system_proxy` disabled leaves this flag set; a later disconnect then calls `restore()` with no snapshot and can disable the user's pre-existing proxy instead of leaving it untouched. Reset the ownership flag together with this self-heal.
++
++
++**Maintainer:** **Fixed in 4923566.** The step-0 self-heal now clears `sysproxy_set` on a successful restore (and — new this round — keeps the flag AND the listener when the restore fails, so the next disconnect retries instead of stranding a black-holed proxy). Regression test: `connect_selfheal_clears_stale_proxy_ownership`.
++
++
++#### [4656411210] src/real_service.rs L1363
++
++**Copilot:** This check-and-set is not serialized with `disconnect()`: after `give_up` loads `kill_switch = true`, an explicit disconnect can swap `sysproxy_set` to false and restore the snapshot, then this awaited `sysproxy::set` can still install the black-hole and leave `sysproxy_set` true after disconnect has returned. That can re-block traffic even though the user explicitly disconnected. Serialize proxy hand-off with disconnect, or re-check ownership/settings after every awaited step and roll back if the session was released.
++
++
++**Maintainer:** **Fixed in 4923566.** New `Core::proxy_mtx` (std Mutex) is held across every proxy hand-off: `give_up`'s engage/restore decision, both disconnect branches, the kill-switch toggle-off escape hatch, the step-0 self-heal and the connect-time arming. `give_up` re-reads the flag under the lock, so the disconnect-then-re-block interleaving is gone. The black-hole bind is hoisted OUT of the lock (it awaits), so no std lock is ever held across an await — the crate's standing rule.
++
++
++#### [4656411223] src/real_service.rs L1367
++
++**Copilot:** The proxy is pointed at `127.0.0.1:9` before `spawn_blackhole` binds that port. A local process can therefore bind the port in this window (or already own it); `sysproxy::set` succeeds, the subsequent bind fails, and WinINET traffic is sent to that process rather than a fail-closed listener. Bind and retain the listener before changing the system proxy, and only engage the kill switch if ownership succeeds (or otherwise use a per-run listener address that is reserved first).
++
++
++**Maintainer:** **Fixed in 4923566.** The order is now bind → set: `bind_blackhole()` runs before any registry write, and `sysproxy::set` only executes when ownership is proven. On a bind failure the stale entry (which refuses) keeps blocking and nothing is ever routed to a foreign listener; on a `set` failure after a successful bind the freshly-bound listener is released. `spawn_blackhole` was split into `bind_blackhole` + `engage_blackhole` to make the locked section fully synchronous.
++
++
++#### [4656411231] src/real_service.rs L1620
++
++**Copilot:** The no-session disconnect path clears `sysproxy_set` before restoring, then stops the black-hole listener even when `restore` returns an error. In that failure case the system proxy can still point at `127.0.0.1:9`, but the listener is gone and the ownership flag is false, so later disconnects will not retry and the unconditional "system proxy restored" log is false. Keep the kill-switch ownership/listener until restore succeeds and surface a failed restore instead of claiming success.
++
++This issue also appears in the following locations of the same file:
++- line 1635
++- line 1860
++
++
++**Maintainer:** **Fixed in 4923566 (all three sites).** Every restore path now matches on the result: `Ok` clears the flag, stops the listener and logs “restored”; `Err` keeps the flag AND the listener (still fail-closed), emits an `ERROR system proxy restore failed … retry` GUI log line, and the same path retries on the next disconnect/toggle. The “system proxy restored” line only appears after a successful restore. Note: the failure branch is Windows-registry-only, so it is covered by review rather than a Linux unit test — the retry semantics themselves are what the tests pin.
++
++
++#### [4656411240] src/real_service.rs L2438
++
++**Copilot:** These user-configurable URLs are written verbatim to the supposedly redacted support file. A URL may contain a query token, API key, or other secret (for example a custom probe endpoint), so enabling diagnostics can disclose credentials even though profile UUIDs and public keys are omitted. Redact URL userinfo/query/fragment or log only the validated host, port, and path components.
++
++
++**Maintainer:** **Fixed in 4923566.** New `redact_url()`: the header renders `scheme://host:port/path` only — userinfo (`user:pass@`), query (`?token=…`) and fragment are stripped, and an unparseable URL renders as `<redacted (invalid URL)>` without ever echoing the raw value. Regression test: `diag_header_redacts_url_credentials`.
++
++
++#### [4656411265] src/real_service.rs L1986
++
++**Copilot:** Turning diagnostics on while already connected does not update the running engines' log level: `debug` is only applied in `connect_flow()` before a new session is built, while this settings path enables the sink without reconnecting when no data-plane setting changed. The resulting file misses the engine debug output the UI promises. Reconnect the live session or provide an engine log-level update when diagnostics is enabled.
++
++
++**Maintainer:** **Fixed in 4923566.** Enabling diagnostics while Connected now reconnects the session (the engines read the log level only at spawn, so a live update cannot exist without an engine restart mechanism); the reconnect log line says why. Regression test: `diagnostics_enable_while_connected_reconnects` (state back to Connected, restarts counter incremented, engine level `debug`).
++
++
++#### [4656411279] src/real_service.rs L2011
++
++**Copilot:** If `diagnostics::enable` fails (for example, the log directory is unwritable), the settings file has already been saved with `diagnostics = true`, but the sink remains off. The UI consequently shows the mode enabled while no file is being written, and a later settings refresh will not retry because `diagnostics_changed` is false. Revert the persisted toggle on failure or surface a state that can be retried explicitly.
++
++
++**Maintainer:** **Fixed in 4923566.** A failed `diagnostics::enable` reverts the persisted toggle (the settings file is saved back with `diagnostics = false`), emits an `ERROR … the toggle was reverted` GUI line, and the live reconnect is suppressed for the failed enable. The retry path is simply toggling again — the diff is real again because the file says off. Regression test: `diagnostics_enable_failure_reverts_the_toggle` (log dir replaced by a file).
++
++
++#### [4656411287] src/real_service.rs L1954
++
++**Copilot:** The same stale-session problem affects the exit probe: this branch treats any existing session as the active profile's live tunnel, but the active profile can be changed without reconnecting. In that state the probe reports the old tunnel's exit IP against the new profile's endpoint and labels it as a live-tunnel result. The session needs to retain its profile id and this path must use the live listener only when it matches the selected profile; otherwise use the temporary tunnel.
++
++This issue also appears on line 2050 of the same file.
++
++
++**Maintainer:** **Fixed in 4923566.** `Session` now records the `profile_id` it was built from. `exit_probe` uses the live listener only when the session belongs to the active profile, and `speed_test` (which had the same hole via its `is_active` check — it compared the TARGET against the active profile, not against the session) now matches the session against the target profile directly. Regression test: `probes_fall_back_when_active_profile_switched` (live probe → active switched without reconnect → both probes report the temporary tunnel; an explicit target matching the session still rides it).
++
++
++#### [4656411295] src/real_service.rs L2335
++
++**Copilot:** The 64 MiB limit only applies after the response head has been found. Until `find_head_end` succeeds, every read is appended to `head` while `total` stays zero, so an endpoint that continuously sends bytes without `\r\n\r\n` can grow this `Vec` for the whole 30-second window and bypass the advertised memory cap. Cap the header buffer (or fail on an oversized/incomplete head) independently of the payload limit.
++
++
++**Maintainer:** **Fixed in 4923566.** `SPEED_TEST_MAX_HEAD` (64 KiB) is enforced independently while the head is still incomplete — the read loop now fails fast with “malformed response (no header end within 64 KiB)” instead of buffering for the whole budget. Regression test: `speed_test_rejects_a_header_flood` (256 KiB header-less flood, error in well under 10 s).
++
++
++#### [4656411304] src/real_service.rs L2197
++
++**Copilot:** `u16::parse()` accepts `0`, so an edit can save a server port of zero even though imported profiles and the edit form require a real server port (`1-65535`). `endpoint_from_profile()` does not reject this value, so the malformed profile persists and only fails later during engine connection. Reject zero here (and align the error text with the actual range).
++
++
++**Maintainer:** **Fixed in 4923566.** Port 0 is rejected explicitly (“port 0 is not a valid server port — use 1-65535”) and the parse-error text now says 1-65535. Regression test: `update_profile_rejects_port_zero_and_invalid_reality`.
++
++
++#### [4656411318] src/real_service.rs L2435
++
++**Copilot:** The edit path only checks that the original profile remains convertible; it does not validate the edited REALITY material. This allows saving an empty SNI, a non-43-character/non-base64url public key, or an invalid short ID, all of which the link parser/render validator rejects and the Xray config then receives unchanged. Validate these fields with the same structural rules used for imported links before `store.update()`.
++
++
++**Maintainer:** **Fixed in 4923566.** Inside the existing capability gate (an original that could drive the engine must stay convertible), the edited REALITY material is validated with the link parser's exact structural rules: SNI non-empty, `pbk` 43-char unpadded base64url (`crate::vless::is_base64url`, now crate-visible), `sid` empty-or-1-16-hex. Deliberate non-change: `fingerprint` is NOT validated — the import parser accepts any `fp=` verbatim and the edit path keeps parity with imports. Regression test: same test as the port-0 fix (plus a valid edit still saving).
++
++
++#### [4656411330] src/real_service.rs L2342
++
++**Copilot:** `engine_specs_for()` and `EngineLinkFactory::build()` preserve the user's bonded-adapter order, but `pop()` selects the last link, contrary to this function's documented “FIRST link (top-priority adapter)” behavior. Offline exit-IP and speed tests will therefore silently run on the lowest-priority adapter whenever bonding is configured. Select the first link and drop the remainder instead.
++
++
++**Maintainer:** **Fixed in 4923566.** `temp_link_for` takes the FIRST link (`into_iter().next()`); `test_latency`'s identical `pop()` was fixed too (same defect class, pre-existing this PR — flagged as an extension during triage). Regression test: `temp_link_uses_the_top_priority_first_link` (two named links to two different exit echoes; the probe answers from the FIRST).
++
++
++---
++
++## Round 2 — effort Lite, commit 4923566 (the fixes)
++
++Review 6010239912 on 2026-11-22T04:07:25Z: state COMMENTED, empty body,
++ZERO inline comments — a clean pass. No new findings.
++
++
++---
++
++## Outcome
++
++All 12 round-1 findings fixed in 4923566 (v0.13.1); round-2 re-review
++clean. PR #1 closed with the summary comment. Tests 474/0 (+8).
+diff --git a/harness/memory/store/memory_graph.json b/harness/memory/store/memory_graph.json
+index b881b6a..142e084 100644
+--- a/harness/memory/store/memory_graph.json
++++ b/harness/memory/store/memory_graph.json
+@@ -1,6 +1,6 @@
+ {
+   "schema_version": 1,
+-  "as_of": "52f1d3c 2026-11-21T15:07:33Z",
++  "as_of": "4923566 2026-11-22T04:05:27Z",
+   "sources": [
+     "PROJECT_MEMORY.md",
+     "harness/memory/STATE.md",
+@@ -11,8 +11,8 @@
+     "git (tags + full log)",
+     "harness/memory/curated/"
+   ],
+-  "node_count": 275,
+-  "edge_count": 282,
++  "node_count": 279,
++  "edge_count": 286,
+   "nodes": [
+     {
+       "id": "bug:freedom-loopback-blackhole",
+@@ -695,6 +695,26 @@
+         }
+       ]
+     },
++    {
++      "id": "commit:4923566",
++      "type": "commit",
++      "title": "s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 \"Personal Access Token does not have Copilot Requests permission\" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI).",
++      "tags": [
++        "2026-11-22"
++      ],
++      "sources": [
++        {
++          "file": "git:log",
++          "anchor": "4923566"
++        }
++      ],
++      "passages": [
++        {
++          "text": "s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 \"Personal Access Token does not have Copilot Requests permission\" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI).",
++          "kind": "title"
++        }
++      ]
++    },
+     {
+       "id": "commit:52f1d3c",
+       "type": "commit",
+@@ -4743,6 +4763,31 @@
+         }
+       ]
+     },
++    {
++      "id": "ledger:s20",
++      "type": "ledger",
++      "title": "Stage s20 ledger",
++      "tags": [
++        "s20",
++        "append-only"
++      ],
++      "sources": [
++        {
++          "file": "harness/memory/LEDGER.md",
++          "anchor": "s20"
++        }
++      ],
++      "passages": [
++        {
++          "text": "2026-11-22T04:20Z | COPILOT CODE REVIEW COMPLETED (the S19 leftover): the cloud Copilot reviewer finally ran from this sandbox via POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review — the user's runbook pointed at the standalone @github/copilot CLI, which is installed and network-verified but hard-blocked by the PAT: api.individual.githubcopilot.com answers 401 \"Personal Access Token does not have \\\"Copilot Requests\\\" permission\" (authentic server response, NOT a proxy block; the permission can only be added by editing the PAT in the GitHub web UI — told the user exactly that). The REST code-review endpoint needs only pull-requests:write, which the PAT has.",
++          "kind": "body"
++        },
++        {
++          "text": "2026-11-22T04:16Z | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED.",
++          "kind": "body"
++        }
++      ]
++    },
+     {
+       "id": "ledger:s3",
+       "type": "ledger",
+@@ -5422,6 +5467,10 @@
+         }
+       ],
+       "passages": [
++        {
++          "text": "- **Stage**: S20 CLOSED — the S19 leftover (Copilot code review) COMPLETED and shipped as v0.13.1 (tag on 4923566, release run 44983522874 SUCCESS, ci ×2 green, assets download-verified). The cloud Copilot reviewer ran via `POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review` (needs only pull-requests:write, which the PAT has): effort ladder per the fallback instruction — max → quota-rejected, balanced → quota-rejected, **lite → ran**. Round 1 (on 52f1d3c): 12 findings (5 High: step-0 self-heal never cleared sysproxy_set → no-snapshot restore disables a user's pre-existing proxy; give_up unserialized with disconnect → black-hole re-installed AFTER an explicit disconnect; set-BEFORE-bind → a foreign port-9 owner receives the blocked traffic; listener stopped even when restore failed → stranded block, no retry, false \"restored\" log; diag header wrote user URLs verbatim → credential leak. 7 Medium: live diag toggle misses engine debug, failed enable leaves the toggle on, probes ride a session that is not the target profile, unbounded head buffer, port-0 edit, unvalidated REALITY edits, pop() = lowest-priority adapter). All 12 fixed (Core::proxy_mtx serializes every proxy hand-off with the bind hoisted out of the lock; bind-before-set with no-set-on-bind- failure; restore-first release + retry; redact_url; diag-on-live reconnect; failed-enable revert; Session.profile_id pins both probes; 64 KiB head cap; port-0 + REALITY structural validation; first-link selection). Round 2 (lite, on the fixes): CLEAN PASS, zero comments.",
++          "kind": "body"
++        },
+         {
+           "text": "- **Stage**: S19 CLOSED — v0.13.0 released and verified (tag run 44910934439 SUCCESS ~7 min; CI all-green on the rerun after the documented mt-bond runner-flake round — LEDGER 15:10Z).",
+           "kind": "body"
+@@ -5616,6 +5665,26 @@
+         }
+       ]
+     },
++    {
++      "id": "release:v0.13.1",
++      "type": "release",
++      "title": "Release v0.13.1 (tagged 4923566)",
++      "tags": [
++        "v0.13.1"
++      ],
++      "sources": [
++        {
++          "file": "git:tags/v0.13.1",
++          "anchor": "4923566"
++        }
++      ],
++      "passages": [
++        {
++          "text": "Release v0.13.1: tag points at commit 4923566.",
++          "kind": "body"
++        }
++      ]
++    },
+     {
+       "id": "release:v0.2.0",
+       "type": "release",
+@@ -6496,6 +6565,122 @@
+         }
+       ]
+     },
++    {
++      "id": "report:s20-copilot-review-transcript",
++      "type": "report",
++      "title": "S20 Copilot code review transcript (v0.13.1, PR #1)",
++      "tags": [
++        "agent-reports"
++      ],
++      "sources": [
++        {
++          "file": "harness/memory/agent-reports/s20-copilot-review-transcript.md",
++          "anchor": ""
++        }
++      ],
++      "passages": [
++        {
++          "text": "# S20 Copilot code review transcript (v0.13.1, PR #1)",
++          "kind": "title"
++        },
++        {
++          "text": "Reviewer: copilot-pull-request-reviewer[bot] via the REST endpoint POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review.",
++          "kind": "body"
++        },
++        {
++          "text": "Effort ladder (per the fallback instruction): `max` → rejected by the account's remaining quota; `balanced` → rejected; `lite` → ran. The standalone @github/copilot CLI path stayed blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 — authentic server response; the permission can only be added by editing the PAT in the GitHub web UI).",
++          "kind": "body"
++        },
++        {
++          "text": "---",
++          "kind": "body"
++        },
++        {
++          "text": "## Round 1 — effort Lite, commit 52f1d3c",
++          "kind": "title"
++        },
++        {
++          "text": "### Review summary",
++          "kind": "title"
++        },
++        {
++          "text": "### 🟡 Changes recommended",
++          "kind": "title"
++        },
++        {
++          "text": "Multiple unresolved critical correctness and security issues remain, including kill-switch races and failed restoration handling that can leave traffic misrouted, plus diagnostic URL leakage of credentials.",
++          "kind": "body"
++        },
++        {
++          "text": "<details open> <summary><strong>12 open issues</strong></summary>",
++          "kind": "body"
++        },
++        {
++          "text": "- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Clear proxy ownership after kill-switch self-heal](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411193) · New - <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Serialize kill-switch proxy changes with disconnect](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411210) · New - <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img ",
++          "kind": "body"
++        },
++        {
++          "text": "<sub>Review effort: Lite</sub> ```",
++          "kind": "body"
++        },
++        {
++          "text": "### Findings and discussion",
++          "kind": "title"
++        },
++        {
++          "text": "#### [4656411193] src/real_service.rs L922",
++          "kind": "title"
++        },
++        {
++          "text": "**Copilot:** The self-heal restores the OS proxy and stops the black-hole, but it never clears `core.sysproxy_set`. After a kill-switch failure, the next connect with `system_proxy` disabled leaves this flag set; a later disconnect then calls `restore()` with no snapshot and can disable the user's pre-existing proxy instead of leaving it untouched. Reset the ownership flag together with this self-heal.",
++          "kind": "body"
++        },
++        {
++          "text": "**Maintainer:** **Fixed in 4923566.** The step-0 self-heal now clears `sysproxy_set` on a successful restore (and — new this round — keeps the flag AND the listener when the restore fails, so the next disconnect retries instead of stranding a black-holed proxy). Regression test: `connect_selfheal_clears_stale_proxy_ownership`.",
++          "kind": "body"
++        },
++        {
++          "text": "#### [4656411210] src/real_service.rs L1363",
++          "kind": "title"
++        },
++        {
++          "text": "**Copilot:** This check-and-set is not serialized with `disconnect()`: after `give_up` loads `kill_switch = true`, an explicit disconnect can swap `sysproxy_set` to false and restore the snapshot, then this awaited `sysproxy::set` can still install the black-hole and leave `sysproxy_set` true after disconnect has returned. That can re-block traffic even though the user explicitly disconnected. Serialize proxy hand-off with disconnect, or re-check ownership/settings after every awaited step and roll back if the session was released.",
++          "kind": "body"
++        },
++        {
++          "text": "**Maintainer:** **Fixed in 4923566.** New `Core::proxy_mtx` (std Mutex) is held across every proxy hand-off: `give_up`'s engage/restore decision, both disconnect branches, the kill-switch toggle-off escape hatch, the step-0 self-heal and the connect-time arming. `give_up` re-reads the flag under the lock, so the disconnect-then-re-block interleaving is gone. The black-hole bind is hoisted OUT of the lock (it awaits), so no std lock is ever held across an await — the crate's standing rule.",
++          "kind": "body"
++        },
++        {
++          "text": "#### [4656411223] src/real_service.rs L1367",
++          "kind": "title"
++        },
++        {
++          "text": "**Copilot:** The proxy is pointed at `127.0.0.1:9` before `spawn_blackhole` binds that port. A local process can therefore bind the port in this window (or already own it); `sysproxy::set` succeeds, the subsequent bind fails, and WinINET traffic is sent to that process rather than a fail-closed listener. Bind and retain the listener before changing the system proxy, and only engage the kill switch if ownership succeeds (or otherwise use a per-run listener address that is reserved first).",
++          "kind": "body"
++        },
++        {
++          "text": "**Maintainer:** **Fixed in 4923566.** The order is now bind → set: `bind_blackhole()` runs before any registry write, and `sysproxy::set` only executes when ownership is proven. On a bind failure the stale entry (which refuses) keeps blocking and nothing is ever routed to a foreign listener; on a `set` failure after a successful bind the freshly-bound listener is released. `spawn_blackhole` was split into `bind_blackhole` + `engage_blackhole` to make the locked section fully synchronous.",
++          "kind": "body"
++        },
++        {
++          "text": "#### [4656411231] src/real_service.rs L1620",
++          "kind": "title"
++        },
++        {
++          "text": "**Copilot:** The no-session disconnect path clears `sysproxy_set` before restoring, then stops the black-hole listener even when `restore` returns an error. In that failure case the system proxy can still point at `127.0.0.1:9`, but the listener is gone and the ownership flag is false, so later disconnects will not retry and the unconditional \"system proxy restored\" log is false. Keep the kill-switch ownership/listener until restore succeeds and surface a failed restore instead of claiming success.",
++          "kind": "body"
++        },
++        {
++          "text": "This issue also appears in the following locations of the same file: - line 1635 - line 1860",
++          "kind": "body"
++        },
++        {
++          "text": "**Maintainer:** **Fixed in 4923566 (all three sites).** Every restore path now matches on the result: `Ok` clears the flag, stops the listener and logs “restored”; `Err` keeps the flag AND the listener (still fail-closed), emits an `ERROR system proxy restore failed … retry` GUI log line, and the same path retries on the next disconnect/toggle. The “system proxy restored” line only appears after a successful restore. Note: the failure branch is Windows-registry-only, so it is covered by review rather than a Linux unit test — the retry semantics themselves are what the tests pin.",
++          "kind": "body"
++        }
++      ]
++    },
+     {
+       "id": "report:s3-implementation",
+       "type": "report",
+@@ -8996,6 +9181,18 @@
+       "rel": "part_of",
+       "evidence": "project ledger"
+     },
++    {
++      "src": "ledger:s20",
++      "dst": "project:multitunnel",
++      "rel": "part_of",
++      "evidence": "project ledger"
++    },
++    {
++      "src": "ledger:s20",
++      "dst": "release:v0.13.1",
++      "rel": "released_in",
++      "evidence": "2026-11-22T04:16Z | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED."
++    },
+     {
+       "src": "ledger:s3",
+       "dst": "project:multitunnel",
+@@ -9200,6 +9397,12 @@
+       "rel": "built_from",
+       "evidence": "git tag v0.13.0"
+     },
++    {
++      "src": "release:v0.13.1",
++      "dst": "commit:4923566",
++      "rel": "built_from",
++      "evidence": "git tag v0.13.1"
++    },
+     {
+       "src": "release:v0.2.0",
+       "dst": "commit:06881a6",
+@@ -9320,6 +9523,12 @@
+       "rel": "reports_on",
+       "evidence": "filename stage prefix"
+     },
++    {
++      "src": "report:s20-copilot-review-transcript",
++      "dst": "ledger:s20",
++      "rel": "reports_on",
++      "evidence": "filename stage prefix"
++    },
+     {
+       "src": "report:s3-implementation",
+       "dst": "ledger:s3",
+
 ### Commit: 4923566 - s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the "Copilot Requests" permission (api.individual.githubcopilot.com 401 "Personal Access Token does not have Copilot Requests permission" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI). All 12 findings addressed: (1) [high] connect step-0 self-heal now CLEARS sysproxy_set on a successful restore — the stale flag made a later no-session disconnect restore with NO snapshot, which DISABLES the user's pre-existing proxy (restore_plan(Ok(None)) = Disable); (2) [high] give_up's check-and-set serialized with disconnect via new Core::proxy_mtx (std Mutex, never held across an await — the black-hole BIND is hoisted out): the old window let an explicit disconnect restore the proxy and THEN have give_up's awaited sysproxy::set re-install the black-hole with sysproxy_set left true after disconnect returned; (3) [high] give_up BINDS the black-hole port BEFORE sysproxy::set and only re-points the proxy when ownership is proven — the old set-then-bind order let a local process that owned port 9 receive the black-holed traffic; bind failure = keep the stale (refused) entry, never route to a foreign listener; spawn_blackhole split into bind_blackhole (async, unlocked) + engage_blackhole (sync, under the lock); (4) [high] every restore path (both disconnect branches, kill-switch toggle-off, step-0) now restores FIRST and only releases ownership + the listener on SUCCESS — a failed restore keeps the black-hole engaged (fail-closed), logs an ERROR line and retries on the next disconnect/toggle instead of stranding a black-holed proxy with no owner and a false "restored" log; (5) [high] diagnostics header renders user-configurable URLs via new redact_url() — scheme://host:port/path only; userinfo (http://user:pass@), query (?token=) and fragment stripped (those slots carry API keys in custom probe/speed endpoints); unparseable URLs never echo; (6) [medium] enabling diagnostics on a LIVE session reconnects it (engines read the log level only at spawn — the sink silently missed engine debug output otherwise); (7) [medium] a failed diagnostics::enable REVERTS the persisted toggle + ERROR log (the UI previously showed the mode on with no file being written and no retry path); (8) [medium] exit probe + speed test only ride the live session when it was BUILT from the target profile (Session.profile_id; switching the active profile without reconnecting now falls back to the temporary probe tunnel instead of reporting the old tunnel's exit against the new profile — speed_test's old is_active check had the same hole); (9) [medium] speed-test response head capped independently at 64 KiB (SPEED_TEST_MAX_HEAD) — until \r\n\r\n lands nothing counts toward the 64 MiB payload cap, so a header-less byte flood could grow the buffer for the whole 30 s budget; (10) [medium] edit rejects port 0 (u16::parse accepted it; imported links and the dialog range are 1-65535); (11) [medium] edited REALITY material gets the link parser's structural rules (sni non-empty, pbk 43-char unpadded base64url via crate::vless::is_base64url, sid empty-or-1-16-hex) inside the existing capability gate — never-convertible profiles still edit freely; fingerprint intentionally unchecked (the import parser accepts any fp= verbatim — parity); (12) [medium] temp_link_for takes the FIRST link (top-priority bonded adapter — engine_specs_for preserves the user's order; pop() silently selected the LAST) — test_latency's identical pop() fixed for consistency. TESTS: 474/0 (+8: selfheal ownership clear, port-0/REALITY edit rejection, diag URL redaction, header flood, profile-switch fallback both probes, first-link end-to-end, diag enable revert, diag live reconnect). Gates: fmt/clippy host+windows-gnu -D warnings clean; vendored iced 6/0; mt-app --smoke 0; rig launch+render-healthy (no GUI code changed); zigbuild PE32+ x4 (multitunnel 19.2MB, mt-app 14.9MB, tray 10.1MB, merge-server 2.4MB) + ELF x2 (x86_64 1.23MB, aarch64 1.21MB); version 0.13.1; README v0.13.1 section + QUICKSTART note. (Z User, 2026-11-22)
 diff --git a/Cargo.lock b/Cargo.lock
 index ca35e7c..91f9783 100755
@@ -1610,138 +2082,6 @@ index 14882ff..1747d50 100644
      {
        "src": "ledger:s2",
        "dst": "project:multitunnel",
-
-### Commit: 666bc16 - backup(s19-ci-hardening): 2026-11-21T14:58:33Z (Z User, 2026-11-21)
-diff --git a/harness/memory/store/memory_graph.json b/harness/memory/store/memory_graph.json
-index ae089af..14882ff 100644
---- a/harness/memory/store/memory_graph.json
-+++ b/harness/memory/store/memory_graph.json
-@@ -1,6 +1,6 @@
- {
-   "schema_version": 1,
--  "as_of": "001d4e0 2026-11-21T13:50:09Z",
-+  "as_of": "702293b 2026-11-21T14:58:33Z",
-   "sources": [
-     "PROJECT_MEMORY.md",
-     "harness/memory/STATE.md",
-@@ -11,8 +11,8 @@
-     "git (tags + full log)",
-     "harness/memory/curated/"
-   ],
--  "node_count": 270,
--  "edge_count": 277,
-+  "node_count": 273,
-+  "edge_count": 279,
-   "nodes": [
-     {
-       "id": "bug:freedom-loopback-blackhole",
-@@ -535,6 +535,26 @@
-         }
-       ]
-     },
-+    {
-+      "id": "commit:3da17ad",
-+      "type": "commit",
-+      "title": "backup(s19-review-fixes): 2026-11-21T13:51:08Z",
-+      "tags": [
-+        "2026-11-21"
-+      ],
-+      "sources": [
-+        {
-+          "file": "git:log",
-+          "anchor": "3da17ad"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "backup(s19-review-fixes): 2026-11-21T13:51:08Z",
-+          "kind": "title"
-+        }
-+      ]
-+    },
-     {
-       "id": "commit:40ee65c",
-       "type": "commit",
-@@ -1015,6 +1035,26 @@
-         }
-       ]
-     },
-+    {
-+      "id": "commit:702293b",
-+      "type": "commit",
-+      "title": "s19: runner-flake hardening — mt-bond integration tests carrier_death_mid_stream + domain_targets_dial wrapped in hard deadlines (90 s / 60 s). Evidence: today's ubuntu CI leg failed on carrier_death (the same-commit PR + release runs green, local 466/0 repeatedly — the documented S17/S18 runner flake, third occurrence) and the rerun leg then WEDGED 54 minutes inside domain_targets_dial AFTER carrier_death passed (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 'running 6 tests', five ok, domain_targets 'over 60 seconds', cargo + integration orphan killed at cancel). A deadline converts the silent hourly hang into a loud one-minute failure with the LEDGER pointer in the message; zero behavior change to the code under test (bodies untouched inside the timeout wrapper). Local: mt-bond 32+6/0, clippy clean.",
-+      "tags": [
-+        "2026-11-21"
-+      ],
-+      "sources": [
-+        {
-+          "file": "git:log",
-+          "anchor": "702293b"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "s19: runner-flake hardening — mt-bond integration tests carrier_death_mid_stream + domain_targets_dial wrapped in hard deadlines (90 s / 60 s). Evidence: today's ubuntu CI leg failed on carrier_death (the same-commit PR + release runs green, local 466/0 repeatedly — the documented S17/S18 runner flake, third occurrence) and the rerun leg then WEDGED 54 minutes inside domain_targets_dial AFTER carrier_death passed (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 'running 6 tests', five ok, domain_targets 'over 60 seconds', cargo + integration orphan killed at cancel). A deadline converts the silent hourly hang into a loud one-minute failure with the LEDGER pointer in the message; zero behavior change to the code under test (bodies untouched inside the timeout wrapper). Local: mt-bond 32+6/0, clippy clean.",
-+          "kind": "title"
-+        }
-+      ]
-+    },
-     {
-       "id": "commit:7073762",
-       "type": "commit",
-@@ -5512,6 +5552,26 @@
-         }
-       ]
-     },
-+    {
-+      "id": "release:v0.13.0",
-+      "type": "release",
-+      "title": "Release v0.13.0 (tagged 3da17ad)",
-+      "tags": [
-+        "v0.13.0"
-+      ],
-+      "sources": [
-+        {
-+          "file": "git:tags/v0.13.0",
-+          "anchor": "3da17ad"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "Release v0.13.0: tag points at commit 3da17ad.",
-+          "kind": "body"
-+        }
-+      ]
-+    },
-     {
-       "id": "release:v0.2.0",
-       "type": "release",
-@@ -7884,6 +7944,12 @@
-       "rel": "part_of",
-       "evidence": "subject stage label (s2)"
-     },
-+    {
-+      "src": "commit:3da17ad",
-+      "dst": "ledger:s19",
-+      "rel": "part_of",
-+      "evidence": "subject stage label (s19)"
-+    },
-     {
-       "src": "commit:40ee65c",
-       "dst": "ledger:s5",
-@@ -9066,6 +9132,12 @@
-       "rel": "built_from",
-       "evidence": "git tag v0.12.0"
-     },
-+    {
-+      "src": "release:v0.13.0",
-+      "dst": "commit:3da17ad",
-+      "rel": "built_from",
-+      "evidence": "git tag v0.13.0"
-+    },
-     {
-       "src": "release:v0.2.0",
-       "dst": "commit:06881a6",
 
 ( PROJECT_MEMORY.md's own diff is elided here — the durable
   sections above are hand-maintained; see harness/memory/LEDGER.md

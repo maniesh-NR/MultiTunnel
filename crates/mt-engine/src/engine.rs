@@ -4,9 +4,9 @@
 //! - `ManagedEngine::new(spec, locator: Arc<dyn EngineLocator>, state_dir,
 //!   log_dir)` — lazily spawns on first connect; free loopback port via
 //!   bind(127.0.0.1:0)-then-drop (retry once with a fresh port if the
-//!   child fails to bind); config `state_dir/engine-<tag>.json` 0600
+//!   child fails to bind); config `state_dir/<stem>.json` 0600
 //!   (embeds the UUID); child `xray run -c <path>` with piped
-//!   stdout/stderr appended to `log_dir/engine-<tag>.log` and forwarded
+//!   stdout/stderr appended to `log_dir/<stem>.log` and forwarded
 //!   to tracing; kill-on-drop; unexpected-exit detection → respawn with
 //!   backoff 1s→2s→…→30s, budget 5, then the outbound errors (fail-open
 //!   at the data plane is mt-net's job, not ours).
@@ -67,7 +67,7 @@
 //!   exactly one transparent respawn+retry happens only when the child is
 //!   dead.
 //! - FILENAMES: the tag is sanitized (`[A-Za-z0-9._-]`, else `-`) before
-//!   it enters `engine-<tag>.json` / `engine-<tag>.log`.
+//!   it enters `<stem>.json` / `<stem>.log` (see [`engine_file_stem`]).
 //! - `with_command`/`with_policy` are builder methods that must be used
 //!   before the first connect (they mutate through `Arc::get_mut` and
 //!   silently no-op once the engine is shared with its threads).
@@ -324,12 +324,12 @@ impl EngineInner {
 
     fn config_path(&self) -> PathBuf {
         self.state_dir
-            .join(format!("engine-{}.json", sanitize_tag(&self.spec.tag)))
+            .join(format!("{}.json", engine_file_stem(&self.spec)))
     }
 
     fn log_path(&self) -> PathBuf {
         self.log_dir
-            .join(format!("engine-{}.log", sanitize_tag(&self.spec.tag)))
+            .join(format!("{}.log", engine_file_stem(&self.spec)))
     }
 
     /// Liveness question to OUR child, independent of the 100 ms waiter
@@ -841,6 +841,57 @@ fn sanitize_tag(tag: &str) -> String {
     out
 }
 
+/// S21 P0 fix (H2): the config/log file stem for an engine spec.
+///
+/// Historically the stem was the sanitized tag alone — and profile tags
+/// are NOT unique (subscription links routinely share one `#fragment`).
+/// Two engines with the same tag — e.g. the live session's engine and a
+/// temporary probe/speed-test tunnel engine built from a DIFFERENT
+/// profile with the same tag — shared one `engine-<tag>.json`, so the
+/// temp spawn REWROTE the live engine's config; the live child's next
+/// respawn then dialed the wrong server, exhausted its respawn budget
+/// and went permanently DEGRADED while the GUI kept showing Connected.
+///
+/// The stem therefore appends a deterministic FNV-1a hash of the FULL
+/// endpoint identity (address, port, uuid, sni, public key, short id,
+/// fingerprint, spiderX, sendThrough): the same profile across
+/// reconnects keeps reusing the same file (no proliferation), while two
+/// different profiles that share a tag never collide again.
+pub fn engine_file_stem(spec: &EngineSpec) -> String {
+    // FNV-1a 64-bit, hand-rolled (zero-dependency rule) and fed through
+    // the public lib re-export. Separate every field with \0 so
+    // ("a" "bc") and ("ab" "c") cannot hash alike.
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    let feed = |bytes: &[u8], hash: &mut u64| {
+        for b in bytes.iter().chain(std::iter::once(&0u8)) {
+            *hash ^= u64::from(*b);
+            *hash = hash.wrapping_mul(FNV_PRIME);
+        }
+    };
+    feed(spec.endpoint.address.as_bytes(), &mut hash);
+    feed(&spec.endpoint.port.to_le_bytes(), &mut hash);
+    feed(spec.endpoint.uuid.as_bytes(), &mut hash);
+    feed(spec.endpoint.sni.as_bytes(), &mut hash);
+    feed(spec.endpoint.public_key.as_bytes(), &mut hash);
+    feed(spec.endpoint.short_id.as_bytes(), &mut hash);
+    feed(spec.endpoint.fingerprint.as_bytes(), &mut hash);
+    feed(
+        spec.endpoint.spider_x.as_deref().unwrap_or("").as_bytes(),
+        &mut hash,
+    );
+    feed(
+        spec.send_through.as_deref().unwrap_or("").as_bytes(),
+        &mut hash,
+    );
+    format!(
+        "engine-{}-{:08x}",
+        sanitize_tag(&spec.tag),
+        (hash >> 32) as u32
+    )
+}
+
 /// Write the config pretty-printed + newline. POSIX: a fresh 0600 tmp
 /// file is renamed over the destination (atomic, embeds the UUID).
 /// Windows: no POSIX perms; the profile ACLs apply.
@@ -987,6 +1038,74 @@ mod tests {
         assert_eq!(sanitize_tag("a b\tc"), "a-b-c");
         assert_eq!(sanitize_tag("隧道"), "--");
         assert_eq!(sanitize_tag(""), "engine");
+    }
+
+    // --- S21: engine_file_stem — same-tag profiles must not collide ---
+
+    use crate::VlessRealityEndpoint;
+
+    const STEM_UUID: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const STEM_PBK: &str = "0123456789_-ABCDEFGHIJKLMNOPQRSTUVWXYZabcde";
+
+    fn stem_spec(tag: &str, address: &str, port: u16, uuid: &str) -> EngineSpec {
+        EngineSpec {
+            tag: tag.into(),
+            endpoint: VlessRealityEndpoint {
+                address: address.into(),
+                port,
+                uuid: uuid.into(),
+                sni: "tunnel.example.org".into(),
+                public_key: STEM_PBK.into(),
+                short_id: "0123abcd".into(),
+                fingerprint: "chrome".into(),
+                spider_x: None,
+            },
+            send_through: None,
+            log_level: None,
+        }
+    }
+
+    #[test]
+    fn engine_stem_is_deterministic_for_the_same_spec() {
+        let a = stem_spec("node", "203.0.113.10", 443, STEM_UUID);
+        let b = stem_spec("node", "203.0.113.10", 443, STEM_UUID);
+        assert_eq!(engine_file_stem(&a), engine_file_stem(&b));
+    }
+
+    #[test]
+    fn engine_stem_separates_same_tag_different_endpoints() {
+        // The H2 regression: two profiles share the tag but differ in the
+        // endpoint — the stems (and thus the config/log files) must differ.
+        let a = stem_spec("node", "203.0.113.10", 443, STEM_UUID);
+        let b = stem_spec("node", "203.0.113.11", 443, STEM_UUID);
+        let c = stem_spec("node", "203.0.113.10", 8443, STEM_UUID);
+        let d = stem_spec(
+            "node",
+            "203.0.113.10",
+            443,
+            "ffffffff-0000-4ccc-8ddd-eeeeeeeeeeee",
+        );
+        let sa = engine_file_stem(&a);
+        assert_ne!(sa, engine_file_stem(&b));
+        assert_ne!(sa, engine_file_stem(&c));
+        assert_ne!(sa, engine_file_stem(&d));
+    }
+
+    #[test]
+    fn engine_stem_send_through_is_part_of_the_identity() {
+        let mut a = stem_spec("node", "203.0.113.10", 443, STEM_UUID);
+        let b = stem_spec("node", "203.0.113.10", 443, STEM_UUID);
+        a.send_through = Some("192.168.1.10".into());
+        assert_ne!(engine_file_stem(&a), engine_file_stem(&b));
+    }
+
+    #[test]
+    fn engine_stem_shape_is_tag_plus_eight_hex() {
+        let stem = engine_file_stem(&stem_spec("eu/west 1", "203.0.113.10", 443, STEM_UUID));
+        let suffix = stem.rsplit('-').next().expect("stem has a suffix");
+        assert_eq!(suffix.len(), 8);
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(stem.starts_with("engine-eu-west-1-"));
     }
 
     // --- free port picker never returns port 0 and is loopback ---

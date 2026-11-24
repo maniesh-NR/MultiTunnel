@@ -111,11 +111,13 @@ impl Sandbox {
     }
 
     fn config_path(&self, tag: &str) -> PathBuf {
-        self.state().join(format!("engine-{tag}.json"))
+        self.state()
+            .join(format!("{}.json", mt_engine::engine_file_stem(&spec(tag))))
     }
 
     fn log_path(&self, tag: &str) -> PathBuf {
-        self.logs().join(format!("engine-{tag}.log"))
+        self.logs()
+            .join(format!("{}.log", mt_engine::engine_file_stem(&spec(tag))))
     }
 }
 
