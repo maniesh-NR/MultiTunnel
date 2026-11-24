@@ -98,6 +98,17 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > DIAGNOSTICS mode that writes one paste-ready support log file
 > (connection lifecycle + engine output, credentials redacted).
 >
+> v0.14: adding a second server and switching to it while connected no
+> longer kills the tunnel until restart (lingering proxy connections are
+> force-closed at shutdown and busy listener binds retry briefly);
+> throughput/stability parity work (TCP_NODELAY on every carrier leg,
+> coalesced ACKs, batched carrier writes, honest per-carrier RTTs, no
+> more probe blackouts on the only link); Settings → Network gained a
+> **QoS FAIR SHARE** toggle — when two sites race for a loaded tunnel,
+> each gets an equal share instead of one download hogging everything
+> (flips live, no reconnect); the Status tab's exit-IP and speed-test
+> cards merged into one compact **Exit & speed** panel.
+>
 > v0.13.1 (Copilot code-review round): kill-switch hardening — the
 > black-hole port is owned BEFORE the proxy points at it, the proxy
 > hand-off is serialized with disconnect, a failed restore keeps the
