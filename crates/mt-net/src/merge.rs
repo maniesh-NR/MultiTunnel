@@ -40,8 +40,11 @@
 //! - Candidate TIERS: (1) `ok && not quarantined` preferred; (2) fallback
 //!   to `!ok but not quarantined` — a probe false-negative must not
 //!   hard-block traffic, and the server's transparent retry catches real
-//!   failures; quarantine is the only HARD gate. No candidates → `None`
-//!   (fail-open: the connection errors, the server keeps serving).
+//!   failures. S21: quarantine is NO LONGER a hard kill — when every
+//!   non-excluded link is quarantined, the picker falls back to them as a
+//!   LAST RESORT (a probe must never blackhole the data plane; the dial
+//!   itself decides, fail-open at the server). No candidates at all →
+//!   `None` (the connection errors, the server keeps serving).
 //! - EWMA: the first successful sample seeds it; later samples blend with
 //!   weight 0.3 new / 0.7 old. Failures clear `latency` (the sample went
 //!   stale) but keep `ewma_ms` for LowestLatency ranking.
@@ -247,7 +250,30 @@ pub(crate) fn pick_excluding(
             tier2.push(i);
         }
     }
-    let candidates = if tier1.is_empty() { &tier2 } else { &tier1 };
+    // S21 P1 stability: a quarantine must never BLACKHOLE every link.
+    // In stream-bonding mode the bond is the ONLY link — when a loaded
+    // probe crosses PROBE_TIMEOUT three times, the old contract returned
+    // None and every new connection was refused while the tunnel looked
+    // Connected (the user-visible "less stable than v2rayN" blackout).
+    // Quarantine is a load-balancing signal, not a kill switch: with no
+    // healthy candidate, prefer a quarantined / down link over certain
+    // failure — a probe false negative now just works, and a truly dead
+    // link still fails the dial with the usual error (fail-open at the
+    // data plane, per the module contract). The `excluded` guarantee
+    // (retry lands on a DIFFERENT link) is preserved.
+    let last_resort: Vec<usize> = healths
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| excluded != Some(i))
+        .map(|(i, _)| i)
+        .collect();
+    let candidates = if !tier1.is_empty() {
+        &tier1
+    } else if !tier2.is_empty() {
+        &tier2
+    } else {
+        &last_resort
+    };
     let &first = candidates.first()?;
     match policy {
         MergePolicy::Failover => Some(first),
@@ -626,7 +652,23 @@ mod tests {
             health(true, 0.0, Some(Duration::from_secs(10))),
             health(true, 0.0, Some(Duration::from_secs(10))),
         ];
-        assert_eq!(pick1(MergePolicy::Failover, &mut all_q, None), None);
+        // S21 P1 stability: an all-quarantined table now falls back to the
+        // quarantined links (last resort) instead of returning None — a
+        // probe must never blackhole the data plane. Failover takes the
+        // first non-excluded link in order.
+        assert_eq!(pick1(MergePolicy::Failover, &mut all_q, None), Some(0));
+    }
+
+    #[test]
+    fn quarantined_sole_link_is_a_last_resort_never_a_blackout() {
+        // The stream-bonding shape: ONE link (the bond). Three slow probes
+        // quarantine it; picking it must STILL happen (S21) — the dial
+        // decides, not the probe streak.
+        let mut single = vec![health(true, 0.0, Some(Duration::from_secs(10)))];
+        assert_eq!(pick1(MergePolicy::Failover, &mut single, None), Some(0));
+        // The retry-exclusion contract still holds: excluded → no OTHER
+        // link exists → None.
+        assert_eq!(pick1(MergePolicy::Failover, &mut single, Some(0)), None);
     }
 
     #[test]

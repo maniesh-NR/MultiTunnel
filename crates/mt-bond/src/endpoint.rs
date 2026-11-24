@@ -89,6 +89,13 @@ pub const CARRIER_RESPAWN_BACKOFF: Duration = Duration::from_secs(2);
 /// the server's Xray freedom policy blackholes the merge port — bytes
 /// queued into it vanish. The pong is the honest "carrier works" signal.
 pub const VERIFY_PONG_TIMEOUT: Duration = Duration::from_secs(5);
+/// S21 P1: ACK coalescing — send a cumulative ACK immediately once this
+/// many frames advanced since the last ACK (otherwise ≤20 ms / heartbeat).
+pub const ACK_COALESCE_FRAMES: usize = 8;
+/// S21 P1: max age of an unflushed cumulative ACK.
+pub const ACK_COALESCE_WINDOW: Duration = Duration::from_millis(20);
+/// S21 P1: max frames the carrier writer batches into ONE vectored write.
+pub const WRITE_BATCH_MAX: usize = 16;
 
 /// Inbound message delivered to a session consumer (app side or daemon pump).
 #[derive(Debug)]
@@ -421,6 +428,8 @@ pub(crate) struct Session {
     reorder: Mutex<ReorderBuffer>,
     /// Last in-order delivery (stall detection).
     last_progress: Mutex<Instant>,
+    /// S21 P1: cumulative-ACK coalescing state (see `session_inbound`).
+    ack_coalesce: Mutex<AckCoalescer>,
     /// Delivery channel (unbounded; backlog-capped by the sweeper). The
     /// RECEIVER lives in the session until its consumer takes it: the
     /// client's `BondStream` gets it at `open_local_session`, the daemon
@@ -439,6 +448,21 @@ pub(crate) struct Session {
     closed: AtomicBool,
 }
 
+/// S21 P1: coalesces cumulative ACKs (one 24-byte ACK per DATA frame
+/// doubled the frame count, re-ran the carrier scheduler per frame and let
+/// control frames contend with bulk DATA in the bounded writer queue).
+/// The ACK latency stays bounded: CLOSE handling and the 1 s PING heartbeat
+/// flush whatever is pending.
+#[derive(Default)]
+struct AckCoalescer {
+    /// Latest cumulative ack seq NOT yet sent (None = nothing pending).
+    pending: Option<u64>,
+    /// When the first pending ack arrived (reset on every flush).
+    since: Option<Instant>,
+    /// Last cumulative ack seq actually SENT.
+    last_sent: u64,
+}
+
 impl Session {
     fn new(id: u32) -> Arc<Self> {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -452,6 +476,7 @@ impl Session {
             inbound_rx: Mutex::new(Some(rx)),
             backlog: AtomicUsize::new(0),
             created: Mutex::new(None),
+            ack_coalesce: Mutex::new(AckCoalescer::default()),
             opened_delivered: AtomicBool::new(false),
             write_closed: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -471,6 +496,47 @@ impl Session {
 // ---------------------------------------------------------------------------
 // Endpoint
 // ---------------------------------------------------------------------------
+
+/// S21 P1: vectored write-all — pushes a batch of encoded frames through
+/// ONE `write_vectored` call (looping over partial writes; kernels rarely
+/// partial-write a batch that fits the socket buffer). Falls back to a
+/// plain `write_all` for the common single-frame case.
+async fn write_all_vectored(
+    w: &mut tokio::io::WriteHalf<ProxyStream>,
+    batch: Vec<Vec<u8>>,
+) -> std::io::Result<()> {
+    use std::collections::VecDeque;
+    use std::io::{ErrorKind, IoSlice};
+    let mut parts: VecDeque<Vec<u8>> = batch.into();
+    parts.retain(|b| !b.is_empty());
+    while !parts.is_empty() {
+        if parts.len() == 1 {
+            w.write_all(parts.front().expect("non-empty")).await?;
+            return Ok(());
+        }
+        let slices: Vec<IoSlice> = parts.iter().map(|b| IoSlice::new(b)).collect();
+        let n = w.write_vectored(&slices).await?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                ErrorKind::WriteZero,
+                "vectored write made no progress",
+            ));
+        }
+        let mut left = n;
+        while left > 0 {
+            let front_len = parts.front().expect("non-empty").len();
+            if left >= front_len {
+                left -= front_len;
+                parts.pop_front();
+            } else {
+                let front = parts.front_mut().expect("non-empty");
+                *front = front[left..].to_vec();
+                left = 0;
+            }
+        }
+    }
+    Ok(())
+}
 
 /// S14 per-endpoint scheduler statistics, updated once per sweep from
 /// the carriers' monotonic counters (the hot send path only touches the
@@ -743,6 +809,9 @@ impl Endpoint {
     }
 
     /// Carrier writer: drains queued encoded frames to the socket.
+    /// S21 P1: co-queued frames are batched into ONE vectored write
+    /// (previously one syscall per 16 KiB frame — a measurable Windows
+    /// overhead at bond throughput; batching cuts syscalls up to 16×).
     async fn writer_task(
         self: Arc<Self>,
         idx: usize,
@@ -751,31 +820,41 @@ impl Endpoint {
     ) {
         let mut shutdown = self.shutdown.subscribe();
         loop {
-            tokio::select! {
+            let batch = tokio::select! {
                 biased;
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         break;
                     }
+                    continue;
                 }
                 item = rx.recv() => {
                     let Some(bytes) = item else { break };
-                    let flushed = w.write_all(&bytes).await;
-                    // S11: the bytes left the writer queue either way
-                    // (a failed write kills the carrier — a fresh Carrier
-                    // with a zeroed counter replaces it on respawn).
-                    if let Some(c) = self.carrier_of(idx) {
-                        c.queued.fetch_sub(bytes.len() as u64, Ordering::Relaxed);
-                        if flushed.is_ok() {
-                            c.bytes_up.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                    let mut batch = vec![bytes];
+                    while batch.len() < WRITE_BATCH_MAX {
+                        match rx.try_recv() {
+                            Ok(more) => batch.push(more),
+                            Err(_) => break,
                         }
                     }
-                    if let Err(e) = flushed {
-                        tracing::debug!(carrier = idx, error = %e, "bond carrier write failed");
-                        let _ = self.death_tx.send((idx, "write failed"));
-                        break;
-                    }
+                    batch
                 }
+            };
+            let total = batch.iter().map(|b| b.len()).sum::<usize>();
+            let flushed = write_all_vectored(&mut w, batch).await;
+            // S11: the bytes left the writer queue either way (a failed
+            // write kills the carrier — a fresh Carrier with a zeroed
+            // counter replaces it on respawn).
+            if let Some(c) = self.carrier_of(idx) {
+                c.queued.fetch_sub(total as u64, Ordering::Relaxed);
+                if flushed.is_ok() {
+                    c.bytes_up.fetch_add(total as u64, Ordering::Relaxed);
+                }
+            }
+            if let Err(e) = flushed {
+                tracing::debug!(carrier = idx, error = %e, "bond carrier write failed");
+                let _ = self.death_tx.send((idx, "write failed"));
+                break;
             }
         }
         let _ = w.shutdown().await;
@@ -846,9 +925,20 @@ impl Endpoint {
                     }
                 }
                 // Echo on the SAME carrier (cheap, path-symmetric).
+                // S21 P1 FIX: route the pong back on the carrier it
+                // ARRIVED on — `schedule_bytes` re-picked a carrier, so in
+                // multi-adapter setups carrier A's ping could be answered
+                // via carrier B and BOTH rtt_ms samples got
+                // cross-contaminated (feeding the ECF/Balanced schedulers
+                // wrong data). A dead carrier just drops the pong — the
+                // 1 s heartbeat re-probes. The heartbeat ALSO flushes the
+                // sessions' coalesced ACKs (≤1 s ACK latency guarantee).
+                self.flush_all_pending_acks().await;
                 let pong = Frame::control(Kind::Pong, self.bond_id, frame.seq, frame.payload)
                     .encode_to_vec();
-                self.schedule_bytes(pong).await?;
+                if self.send_bytes(_carrier_idx, pong).await.is_err() {
+                    tracing::debug!(carrier = _carrier_idx, "pong dropped (carrier gone)");
+                }
             }
             Kind::Pong => {
                 // S14: payloads are >= 8 bytes (16 since the S14 rate
@@ -890,6 +980,10 @@ impl Endpoint {
                 let Some(s) = self.session_of(frame.session) else {
                     return Ok(());
                 };
+                // S21 P1: the peer is closing — flush OUR pending inbound
+                // ACK first so the peer's flush_then_close (which waits for
+                // its unacked to drain) never stalls on a coalesced ACK.
+                self.flush_session_ack(&s).await;
                 if self.is_server && reason == CloseReason::Eof && !s.closed() {
                     // Client write-close (half-close): the forward stream
                     // ends, the reverse stream keeps flowing until OUR
@@ -978,12 +1072,70 @@ impl Endpoint {
                 let _ = session.inbound_tx.send(Inbound::Data(payload));
             }
         }
-        // Cumulative ACK for everything received in order so far.
+        // Cumulative ACK for everything received in order so far —
+        // COALESCED (S21 P1): send immediately only when ≥8 frames have
+        // advanced since the last ACK or 20 ms elapsed since the first
+        // unflushed one; otherwise park the latest seq (CLOSE + the 1 s
+        // PING heartbeat flush pending ACKs, so the sender's replay window
+        // and close path never stall on a coalesced ACK). The lock guard
+        // is scoped BEFORE the await (Send rule: std guards never span
+        // suspension points).
         let ack_seq = lock(&session.reorder).expected().saturating_sub(1);
-        let ack = Frame::session(Kind::Ack, self.bond_id, session.id, ack_seq, Vec::new())
-            .encode_to_vec();
-        self.schedule_bytes(ack).await?;
+        let flush_now = {
+            let mut ac = lock(&session.ack_coalesce);
+            let first_pending = ac.pending.is_none();
+            let due_by_count = ack_seq.wrapping_sub(ac.last_sent) >= ACK_COALESCE_FRAMES as u64;
+            let due_by_time =
+                !first_pending && ac.since.is_some_and(|t| t.elapsed() >= ACK_COALESCE_WINDOW);
+            if due_by_count || due_by_time {
+                ac.last_sent = ack_seq;
+                ac.pending = None;
+                ac.since = None;
+                true
+            } else {
+                if first_pending {
+                    ac.since = Some(Instant::now());
+                }
+                ac.pending = Some(ack_seq);
+                false
+            }
+        };
+        if flush_now {
+            let ack = Frame::session(Kind::Ack, self.bond_id, session.id, ack_seq, Vec::new())
+                .encode_to_vec();
+            self.schedule_bytes(ack).await?;
+        }
         Ok(())
+    }
+
+    /// S21 P1: send a session's pending coalesced ACK, if any. Best-effort
+    /// (a dead carrier must not turn an ACK flush into an error path).
+    async fn flush_session_ack(self: &Arc<Self>, session: &Arc<Session>) {
+        let seq = {
+            let mut ac = lock(&session.ack_coalesce);
+            match ac.pending.take() {
+                None => return,
+                Some(seq) => {
+                    ac.since = None;
+                    ac.last_sent = seq;
+                    seq
+                }
+            }
+        };
+        let ack =
+            Frame::session(Kind::Ack, self.bond_id, session.id, seq, Vec::new()).encode_to_vec();
+        if let Err(e) = self.schedule_bytes(ack).await {
+            tracing::debug!(session = session.id, error = %e, "coalesced ack flush failed");
+        }
+    }
+
+    /// S21 P1: flush every session's pending ACK (PING heartbeat — bounds
+    /// the coalesced ACK latency to the 1 s sweep even for idle sessions).
+    async fn flush_all_pending_acks(self: &Arc<Self>) {
+        let sessions: Vec<Arc<Session>> = lock(&self.sessions).values().cloned().collect();
+        for s in sessions {
+            self.flush_session_ack(&s).await;
+        }
     }
 
     fn session_of(&self, id: u32) -> Option<Arc<Session>> {
@@ -1048,8 +1200,22 @@ impl Endpoint {
         seq: u64,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
-        let frame = Frame::session(kind, self.bond_id, session.id, seq, payload);
-        let bytes = frame.encode_to_vec();
+        self.send_tracked_slice(session, kind, seq, &payload).await
+    }
+
+    /// S21 P1: slice-based tracked send — the frame is encoded ONCE from
+    /// the borrowed payload (single payload copy; previously send_data
+    /// copied the chunk, then encode copied it again), then the encoded
+    /// bytes are cloned once for the replay map (`unacked` needs its own
+    /// copy for carrier-death replay; the queue consumes the original).
+    pub(crate) async fn send_tracked_slice(
+        &self,
+        session: &Session,
+        kind: Kind,
+        seq: u64,
+        payload: &[u8],
+    ) -> anyhow::Result<()> {
+        let bytes = Frame::encode_session_borrowed(kind, self.bond_id, session.id, seq, payload);
         let mut last_err = None;
         for _ in 0..4 {
             let Some((idx, _c)) = self.pick_carrier() else {
@@ -1089,7 +1255,9 @@ impl Endpoint {
         while offset < bytes.len() {
             let end = (offset + frame::MAX_PAYLOAD).min(bytes.len());
             let seq = session.next_seq.fetch_add(1, Ordering::Relaxed);
-            self.send_tracked(session, Kind::Data, seq, bytes[offset..end].to_vec())
+            // S21 P1: send the SLICE directly — no intermediate chunk copy
+            // (the frame encoder copies the payload exactly once).
+            self.send_tracked_slice(session, Kind::Data, seq, &bytes[offset..end])
                 .await?;
             offset = end;
         }

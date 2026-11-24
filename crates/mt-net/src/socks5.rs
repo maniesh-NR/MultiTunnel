@@ -97,6 +97,12 @@ impl Socks5Outbound {
             let mut s = TcpStream::connect(self.addr)
                 .await
                 .map_err(|e| NetError::ProxyUnreachable(self.addr, e))?;
+            // S21 P1 perf: this loopback leg carries every tunnel byte
+            // (per-connection mode: the whole proxied flow; stream mode:
+            // every carrier). Nagle + delayed-ACK turn the pump's 16 KiB
+            // writes into stop-and-wait micro-bursts; interactive proxy
+            // traffic wants TCP_NODELAY, exactly like the inbound listener.
+            let _ = s.set_nodelay(true);
             // Greeting: offer no-auth (00) only.
             s.write_all(&[VER, 0x01, NO_AUTH]).await?;
             let mut g = [0u8; 2];

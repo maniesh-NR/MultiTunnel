@@ -965,6 +965,66 @@ mod tests {
             .expect("run ok");
     }
 
+    /// S21 P0 regression (mt-net level): a connection held open across
+    /// shutdown (browser keep-alive) is FORCE-closed at the end of the
+    /// drain grace — the client sees EOF, and the listener address is
+    /// immediately re-bindable (the Windows reconnect failure mode:
+    /// `WSAEADDRINUSE` over a lingering established socket).
+    #[tokio::test]
+    async fn shutdown_force_closes_lingering_connections_and_frees_the_port() {
+        use tokio::io::AsyncReadExt as _;
+        let echo = crate::test_support::spawn_echo().await;
+        let links: Vec<Arc<dyn Outbound>> = vec![Arc::new(FakeOutbound::echo("link-a", echo))];
+        let ts = start(links, Router::new(Vec::new())).await;
+        let socks_addr = ts.server.socks_local_addr().unwrap();
+        let target = TargetAddr {
+            host: Host::Ip(echo.ip()),
+            port: echo.port(),
+        };
+        let cli = socks5::Socks5Outbound::new(socks_addr);
+        let mut held = tokio::time::timeout(Duration::from_secs(3), cli.connect(&target))
+            .await
+            .expect("connect in time")
+            .expect("socks tunnel established");
+        // No traffic, no close: the idle keep-alive the drain cannot reap.
+        // Flip shutdown WITHOUT holding the TestServer (its run handle is
+        // owned by this scope; the server Arc lives in the pumps).
+        ts.shutdown_tx.send(true).unwrap();
+        let started = Instant::now();
+        tokio::time::timeout(Duration::from_secs(DRAIN_GRACE.as_secs() + 2), ts.run)
+            .await
+            .expect("run() returns after grace + force-close")
+            .expect("join")
+            .expect("run ok");
+
+        // The lingering connection was force-closed: EOF within 2 s.
+        let mut buf = [0u8; 8];
+        let eof = tokio::time::timeout(Duration::from_secs(2), held.read(&mut buf)).await;
+        assert!(
+            matches!(eof, Ok(Ok(0)) | Ok(Err(_))),
+            "held connection must be force-closed at shutdown"
+        );
+        // The port is free again immediately (bind retry absorbs the
+        // teardown race; on Windows this is the reconnect fix).
+        let rebound = tokio::time::timeout(Duration::from_secs(3), async move {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match TcpListener::bind(socks_addr).await {
+                    Ok(l) => break Ok(l),
+                    Err(_e) if Instant::now() < deadline => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(e) => break Err(e),
+                }
+            }
+        })
+        .await
+        .expect("rebind attempt in time")
+        .expect("listener address is re-bindable after force-close");
+        drop(rebound);
+        let _ = started;
+    }
+
     // ---------- S11: load-aware scheduling E2E ----------
 
     /// Balanced avoids the link that is already carrying bytes, and

@@ -147,6 +147,30 @@ impl Frame {
         }
     }
 
+    /// S21 P1: encode a session frame DIRECTLY from a borrowed payload —
+    /// header + payload land in one fresh buffer with a single payload
+    /// copy (the old route `Frame::session(.., payload.to_vec()).
+    /// encode_to_vec()` copied the payload twice).
+    pub fn encode_session_borrowed(
+        kind: Kind,
+        bond_id: u32,
+        session: u32,
+        seq: u64,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        let wire_len = HEADER_LEN + payload.len();
+        let mut v = Vec::with_capacity(wire_len);
+        v.extend_from_slice(&MAGIC.to_le_bytes());
+        v.push(VERSION);
+        v.push(kind as u8);
+        v.extend_from_slice(&bond_id.to_le_bytes());
+        v.extend_from_slice(&session.to_le_bytes());
+        v.extend_from_slice(&seq.to_le_bytes());
+        v.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        v.extend_from_slice(payload);
+        v
+    }
+
     /// Encoded size (header + payload).
     pub fn wire_len(&self) -> usize {
         HEADER_LEN + self.payload.len()
@@ -358,6 +382,22 @@ mod tests {
             assert_eq!(len, f.payload.len());
             assert_eq!(&bytes[HEADER_LEN..], f.payload.as_slice());
         }
+    }
+
+    /// S21 P1: the borrowed-payload fast encoder must be BYTE-IDENTICAL
+    /// to the owned-Frame route (same wire format — both ends must agree).
+    #[test]
+    fn encode_session_borrowed_is_wire_identical() {
+        let f = sample(Kind::Data);
+        let owned =
+            Frame::session(f.kind, f.bond_id, f.session, f.seq, f.payload.clone()).encode_to_vec();
+        let borrowed =
+            Frame::encode_session_borrowed(f.kind, f.bond_id, f.session, f.seq, &f.payload);
+        assert_eq!(owned, borrowed);
+        // Empty payload too (control-ish session frames).
+        let owned = Frame::session(Kind::Ack, 9, 3, 41, Vec::new()).encode_to_vec();
+        let borrowed = Frame::encode_session_borrowed(Kind::Ack, 9, 3, 41, &[]);
+        assert_eq!(owned, borrowed);
     }
 
     #[test]

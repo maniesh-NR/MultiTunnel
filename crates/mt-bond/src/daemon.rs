@@ -85,6 +85,11 @@ async fn accept_loop(
         };
         let bonds = Arc::clone(bonds);
         tokio::spawn(async move {
+            // S21 P1 perf: the carrier leg is bulk+latency mixed; Nagle on
+            // the public-internet carrier turns each 16 KiB frame's tail
+            // segment into a delayed-ACK stall (~40 ms per frame on Linux
+            // peers) — TCP_NODELAY, matching the client side.
+            let _ = conn.set_nodelay(true);
             if let Err(e) = handle_conn(bonds, conn).await {
                 tracing::debug!("bond carrier connection ended: {e}");
             }
@@ -267,10 +272,14 @@ async fn dial_target(target: &TargetAddr) -> anyhow::Result<TcpStream> {
     match &target.host {
         Host::Domain(d) => {
             let stream = TcpStream::connect((d.as_str(), target.port)).await?;
+            // S21 P1 perf: Nagle here stalls the session pump's 16 KiB
+            // writes behind the target's delayed ACK.
+            let _ = stream.set_nodelay(true);
             Ok(stream)
         }
         Host::Ip(ip) => {
             let stream = TcpStream::connect(SocketAddr::new(*ip, target.port)).await?;
+            let _ = stream.set_nodelay(true);
             Ok(stream)
         }
     }

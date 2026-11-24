@@ -1028,6 +1028,13 @@ impl RealService {
         };
 
         let policy = merge_policy_from_str(&settings.settings.merge_policy);
+        // S21 P1: the background probers get the SAME user-configured probe
+        // target as the connect-time probe (previously hardcoded 1.1.1.1:443
+        // — a target the tunnel server may block or rate-limit, feeding
+        // false quarantines). Parsed before the server is built so the
+        // builder receives it.
+        let probe_target = parse_probe_target(&settings.probe_target)
+            .unwrap_or_else(|| parse_probe_target(DEFAULT_PROBE_TARGET).expect("constant parses"));
         // Empty rule list = stock rules (LAN/private bypass, S6-REV-C P1-4);
         // a user-defined list is respected verbatim.
         let rules = if settings.rules.is_empty() {
@@ -1103,7 +1110,10 @@ impl RealService {
             } else {
                 links
             };
-        let server = Arc::new(ProxyServer::new(socks, http, links.clone(), router, policy));
+        let server = Arc::new(
+            ProxyServer::new(socks, http, links.clone(), router, policy)
+                .with_probe_target(probe_target.clone()),
+        );
         let proxy_events = server.subscribe();
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -1151,8 +1161,6 @@ impl RealService {
 
         // Full round-trip probe through the link (engine spawn/download
         // included; the budget covers a first-run engine fetch).
-        let probe_target = parse_probe_target(&settings.probe_target)
-            .unwrap_or_else(|| parse_probe_target(DEFAULT_PROBE_TARGET).expect("constant parses"));
         let Some(link) = links.first().cloned() else {
             // Unreachable (an empty link list failed above) — belt and braces.
             self.abort_connect(shutdown_tx, run_handle, pump_handle)
