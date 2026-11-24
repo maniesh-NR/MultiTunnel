@@ -68,6 +68,7 @@ use tokio::time::timeout;
 
 use crate::merge::{prober_loop, Aggregator};
 use crate::outbound::DirectOutbound;
+use crate::qos::QosScheduler;
 use crate::router::Router;
 use crate::shutdown::wait_for_shutdown;
 use crate::socks5::{self, rep};
@@ -190,6 +191,10 @@ pub struct ProxyServer {
     direct: Arc<dyn Outbound>,
     events: broadcast::Sender<ProxyEvent>,
     shared: Arc<Shared>,
+    /// S21 (feature o): optional fair-share scheduler. `None` = disabled
+    /// (all stock builders/tests); production attaches one when the
+    /// Settings toggle is on, and can live-flip the flag mid-session.
+    qos: Option<Arc<QosScheduler>>,
 }
 
 impl ProxyServer {
@@ -215,7 +220,21 @@ impl ProxyServer {
             direct: Arc::new(DirectOutbound::new()),
             events,
             shared: Arc::new(Shared::default()),
+            qos: None,
         }
+    }
+
+    /// S21 (feature o): attach the fair-share scheduler (per-target group
+    /// shaping; see [`QosScheduler`]).
+    pub fn with_qos(mut self, qos: Arc<QosScheduler>) -> Self {
+        self.qos = Some(qos);
+        self
+    }
+
+    /// The attached fair-share scheduler, if any (the service live-flips
+    /// its enabled flag on the Settings toggle).
+    pub fn qos(&self) -> Option<Arc<QosScheduler>> {
+        self.qos.clone()
     }
 
     /// Override the background probe interval.
@@ -293,6 +312,7 @@ impl ProxyServer {
         background.push(tokio::spawn(tick_loop(
             Arc::clone(&self.shared),
             Arc::clone(&self.aggregator),
+            self.qos.clone(),
             self.events.clone(),
             shutdown.clone(),
         )));
@@ -609,6 +629,15 @@ impl ProxyServer {
         let down_count = Arc::new(AtomicU64::new(0));
         // S11: the per-link counter (up+down combined) the pumps bump.
         let link_counter = link_idx.and_then(|i| self.aggregator.link_bytes(i));
+        // S21 (feature o): flows group by TARGET for fair sharing — one
+        // application = one group regardless of how many connections it
+        // opens. Registered/unregistered around the pump lifetime so the
+        // ticker's contention math counts live groups only.
+        let group = target.to_string();
+        let qos = self.qos.as_ref().map(|q| {
+            q.register(&group);
+            (Arc::clone(q), group.clone())
+        });
         let (client_rd, client_wr) = tokio::io::split(client);
         let (up_rd, up_wr) = tokio::io::split(upstream);
         let pump_up = tokio::spawn(pump(
@@ -618,6 +647,7 @@ impl ProxyServer {
             Arc::clone(&up_count),
             Arc::clone(&self.shared.up_total),
             link_counter.clone(),
+            qos.clone(),
         ));
         let pump_down = tokio::spawn(pump(
             up_rd,
@@ -626,6 +656,7 @@ impl ProxyServer {
             Arc::clone(&down_count),
             Arc::clone(&self.shared.down_total),
             link_counter,
+            qos,
         ));
         // S21 P0 fix: the pumps are DETACHED children of this task — if a
         // shutdown force-close aborts THIS task, dropping their JoinHandles
@@ -643,6 +674,9 @@ impl ProxyServer {
         }
         let up = up_count.load(Ordering::Relaxed);
         let down = down_count.load(Ordering::Relaxed);
+        if let Some(q) = &self.qos {
+            q.unregister(&group);
+        }
         let dur_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         tracing::debug!(target = %target, link, up, down, dur_ms, "connection closed");
         if let Some(idx) = link_idx {
@@ -668,6 +702,7 @@ async fn pump<R, W>(
     conn: Arc<AtomicU64>,
     global: Arc<AtomicU64>,
     per_link: Option<Arc<AtomicU64>>,
+    qos: Option<(Arc<QosScheduler>, String)>,
 ) -> std::io::Result<()>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -679,6 +714,12 @@ where
     }
     let mut buf = vec![0u8; PUMP_BUF];
     loop {
+        // S21 (feature o): the fair-share gate — blocks this pump until
+        // the flow's target group has budget for one read. Cheap when
+        // shaping is off or uncontended (one atomic load + map lookup).
+        if let Some((sched, group)) = &qos {
+            sched.acquire(group, PUMP_BUF as u64).await;
+        }
         let n = rd.read(&mut buf).await?;
         if n == 0 {
             let _ = wr.shutdown().await;
@@ -769,6 +810,7 @@ async fn accept_loop(server: Arc<ProxyServer>, listener: TcpListener, kind: Inbo
 async fn tick_loop(
     shared: Arc<Shared>,
     aggregator: Arc<Aggregator>,
+    qos: Option<Arc<QosScheduler>>,
     events: broadcast::Sender<ProxyEvent>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -787,13 +829,17 @@ async fn tick_loop(
         last_tick = now;
         let up = shared.up_total.load(Ordering::Relaxed);
         let down = shared.down_total.load(Ordering::Relaxed);
-        let ev = ProxyEvent::Tick {
-            up_bps: up.saturating_sub(last_up),
-            down_bps: down.saturating_sub(last_down),
-        };
+        let up_bps = up.saturating_sub(last_up);
+        let down_bps = down.saturating_sub(last_down);
+        let ev = ProxyEvent::Tick { up_bps, down_bps };
         last_up = up;
         last_down = down;
         aggregator.tick_loads(dt).await;
+        // S21 (feature o): the fair-share refill runs on the same 1 s
+        // cadence, off the measured aggregate (no extra sampling).
+        if let Some(q) = &qos {
+            q.tick(up_bps, down_bps);
+        }
         let _ = events.send(ev);
     }
 }

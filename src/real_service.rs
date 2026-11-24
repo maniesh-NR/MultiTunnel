@@ -609,6 +609,7 @@ impl Default for SettingsFile {
                 kill_switch: false,
                 diagnostics: false,
                 speed_test_url: default_speed_test_url(),
+                qos_fair: false,
             },
             // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
             // settings.json must carry private-CIDR → direct rules, mirroring
@@ -1112,7 +1113,13 @@ impl RealService {
             };
         let server = Arc::new(
             ProxyServer::new(socks, http, links.clone(), router, policy)
-                .with_probe_target(probe_target.clone()),
+                .with_probe_target(probe_target.clone())
+                // S21 (feature o): the fair-share scheduler is ALWAYS
+                // attached (initialized from settings) so the Settings
+                // toggle can flip it live without rebuilding the session.
+                .with_qos(Arc::new(mt_net::QosScheduler::new(
+                    settings.settings.qos_fair,
+                ))),
         );
         let proxy_events = server.subscribe();
 
@@ -1987,6 +1994,10 @@ impl MtService for RealService {
         // on them AFTER the (successful) persist below.
         let diagnostics_changed = file.settings.diagnostics != settings.diagnostics;
         let kill_switch_disabled = file.settings.kill_switch && !settings.kill_switch;
+        // S21 (feature o): the QoS fair-share scheduler flips LIVE on the
+        // attached session — no reconnect (nothing in the data plane
+        // changes; the scheduler's enabled flag is atomic).
+        let qos_changed = file.settings.qos_fair != settings.qos_fair;
         // S20 (Copilot round 2): the engines only pick up the debug log
         // level at SPAWN time, so enabling diagnostics while CONNECTED
         // must reconnect — otherwise the file silently misses the engine
@@ -2056,6 +2067,28 @@ impl MtService for RealService {
             }));
             self.disconnect().await;
             self.connect().await;
+        }
+        // S21 (feature o): live QoS flip — applies to the attached session
+        // immediately (the pump gate re-checks the flag per read) and to
+        // every future session through settings.json.
+        if qos_changed {
+            let sched = lock(&self.core.session)
+                .as_ref()
+                .and_then(|s| s.server.qos());
+            match sched {
+                Some(q) => {
+                    q.set_enabled(settings.qos_fair);
+                    self.core.emit(ServiceEvent::LogLine(if settings.qos_fair {
+                        "INFO  QoS fair share ON — no single site/application can hog the bandwidth anymore".into()
+                    } else {
+                        "INFO  QoS fair share OFF".into()
+                    }));
+                }
+                None => {
+                    // No live session: the flag persists; the next connect
+                    // attaches a scheduler initialized from settings.json.
+                }
+            }
         }
         // S19: turning the kill switch off is an explicit escape hatch for
         // an engaged black-hole (the give_up path keeps the proxy blocked
@@ -2908,6 +2941,7 @@ mod tests {
                 kill_switch: false,
                 diagnostics: false,
                 speed_test_url: default_speed_test_url(),
+                qos_fair: false,
             },
             rules: Vec::new(),
             socks_port: 0,
@@ -4036,6 +4070,51 @@ mod tests {
         assert_eq!(&buf, b"ping");
     }
 
+    /// S21 (feature o): the QoS toggle persists, flips the LIVE session's
+    /// scheduler WITHOUT a reconnect, and is visible to a fresh service
+    /// instance (settings.json round-trip).
+    #[tokio::test]
+    async fn qos_toggle_flips_live_without_reconnect_and_persists() {
+        let echo = spawn_echo().await;
+        let paths = scratch("qos");
+        write_settings(&paths, echo.port(), false);
+        let svc = RealService::with(paths.clone(), Arc::new(FakeFactory { echo, fail: false }));
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("activate");
+        svc.connect().await;
+        assert_eq!(svc.status().await.state, ServiceState::Connected);
+
+        // Flip ON: persisted, live scheduler enabled, session untouched.
+        let mut settings = svc.settings().await;
+        settings.qos_fair = true;
+        svc.set_settings(settings).await.expect("save");
+        assert!(svc.settings().await.qos_fair, "persisted");
+        let sched = lock(&svc.core.session)
+            .as_ref()
+            .and_then(|s| s.server.qos())
+            .expect("the live session carries the scheduler");
+        assert!(sched.enabled(), "live flip applies without a rebuild");
+        assert_eq!(
+            svc.status().await.state,
+            ServiceState::Connected,
+            "the QoS toggle must NOT reconnect"
+        );
+
+        // Flip OFF: live disable.
+        let mut settings = svc.settings().await;
+        settings.qos_fair = false;
+        svc.set_settings(settings).await.expect("save");
+        assert!(!svc.settings().await.qos_fair);
+        assert!(!sched.enabled(), "live disable applies");
+
+        // Flip ON again and prove persistence across instances.
+        let mut settings = svc.settings().await;
+        settings.qos_fair = true;
+        svc.set_settings(settings).await.expect("save");
+        let svc2 = RealService::with(paths, Arc::new(FakeFactory { echo, fail: false }));
+        assert!(svc2.settings().await.qos_fair, "survives a restart");
+    }
+
     #[tokio::test]
     async fn factory_failure_reports_failed_with_no_leftover_server() {
         let paths = scratch("fail");
@@ -4092,6 +4171,7 @@ mod tests {
             kill_switch: false,
             diagnostics: false, // never true here: the sink is process-global
             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
+            qos_fair: true, // round-trips a non-default value
         };
         svc.set_settings(view.clone()).await.expect("save settings");
         assert_eq!(svc.settings().await, view);

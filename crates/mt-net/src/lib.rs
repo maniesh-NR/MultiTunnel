@@ -183,6 +183,7 @@ mod error;
 mod http;
 mod merge;
 mod outbound;
+mod qos;
 mod router;
 mod server;
 mod shutdown;
@@ -196,6 +197,7 @@ pub use merge::{
     CAPACITY_FLOOR_BPS, CONN_RESERVE_BPS, SATURATION_FRACTION,
 };
 pub use outbound::DirectOutbound;
+pub use qos::QosScheduler;
 pub use router::Router;
 pub use server::ProxyServer;
 pub use socks5::Socks5Outbound;

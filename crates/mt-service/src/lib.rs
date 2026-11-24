@@ -172,6 +172,14 @@ pub struct SettingsView {
     /// payload needs no TLS of its own (D18's zero-TLS rule).
     #[serde(default = "default_speed_test_url")]
     pub speed_test_url: String,
+    /// S21 (feature o): fair-share bandwidth scheduler ("QoS") — when ON,
+    /// the proxy groups flows by TARGET and, under contention (≥2 groups
+    /// racing for an aggregate above the floor), caps each group at its
+    /// `aggregate / groups` share, so no single application/site can
+    /// dominate all the bandwidth. Flips live (no reconnect). Absent in
+    /// older files → false (D8 version-free migration by serde default).
+    #[serde(default)]
+    pub qos_fair: bool,
 }
 
 /// S18: how the app resolves light vs dark appearance. Serialized as
@@ -885,6 +893,7 @@ mod close_to_tray_migration_tests {
                 kill_switch: false,
                 diagnostics: false,
                 speed_test_url: default_speed_test_url(),
+                qos_fair: false,
             }
         }
     }
@@ -1028,5 +1037,28 @@ mod s19_migration_tests {
         assert!(back.kill_switch);
         assert!(back.diagnostics);
         assert_eq!(back.speed_test_url, "http://127.0.0.1:9/down");
+    }
+
+    /// S21 (feature o): settings.json written by v0.13 and older (no
+    /// `qos_fair` key) loads with the scheduler OFF (D8 version-free
+    /// migration via serde default), and an explicit choice round-trips.
+    #[test]
+    fn s21_qos_fair_defaults_and_roundtrip() {
+        let json = r#"{
+            "theme_seed": 42,
+            "dark_mode": false,
+            "system_proxy": true,
+            "merge_policy": "balanced",
+            "autostart": false,
+            "log_level": "info"
+        }"#;
+        let v: SettingsView = serde_json::from_str(json).expect("old settings load");
+        assert!(!v.qos_fair, "absent key → scheduler off");
+        let mut v = SettingsView::default_settings_for_tests();
+        v.qos_fair = true;
+        let json = serde_json::to_string(&v).expect("serialize");
+        assert!(json.contains("\"qos_fair\":true"));
+        let back: SettingsView = serde_json::from_str(&json).expect("reload");
+        assert!(back.qos_fair);
     }
 }

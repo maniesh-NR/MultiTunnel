@@ -468,37 +468,75 @@ pub fn status(app: &App) -> Element<'_> {
         .height(Length::Fixed(STATUS_GRAPH_HEIGHT));
     let _ = util::fmt_bps; // rate labels live in graph.rs; kept for chips/tests
 
-    // --- exit probe card (D18; S19 works offline too) ----------------------
+    // --- merged exit & speed panel (S21, user ask p) -------------------------
+    // The two separate cards each carried a title + subtitle + button +
+    // result rows with lots of air between them; ONE panel shares the
+    // header, puts both triggers side by side and stacks the result rows
+    // compactly. All state/messages are unchanged — a pure view merge
+    // inside the page scrollable (D24: nothing growable in the frame).
     let has_active = app.profiles.iter().any(|p| p.active);
-    let mut exit_col = column![
-        text("Exit identity")
+    // Both triggers live in ONE row (S21 merged panel). Explicit Element
+    // annotations: the two branches build different widget types and the
+    // row needs a single erased type.
+    let exit_ctl: Element = if app.exit_probing {
+        container(
+            text("probing…")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant),
+        )
+        .width(Length::Fill)
+        .into()
+    } else {
+        container(m3_button(
+            "Check exit IP",
+            has_active && !app.speed_testing,
+            ButtonKind::Tonal,
+            Message::ExitProbe,
+            app,
+        ))
+        .width(Length::Fill)
+        .into()
+    };
+    let speed_ctl: Element = if app.speed_testing {
+        container(
+            text("testing… (up to 30 s)")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant),
+        )
+        .width(Length::Fill)
+        .into()
+    } else {
+        container(m3_button(
+            "Run speed test",
+            has_active && !app.exit_probing,
+            ButtonKind::Tonal,
+            Message::SpeedTest,
+            app,
+        ))
+        .width(Length::Fill)
+        .into()
+    };
+    let mut diag_col = column![
+        text("Exit & speed")
             .size(ts.title_m.size)
             .color(s.on_surface),
         text(if has_active {
-            "checks which IP the internet sees — connected (rides the live tunnel) or not \
-             (spawns a temporary probe tunnel)"
+            "check which IP the internet sees and measure the download rate — the live \
+             tunnel when connected, a temporary probe tunnel otherwise (setup is \
+             excluded from the rate)"
         } else {
-            "checks which IP the internet sees — pick an active server first"
+            "check which IP the internet sees and measure the download rate — pick an \
+             active server first"
         })
         .size(ts.body_s.size)
         .color(s.on_surface_variant),
     ]
-    .spacing(6);
-    if app.exit_probing {
-        exit_col = exit_col.push(
-            text("probing…")
-                .size(ts.body_m.size)
-                .color(s.on_surface_variant),
-        );
-    } else {
-        exit_col = exit_col.push(m3_button(
-            "Check exit IP",
-            has_active,
-            ButtonKind::Tonal,
-            Message::ExitProbe,
-            app,
-        ));
-    }
+    .spacing(6)
+    .push(
+        row![exit_ctl, speed_ctl]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+    );
     if let Some(res) = &app.exit {
         match res {
             Ok(info) => {
@@ -521,9 +559,12 @@ pub fn status(app: &App) -> Element<'_> {
                         s.on_error_container,
                     )
                 };
-                exit_col = exit_col
+                diag_col = diag_col
                     .push(
                         row![
+                            text("exit")
+                                .size(ts.label_m.size)
+                                .color(s.on_surface_variant),
                             text(info.exit_ip.clone())
                                 .size(ts.headline_s.size)
                                 .color(s.on_surface),
@@ -567,53 +608,23 @@ pub fn status(app: &App) -> Element<'_> {
                     );
             }
             Err(e) => {
-                exit_col = exit_col.push(
-                    text(format!("probe failed: {e}"))
+                diag_col = diag_col.push(
+                    text(format!("exit probe failed: {e}"))
                         .size(ts.body_s.size)
                         .color(s.error),
                 );
             }
         }
     }
-    let exit_card = container(exit_col.spacing(8).padding(16))
-        .style(t3::card(s, s.surface_container_low))
-        .width(Length::Fill);
-
-    // --- speed test card (S19) ---------------------------------------------
-    let mut speed_col = column![
-        text("Speed test").size(ts.title_m.size).color(s.on_surface),
-        text(if has_active {
-            "downloads a test payload through the active server — the live tunnel when \
-             connected, a temporary probe tunnel otherwise (single carrier; setup is \
-             excluded from the rate)"
-        } else {
-            "downloads a test payload through the active server — pick an active server first"
-        })
-        .size(ts.body_s.size)
-        .color(s.on_surface_variant),
-    ]
-    .spacing(6);
-    if app.speed_testing {
-        speed_col = speed_col.push(
-            text("testing… (up to 30 s)")
-                .size(ts.body_m.size)
-                .color(s.on_surface_variant),
-        );
-    } else {
-        speed_col = speed_col.push(m3_button(
-            "Run speed test",
-            has_active,
-            ButtonKind::Tonal,
-            Message::SpeedTest,
-            app,
-        ));
-    }
     if let Some(res) = &app.speed {
         match res {
             Ok(info) => {
-                speed_col = speed_col
+                diag_col = diag_col
                     .push(
                         row![
+                            text("speed")
+                                .size(ts.label_m.size)
+                                .color(s.on_surface_variant),
                             text(format!("{:.1} Mbps", info.mbps))
                                 .size(ts.headline_s.size)
                                 .color(s.on_surface),
@@ -659,7 +670,7 @@ pub fn status(app: &App) -> Element<'_> {
                     );
             }
             Err(e) => {
-                speed_col = speed_col.push(
+                diag_col = diag_col.push(
                     text(format!("speed test failed: {e}"))
                         .size(ts.body_s.size)
                         .color(s.error),
@@ -667,7 +678,7 @@ pub fn status(app: &App) -> Element<'_> {
             }
         }
     }
-    let speed_card = container(speed_col.spacing(8).padding(16))
+    let diag_card = container(diag_col.spacing(8).padding(16))
         .style(t3::card(s, s.surface_container_low))
         .width(Length::Fill);
 
@@ -828,8 +839,7 @@ pub fn status(app: &App) -> Element<'_> {
             .width(Length::Fill),
         );
     }
-    below = below.push(exit_card);
-    below = below.push(speed_card);
+    below = below.push(diag_card);
     below = below.push(bottom_card);
     let page_scroll = scrollable(container(below).width(Length::Fill))
         .width(Length::Fill)
@@ -2022,6 +2032,24 @@ pub fn settings(app: &App) -> Element<'_> {
              system-proxy traffic; apps using the SOCKS/HTTP port already fail \
              closed while the tunnel is down. off (default): the proxy is \
              restored on a spontaneous death and traffic goes direct (fail-open).",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
+        // S21 (feature o): the fair-share bandwidth scheduler.
+        toggler(app.settings.qos_fair)
+            .label("QoS fair share (stop one app hogging all bandwidth)")
+            .size(28.0)
+            .on_toggle(Message::QosToggled)
+            .style(t3::switch(s)),
+        text(
+            "on: connections are grouped by the site they talk to; when two or \
+             more groups race for a loaded tunnel, each gets an equal share — \
+             a single download cannot starve everything else. One group alone \
+             (or an idle tunnel) runs at full speed. Applies immediately, no \
+             reconnect. off (default): every connection competes freely and \
+             one busy site can take all of it. Note: grouping is per \
+             destination — a download manager spreading over many servers \
+             counts as several groups.",
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant),

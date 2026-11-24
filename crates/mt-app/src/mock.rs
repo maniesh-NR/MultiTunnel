@@ -110,6 +110,7 @@ impl MockService {
             kill_switch: false,
             diagnostics: false,
             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
+            qos_fair: false,
         };
         let inner = Inner {
             state: ServiceState::Disconnected,

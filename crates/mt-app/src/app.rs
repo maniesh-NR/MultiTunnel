@@ -387,6 +387,8 @@ pub enum Message {
     SpeedTested(Result<mt_service::SpeedTestInfo, String>),
     /// Kill switch toggled (Settings → Network).
     KillSwitchToggled(bool),
+    /// S21 (feature o): the fair-share bandwidth scheduler toggle.
+    QosToggled(bool),
     /// Diagnostics mode toggled (Settings → Diagnostics).
     DiagnosticsToggled(bool),
     /// The diagnostics file path arrived (init / after a toggle).
@@ -676,6 +678,7 @@ impl App {
             kill_switch: false,
             diagnostics: false,
             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
+            qos_fair: false,
         };
         // S18: detect the OS appearance once so the System mode (the
         // stock default) starts honest.
@@ -1719,6 +1722,11 @@ impl App {
             }
             Message::KillSwitchToggled(v) => {
                 self.settings.kill_switch = v;
+                return self.save_settings(self.settings.clone());
+            }
+            // S21 (feature o): flips live in the service (no reconnect).
+            Message::QosToggled(v) => {
+                self.settings.qos_fair = v;
                 return self.save_settings(self.settings.clone());
             }
             Message::DiagnosticsToggled(v) => {
@@ -3254,6 +3262,21 @@ mod tests {
         drop(app.update(Message::SpeedTested(Err("no data received".into()))));
         assert!(app.speed.as_ref().expect("error result present").is_err());
         assert!(app.logs.iter().any(|l| l.contains("speed test")));
+    }
+
+    /// S21 (feature o): the QoS toggle updates the draft settings exactly
+    /// like the kill-switch twin (persistence through the service is
+    /// proven directly in real_service's qos_toggle test).
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn s21_qos_toggle_updates_draft() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        assert!(!app.settings.qos_fair);
+        drop(app.update(Message::QosToggled(true)));
+        assert!(app.settings.qos_fair);
+        drop(app.update(Message::QosToggled(false)));
+        assert!(!app.settings.qos_fair);
     }
 
     /// S19: kill switch + diagnostics + speed-URL toggles update the draft

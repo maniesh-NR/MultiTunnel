@@ -693,6 +693,7 @@ mod tests {
             kill_switch: false,
             diagnostics: false,
             speed_test_url: String::new(),
+            qos_fair: false,
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);
