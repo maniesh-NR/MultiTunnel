@@ -222,6 +222,60 @@
       ]
     },
     {
+      "id": "decision:D29",
+      "type": "decision",
+      "title": "D29 P0 reconnect force-close + bind retry",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/curated/",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "Second-connection bug root cause: untracked connection tasks pinned listener-port sockets past the drain; Windows re-bind WSAEADDRINUSE (Linux tolerates re-bind over non-listening sockets — proven by scripts/rebind_probe.rs). Fix: Shared.conns AbortHandles + end-of-drain force-close + AbortPumpsOnDrop (pumps detach on JoinHandle drop) + bind_with_retry 5s. engine_file_stem FNV identity hash separates same-tag profiles (H2); store_mtx serializes profiles.json RMW (H3). source=src/real_service.rs#connect",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "decision:D30",
+      "type": "decision",
+      "title": "D30 QoS fair share + merged Exit&speed panel",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/curated/",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "QoS: per-destination groups, 1 s tick refills aggregate/groups only under contention (>=2 groups AND >=2 MiB/s aggregate floor), pump read gate blocks until budget, scheduler ALWAYS attached so the Settings qos_fair toggle flips live (no reconnect). Merged Exit & speed Status panel (view-only merge, D24-safe, both triggers side-by-side). P1 parity: TCP_NODELAY x4 legs, ACK coalescing 8 frames/20ms with CLOSE+PING flush, same-carrier PONG echo (RTT was cross-contaminated), send-path copies 5->3 (encode_session_borrowed, wire-identity test), writev batching (<=16 frames), quarantine last-resort fallback (no sole-link blackout), production prober uses user probe target. source=crates/mt-net/src/qos.rs",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "ledger:s21",
+      "type": "ledger",
+      "title": "S21: P0 second-connection fix, perf parity, QoS toggle, merged panel (v0.14.0)",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/curated/",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-24T21:00Z | s21 | IMPLEMENTED + RELEASED v0.14.0: P0 = tracked connection tasks + end-of-drain force-close + pump-abort guard + bind retry (Windows WSAEADDRINUSE root cause; Linux-tolerant re-bind proven; regression test fails pre-fix) + engine_file_stem FNV identity hash + store_mtx; P1 = TCP_NODELAY x4 legs, ACK coalescing 8/20ms, same-carrier PONG echo, copies 5->3, writev <=16, quarantine last-resort fallback, user probe target; o = QoS fair share (per-destination groups, >=2 groups + >=2 MiB/s floor, live toggle, no reconnect); p = merged Exit & speed panel. 490/0; all 8 gates; release run 45477702090 SUCCESS attempt-3 (2 documented runner-flake legs rerun; logs archived s21-ci-*); assets verified. source=harness/memory/LEDGER.md#s21",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "project:multitunnel",
       "type": "project",
       "title": "MultiTunnel — Rust rewrite of BondTunnel; zero-dependency all-in-one (v2rayN import + net-merge), Material You GUI",

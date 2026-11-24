@@ -56,6 +56,52 @@
 
 ## Active Playbook & Todo List
 
+- **Stage**: S21 CLOSED — v0.14.0 released and verified (tag on e510e43,
+  release run 45477702090 SUCCESS on attempt 3, same-commit ci green on
+  both OS legs, assets download-verified). The user's four asks shipped:
+  (1) P0 SECOND-CONNECTION BUG — mid-traffic reconnect re-binds the fixed
+  listener ports while untracked in-flight connection tasks pin their
+  sockets (no SO_REUSEADDR); on Windows the re-bind lands WSAEADDRINUSE
+  → connect Failed → dead tunnel until restart. Linux tolerates the
+  re-bind (std rebind probe), so the regression test asserts the
+  platform-independent observable: the lingering client connection sees
+  EOF after the picker switch (pre-fix FAILS, post-fix passes). Fix:
+  Shared.conns tracks every connection task's AbortHandle; run()
+  force-closes whatever the 3 s drain could not reap; AbortPumpsOnDrop
+  aborts the DETACHED pump children (dropping JoinHandles leaves them
+  running — found when the first EOF assertion failed); bind_with_retry
+  5 s (BIND_WAIT 2→8 s). H2: engine config/log stems carry a
+  deterministic FNV-1a hash of the full endpoint identity
+  (engine_file_stem) — same-tag different-endpoint profiles can no
+  longer overwrite each other's Xray config (temp probe tunnels
+  corrupting the LIVE engine → phantom respawn → DEGRADED while GUI
+  showed Connected). H3: Core.store_mtx serializes profiles.json
+  read-modify-write. (2) P1 PERF PARITY — TCP_NODELAY on all four legs
+  (Nagle+delayed-ACK stalled each 16 KiB frame ~40 ms on Linux peers);
+  quarantine can no longer blackhole the sole link (pick_excluding
+  last-resort fallback; dial decides, fail-open); production prober uses
+  the user probe_target; cumulative ACKs coalesced (8 frames / 20 ms,
+  flushed by CLOSE + the 1 s PING heartbeat); PONG echoes on the
+  RECEIVING carrier (rtt_ms was cross-contaminated across carriers);
+  send-path copies 5→3 (encode_session_borrowed; wire-identity tested);
+  carrier writer batches ≤16 frames per write_vectored. (3) O — QoS
+  FAIR SHARE toggle (Settings → Network, qos_fair): mt-net/src/qos.rs
+  QosScheduler groups flows by TARGET; 1 s tick refills
+  aggregate/groups ONLY under contention (≥2 groups AND ≥2 MiB/s
+  aggregate; single group/idle unlimited); pump read gate; ALWAYS
+  attached so the toggle flips LIVE (no reconnect). (4) P — merged
+  Exit & speed panel: one Status card, both triggers side-by-side,
+  result rows stacked (D24-safe; rig-verified sf=1.0 + pixel-diff of the
+  toggle knob 39→55 + sf=1.5). TESTS 490/0 (+16). GATES all green
+  (fresh ziglang wheel — the tools/pypkgs wheel was incomplete AGAIN,
+  no lib/libc/include → ring stddef.h failure; reinstalled 0.14.1 from
+  PyPI). RELEASE SAGA: attempt-1 ubuntu carrier_death 'no live bond
+  carrier' (the PRE-EXISTING S11/S18/S19 runner race, signature exactly
+  as backlogged), attempt-2 windows domain_targets 60 s deadline,
+  attempt-3 SUCCESS; logs archived s21-ci-*.log. SANDBOX was recycled:
+  stale clone at s13 → remote authoritative, snapshot+fast-forward;
+  rustup/zigbuild/xkblibs/python-xlib rebuilt per the ritual.
+
 - **Stage**: S20 CLOSED — the S19 leftover (Copilot code review) COMPLETED
   and shipped as v0.13.1 (tag on 4923566, release run 44983522874 SUCCESS,
   ci ×2 green, assets download-verified). The cloud Copilot reviewer ran
@@ -238,1850 +284,1032 @@ Every change closes only after ALL of these (CI runs them too):
 ## Recent Progress & Git Activity
 
 ```diff
-### Commit: 0bdfaf4 - s20 close: LEDGER + Playbook (S20 CLOSED — Copilot review completed, v0.13.1 shipped), transcript archive (Z User, 2026-11-22)
-diff --git a/harness/memory/LEDGER.md b/harness/memory/LEDGER.md
-index ee6160f..62d858e 100755
---- a/harness/memory/LEDGER.md
-+++ b/harness/memory/LEDGER.md
-@@ -216,3 +216,5 @@
- 2026-11-21T08:30Z | s18 | OPS: the ci run on the s18 commit (44879546922) — lint/cross-check/test(ubuntu) all green; the windows test leg sat 69 min inside cargo test with no live logs fetchable mid-run → CANCELLED per the S11/S17 ops protocol. Verdict: 100%-cold rust-cache, not a wedge — the s18 commit changed Cargo.lock (version bumps + windows-sys feature), no windows job with that lock had ever completed, so Swatinem/rust-cache had nothing to restore and the leg compiled ~450 crates from zero (the exact S17 attempt-1 signature, cancelled at 68 min). Same-commit green proof on a REAL windows-latest runner exists: release run 44879546925's build-windows leg ran fmt + clippy + cargo test + packaging and PASSED (its zip is the verified v0.12.0 artifact). No rerun: the next ci.yml run would face the same cold cache (the release workflow's cache is keyed to a different workflow file); the S13 precedent (slow-cold cancelled, green proof elsewhere, no rerun) applies. The NEXT stage's ci will find the cache the release job saved for ITS key only — expect one more cold windows leg on the next Cargo.lock change.
- 2026-11-21T14:20Z | s19 | IMPLEMENTED (six asks, v0.13.0): (1) server editing — Servers per-card Edit → full-window modal (S16 overlay discipline; dim backdrop cancels), mt-service ProfileDetails round-trip, ProfileStore::update by id (id/position/active preserved, no dedupe on explicit edit), primitive + capability-regression validation (a never-convertible profile edits freely); (2) exit-IP while OFFLINE — temp_link_for() one-shot factory link through the active profile, ExitInfo.via_temp_tunnel chip; (3) speed test — live session for the active profile else temp tunnel, settings.speed_test_url (cloudflare __down 25MB default, plain-HTTP verified), clock starts after connect, 5s stall/30s budget/64MiB caps, ≥400 rejected, SpeedTestInfo chips; (4) diagnostics mode — src/diagnostics.rs redacted paste-ready file (header + LogLine tee + hand-rolled global tracing subscriber, no tracing-subscriber dep, engine level forced debug, redaction test-pinned), Settings card + Open log folder; (5) kill switch — give_up() fail-closed at 127.0.0.1:9, review fix: app BINDS the port while engaged (spawn_blackhole swallows connections; dead-port fallback documented), stop_blackhole on every restore path (both disconnect branches, toggle-off, connect step-0), explicit disconnect restores with no session, Status "KILL SWITCH ACTIVE" banner (Failed+armed, pure gate tested); (6) code review — Copilot unavailable (no entitlement → reviewer silently dropped; models.github.ai proxy-intercepted "OK"), 3-round discussion-based review on the strongest reachable model instead, 4 valid findings fixed (port pre-bind ownership, banner, edit-failure logging, chained diag-path refresh), 7 assessed non-issues documented (transcript /tmp/s19-review-transcript.md, copied to harness/memory/agent-reports/s19-review-transcript.md); review PR #1 (base v0.12-line) left open for an entitled-machine Copilot pass. 466/0 (+19); gates fmt/clippy host+windows-gnu; iced 6/0; smoke 0; rig sf=1.0+1.5 (52.0 Mbps chips, offline exit-IP chip, modal fields, rename→save, Cancel+backdrop, kill-switch + diagnostics toggles, banner gate unit-tested); PE32+ ×4 (multitunnel 19.2MB, mt-app 14.9MB, tray 10.1MB, merge-server 2.4MB) + ELF ×2. LESSONS: z-ai CLI --thinking broken; window is 1080x720 (clicks beyond x=1080 miss); locate-then-click per scroll position; ENOSPC — stage binaries before wiping target trees.
- 2026-11-21T15:10Z | s19 | RELEASED v0.13.0 (tag run 44910934439 SUCCESS ~7 min; assets verified by download+unzip: multitunnel-v0.13.0-windows-x64.zip 6,506,263 B, 11-entry manifest integrity OK, README/QUICKSTART/server scripts carried; mt-merge-server x86_64 1,826,272 B + aarch64 1,860,808 B; zip staged in sandbox download/v0.13.0-staging/). CI SAGA: the push leg failed on mt-bond carrier_death (documented runner flake, 4th occurrence) → rerun wedged 54 min inside domain_targets_dial (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 5/6 tests ok, domain_targets 'over 60 seconds', cargo+integration orphans killed) → HARDENED both tests with 60-90 s deadlines (bodies untouched; a wedge now fails in a minute with a LEDGER pointer) → next push run: BOTH tests failed loudly on runners (windows carrier_death 'no live bond carrier', ubuntu domain_targets deadline) while the same-commit PR run was fully green and local 2-core taskset stress (8× integration at test-threads=6) stayed 0-fail → rerun: ALL FOUR JOBS GREEN. ROOT-CAUSE LEAD (backlog, top priority): pick_carrier's 'no live bond carrier' = usable() empty = Wi-Fi dead + LTE flagged !alive mid-death-replay — a carrier-lifecycle race in PRE-EXISTING S11/S18 mt-bond code, GitHub-runner-only (slower I/O scheduling), never reproduced locally; investigate the death handler's replay path + LTE alive-flag transitions on a runner-like environment. Review PR #1 commented + left open.
-+2026-11-22T04:20Z | s20 | COPILOT CODE REVIEW COMPLETED (the S19 leftover): the cloud Copilot reviewer finally ran from this sandbox via POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review — the user's runbook pointed at the standalone @github/copilot CLI, which is installed and network-verified but hard-blocked by the PAT: api.individual.githubcopilot.com answers 401 "Personal Access Token does not have \"Copilot Requests\" permission" (authentic server response, NOT a proxy block; the permission can only be added by editing the PAT in the GitHub web UI — told the user exactly that). The REST code-review endpoint needs only pull-requests:write, which the PAT has. Effort ladder per the fallback instruction: max → quota-rejected ("insufficient remaining quota"), balanced → quota-rejected, LITE → ran (review 6010002263 on 52f1d3c): 12 findings (5 High: step-0 self-heal never cleared sysproxy_set → later no-snapshot restore DISABLES a user's pre-existing proxy; give_up check-and-set unserialized with disconnect → black-hole re-installed AFTER an explicit disconnect; proxy pointed at 127.0.0.1:9 BEFORE the bind → a foreign port-9 owner receives the blocked traffic; black-hole listener stopped even when restore FAILED → stranded blocked proxy, no retry, false "restored" log; diag header wrote user URLs verbatim → credential leak in the paste-ready file; 7 Medium: diag-on-while-connected misses engine debug, failed enable leaves persisted toggle on, exit probe/speed test ride a session that is not the target profile, unbounded pre-\r\n\r\n head buffer, port-0 edit accepted, edited REALITY material unvalidated, temp_link_for pop() = lowest-priority adapter). ALL 12 fixed in 4923566: step-0 clears ownership on successful restore (keeps flag+listener on failure for retry); new Core::proxy_mtx serializes every proxy hand-off (give_up/disconnect×2/toggle-off/step-0/arming; the black-hole BIND hoisted outside the lock so no std lock crosses an await — spawn_blackhole split into bind_blackhole+engage_blackhole); bind-BEFORE-set with no-set-on-bind-failure (stale refused entry keeps blocking, nothing routes to a foreign listener); restore-first release on all paths with ERROR log + retry on failure; redact_url() (scheme://host:port/path, userinfo/query/fragment stripped, invalid → placeholder); diag-on-live reconnects (engine level is spawn-time-only); failed enable reverts the persisted toggle; Session.profile_id pins the live-session match for BOTH probes; SPEED_TEST_MAX_HEAD 64 KiB independent cap; port-0 + REALITY structural validation (vless parser rules, is_base64url now crate-visible; fingerprint deliberately unchecked = import parity); first-link selection (temp_link_for AND test_latency). ROUND 2 (lite, on 4923566): CLEAN PASS — review 6010239912, zero inline comments. PR #1: 12 per-finding maintainer replies + summary, CLOSED. Transcript: harness/memory/agent-reports/s20-copilot-review-transcript.md. TESTS 474/0 (+8: connect_selfheal_clears_stale_proxy_ownership, update_profile_rejects_port_zero_and_invalid_reality, diag_header_redacts_url_credentials, speed_test_rejects_a_header_flood, probes_fall_back_when_active_profile_switched, temp_link_uses_the_top_priority_first_link, diagnostics_enable_failure_reverts_the_toggle, diagnostics_enable_while_connected_reconnects). Gates: fmt clean; clippy host + windows-gnu -D warnings clean; vendored iced 6/0; mt-app --smoke 0; rig launch+alive+render-healthy (82% non-white, 1738 colors — zero GUI code changed this round); zigbuild PE32+ ×4 + ELF ×2. SANDBOX RESTORE NOTES: rustc 1.100.0 reinstalled (rustup minimal), tools/pypkgs ziglang wheel was INCOMPLETE (libc only musl/wasi — stddef.h compile failure; reinstalled 0.14.1 from PyPI), python-xlib reinstalled, /tmp/xkblibs re-extracted from the my-project root debs; DISK: /tmp/mt-target debug trees wiped twice (ENOSPC at 94% — stage release binaries before wiping, per the S19 lesson).
-+2026-11-22T04:16Z | s20 | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED.
-diff --git a/harness/memory/agent-reports/s20-copilot-review-transcript.md b/harness/memory/agent-reports/s20-copilot-review-transcript.md
-new file mode 100644
-index 0000000..9645403
---- /dev/null
-+++ b/harness/memory/agent-reports/s20-copilot-review-transcript.md
-@@ -0,0 +1,166 @@
-+# S20 Copilot code review transcript (v0.13.1, PR #1)
-+
-+Reviewer: copilot-pull-request-reviewer[bot] via the REST endpoint
-+POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review.
-+
-+Effort ladder (per the fallback instruction): `max` → rejected by the
-+account's remaining quota; `balanced` → rejected; `lite` → ran.
-+The standalone @github/copilot CLI path stayed blocked: the fine-grained
-+PAT lacks the "Copilot Requests" permission
-+(api.individual.githubcopilot.com 401 — authentic server response; the
-+permission can only be added by editing the PAT in the GitHub web UI).
-+
-+
-+---
-+
-+## Round 1 — effort Lite, commit 52f1d3c
-+
-+### Review summary
-+
-+```
-+<!-- ccr-overview-v2 -->
-+
-+### 🟡 Changes recommended
-+
-+Multiple unresolved critical correctness and security issues remain, including kill-switch races and failed restoration handling that can leave traffic misrouted, plus diagnostic URL leakage of credentials.
-+
-+<details open>
-+<summary><strong>12 open issues</strong></summary>
-+
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Clear proxy ownership after kill-switch self-heal](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411193) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Serialize kill-switch proxy changes with disconnect](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411210) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Bind the kill-switch listener before setting the system proxy](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411223) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Keep the kill-switch listener until proxy restore succeeds](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411231) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Redact secrets from user-configurable diagnostic URLs](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411240) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Apply debug logging when diagnostics is enabled live](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411265) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Recover the diagnostics toggle when sink startup fails](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411279) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Match the live session profile before probing its exit IP](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411287) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Cap incomplete HTTP response headers](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411295) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Reject server port zero when editing profiles](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411304) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Validate edited REALITY fields before saving](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411318) · New
-+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Select the top-priority adapter for offline tests](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411330) · New
-+</details>
-+
-+<sub>Review effort: Lite</sub>
-+```
-+
-+
-+### Findings and discussion
-+
-+
-+#### [4656411193] src/real_service.rs L922
-+
-+**Copilot:** The self-heal restores the OS proxy and stops the black-hole, but it never clears `core.sysproxy_set`. After a kill-switch failure, the next connect with `system_proxy` disabled leaves this flag set; a later disconnect then calls `restore()` with no snapshot and can disable the user's pre-existing proxy instead of leaving it untouched. Reset the ownership flag together with this self-heal.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** The step-0 self-heal now clears `sysproxy_set` on a successful restore (and — new this round — keeps the flag AND the listener when the restore fails, so the next disconnect retries instead of stranding a black-holed proxy). Regression test: `connect_selfheal_clears_stale_proxy_ownership`.
-+
-+
-+#### [4656411210] src/real_service.rs L1363
-+
-+**Copilot:** This check-and-set is not serialized with `disconnect()`: after `give_up` loads `kill_switch = true`, an explicit disconnect can swap `sysproxy_set` to false and restore the snapshot, then this awaited `sysproxy::set` can still install the black-hole and leave `sysproxy_set` true after disconnect has returned. That can re-block traffic even though the user explicitly disconnected. Serialize proxy hand-off with disconnect, or re-check ownership/settings after every awaited step and roll back if the session was released.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** New `Core::proxy_mtx` (std Mutex) is held across every proxy hand-off: `give_up`'s engage/restore decision, both disconnect branches, the kill-switch toggle-off escape hatch, the step-0 self-heal and the connect-time arming. `give_up` re-reads the flag under the lock, so the disconnect-then-re-block interleaving is gone. The black-hole bind is hoisted OUT of the lock (it awaits), so no std lock is ever held across an await — the crate's standing rule.
-+
-+
-+#### [4656411223] src/real_service.rs L1367
-+
-+**Copilot:** The proxy is pointed at `127.0.0.1:9` before `spawn_blackhole` binds that port. A local process can therefore bind the port in this window (or already own it); `sysproxy::set` succeeds, the subsequent bind fails, and WinINET traffic is sent to that process rather than a fail-closed listener. Bind and retain the listener before changing the system proxy, and only engage the kill switch if ownership succeeds (or otherwise use a per-run listener address that is reserved first).
-+
-+
-+**Maintainer:** **Fixed in 4923566.** The order is now bind → set: `bind_blackhole()` runs before any registry write, and `sysproxy::set` only executes when ownership is proven. On a bind failure the stale entry (which refuses) keeps blocking and nothing is ever routed to a foreign listener; on a `set` failure after a successful bind the freshly-bound listener is released. `spawn_blackhole` was split into `bind_blackhole` + `engage_blackhole` to make the locked section fully synchronous.
-+
-+
-+#### [4656411231] src/real_service.rs L1620
-+
-+**Copilot:** The no-session disconnect path clears `sysproxy_set` before restoring, then stops the black-hole listener even when `restore` returns an error. In that failure case the system proxy can still point at `127.0.0.1:9`, but the listener is gone and the ownership flag is false, so later disconnects will not retry and the unconditional "system proxy restored" log is false. Keep the kill-switch ownership/listener until restore succeeds and surface a failed restore instead of claiming success.
-+
-+This issue also appears in the following locations of the same file:
-+- line 1635
-+- line 1860
-+
-+
-+**Maintainer:** **Fixed in 4923566 (all three sites).** Every restore path now matches on the result: `Ok` clears the flag, stops the listener and logs “restored”; `Err` keeps the flag AND the listener (still fail-closed), emits an `ERROR system proxy restore failed … retry` GUI log line, and the same path retries on the next disconnect/toggle. The “system proxy restored” line only appears after a successful restore. Note: the failure branch is Windows-registry-only, so it is covered by review rather than a Linux unit test — the retry semantics themselves are what the tests pin.
-+
-+
-+#### [4656411240] src/real_service.rs L2438
-+
-+**Copilot:** These user-configurable URLs are written verbatim to the supposedly redacted support file. A URL may contain a query token, API key, or other secret (for example a custom probe endpoint), so enabling diagnostics can disclose credentials even though profile UUIDs and public keys are omitted. Redact URL userinfo/query/fragment or log only the validated host, port, and path components.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** New `redact_url()`: the header renders `scheme://host:port/path` only — userinfo (`user:pass@`), query (`?token=…`) and fragment are stripped, and an unparseable URL renders as `<redacted (invalid URL)>` without ever echoing the raw value. Regression test: `diag_header_redacts_url_credentials`.
-+
-+
-+#### [4656411265] src/real_service.rs L1986
-+
-+**Copilot:** Turning diagnostics on while already connected does not update the running engines' log level: `debug` is only applied in `connect_flow()` before a new session is built, while this settings path enables the sink without reconnecting when no data-plane setting changed. The resulting file misses the engine debug output the UI promises. Reconnect the live session or provide an engine log-level update when diagnostics is enabled.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** Enabling diagnostics while Connected now reconnects the session (the engines read the log level only at spawn, so a live update cannot exist without an engine restart mechanism); the reconnect log line says why. Regression test: `diagnostics_enable_while_connected_reconnects` (state back to Connected, restarts counter incremented, engine level `debug`).
-+
-+
-+#### [4656411279] src/real_service.rs L2011
-+
-+**Copilot:** If `diagnostics::enable` fails (for example, the log directory is unwritable), the settings file has already been saved with `diagnostics = true`, but the sink remains off. The UI consequently shows the mode enabled while no file is being written, and a later settings refresh will not retry because `diagnostics_changed` is false. Revert the persisted toggle on failure or surface a state that can be retried explicitly.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** A failed `diagnostics::enable` reverts the persisted toggle (the settings file is saved back with `diagnostics = false`), emits an `ERROR … the toggle was reverted` GUI line, and the live reconnect is suppressed for the failed enable. The retry path is simply toggling again — the diff is real again because the file says off. Regression test: `diagnostics_enable_failure_reverts_the_toggle` (log dir replaced by a file).
-+
-+
-+#### [4656411287] src/real_service.rs L1954
-+
-+**Copilot:** The same stale-session problem affects the exit probe: this branch treats any existing session as the active profile's live tunnel, but the active profile can be changed without reconnecting. In that state the probe reports the old tunnel's exit IP against the new profile's endpoint and labels it as a live-tunnel result. The session needs to retain its profile id and this path must use the live listener only when it matches the selected profile; otherwise use the temporary tunnel.
-+
-+This issue also appears on line 2050 of the same file.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** `Session` now records the `profile_id` it was built from. `exit_probe` uses the live listener only when the session belongs to the active profile, and `speed_test` (which had the same hole via its `is_active` check — it compared the TARGET against the active profile, not against the session) now matches the session against the target profile directly. Regression test: `probes_fall_back_when_active_profile_switched` (live probe → active switched without reconnect → both probes report the temporary tunnel; an explicit target matching the session still rides it).
-+
-+
-+#### [4656411295] src/real_service.rs L2335
-+
-+**Copilot:** The 64 MiB limit only applies after the response head has been found. Until `find_head_end` succeeds, every read is appended to `head` while `total` stays zero, so an endpoint that continuously sends bytes without `\r\n\r\n` can grow this `Vec` for the whole 30-second window and bypass the advertised memory cap. Cap the header buffer (or fail on an oversized/incomplete head) independently of the payload limit.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** `SPEED_TEST_MAX_HEAD` (64 KiB) is enforced independently while the head is still incomplete — the read loop now fails fast with “malformed response (no header end within 64 KiB)” instead of buffering for the whole budget. Regression test: `speed_test_rejects_a_header_flood` (256 KiB header-less flood, error in well under 10 s).
-+
-+
-+#### [4656411304] src/real_service.rs L2197
-+
-+**Copilot:** `u16::parse()` accepts `0`, so an edit can save a server port of zero even though imported profiles and the edit form require a real server port (`1-65535`). `endpoint_from_profile()` does not reject this value, so the malformed profile persists and only fails later during engine connection. Reject zero here (and align the error text with the actual range).
-+
-+
-+**Maintainer:** **Fixed in 4923566.** Port 0 is rejected explicitly (“port 0 is not a valid server port — use 1-65535”) and the parse-error text now says 1-65535. Regression test: `update_profile_rejects_port_zero_and_invalid_reality`.
-+
-+
-+#### [4656411318] src/real_service.rs L2435
-+
-+**Copilot:** The edit path only checks that the original profile remains convertible; it does not validate the edited REALITY material. This allows saving an empty SNI, a non-43-character/non-base64url public key, or an invalid short ID, all of which the link parser/render validator rejects and the Xray config then receives unchanged. Validate these fields with the same structural rules used for imported links before `store.update()`.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** Inside the existing capability gate (an original that could drive the engine must stay convertible), the edited REALITY material is validated with the link parser's exact structural rules: SNI non-empty, `pbk` 43-char unpadded base64url (`crate::vless::is_base64url`, now crate-visible), `sid` empty-or-1-16-hex. Deliberate non-change: `fingerprint` is NOT validated — the import parser accepts any `fp=` verbatim and the edit path keeps parity with imports. Regression test: same test as the port-0 fix (plus a valid edit still saving).
-+
-+
-+#### [4656411330] src/real_service.rs L2342
-+
-+**Copilot:** `engine_specs_for()` and `EngineLinkFactory::build()` preserve the user's bonded-adapter order, but `pop()` selects the last link, contrary to this function's documented “FIRST link (top-priority adapter)” behavior. Offline exit-IP and speed tests will therefore silently run on the lowest-priority adapter whenever bonding is configured. Select the first link and drop the remainder instead.
-+
-+
-+**Maintainer:** **Fixed in 4923566.** `temp_link_for` takes the FIRST link (`into_iter().next()`); `test_latency`'s identical `pop()` was fixed too (same defect class, pre-existing this PR — flagged as an extension during triage). Regression test: `temp_link_uses_the_top_priority_first_link` (two named links to two different exit echoes; the probe answers from the FIRST).
-+
-+
-+---
-+
-+## Round 2 — effort Lite, commit 4923566 (the fixes)
-+
-+Review 6010239912 on 2026-11-22T04:07:25Z: state COMMENTED, empty body,
-+ZERO inline comments — a clean pass. No new findings.
-+
-+
-+---
-+
-+## Outcome
-+
-+All 12 round-1 findings fixed in 4923566 (v0.13.1); round-2 re-review
-+clean. PR #1 closed with the summary comment. Tests 474/0 (+8).
-diff --git a/harness/memory/store/memory_graph.json b/harness/memory/store/memory_graph.json
-index b881b6a..142e084 100644
---- a/harness/memory/store/memory_graph.json
-+++ b/harness/memory/store/memory_graph.json
-@@ -1,6 +1,6 @@
- {
-   "schema_version": 1,
--  "as_of": "52f1d3c 2026-11-21T15:07:33Z",
-+  "as_of": "4923566 2026-11-22T04:05:27Z",
-   "sources": [
-     "PROJECT_MEMORY.md",
-     "harness/memory/STATE.md",
-@@ -11,8 +11,8 @@
-     "git (tags + full log)",
-     "harness/memory/curated/"
-   ],
--  "node_count": 275,
--  "edge_count": 282,
-+  "node_count": 279,
-+  "edge_count": 286,
-   "nodes": [
-     {
-       "id": "bug:freedom-loopback-blackhole",
-@@ -695,6 +695,26 @@
-         }
-       ]
-     },
-+    {
-+      "id": "commit:4923566",
-+      "type": "commit",
-+      "title": "s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 \"Personal Access Token does not have Copilot Requests permission\" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI).",
-+      "tags": [
-+        "2026-11-22"
-+      ],
-+      "sources": [
-+        {
-+          "file": "git:log",
-+          "anchor": "4923566"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 \"Personal Access Token does not have Copilot Requests permission\" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI).",
-+          "kind": "title"
-+        }
-+      ]
-+    },
-     {
-       "id": "commit:52f1d3c",
-       "type": "commit",
-@@ -4743,6 +4763,31 @@
-         }
-       ]
-     },
-+    {
-+      "id": "ledger:s20",
-+      "type": "ledger",
-+      "title": "Stage s20 ledger",
-+      "tags": [
-+        "s20",
-+        "append-only"
-+      ],
-+      "sources": [
-+        {
-+          "file": "harness/memory/LEDGER.md",
-+          "anchor": "s20"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "2026-11-22T04:20Z | COPILOT CODE REVIEW COMPLETED (the S19 leftover): the cloud Copilot reviewer finally ran from this sandbox via POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review — the user's runbook pointed at the standalone @github/copilot CLI, which is installed and network-verified but hard-blocked by the PAT: api.individual.githubcopilot.com answers 401 \"Personal Access Token does not have \\\"Copilot Requests\\\" permission\" (authentic server response, NOT a proxy block; the permission can only be added by editing the PAT in the GitHub web UI — told the user exactly that). The REST code-review endpoint needs only pull-requests:write, which the PAT has.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "2026-11-22T04:16Z | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED.",
-+          "kind": "body"
-+        }
-+      ]
-+    },
-     {
-       "id": "ledger:s3",
-       "type": "ledger",
-@@ -5422,6 +5467,10 @@
-         }
-       ],
-       "passages": [
-+        {
-+          "text": "- **Stage**: S20 CLOSED — the S19 leftover (Copilot code review) COMPLETED and shipped as v0.13.1 (tag on 4923566, release run 44983522874 SUCCESS, ci ×2 green, assets download-verified). The cloud Copilot reviewer ran via `POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review` (needs only pull-requests:write, which the PAT has): effort ladder per the fallback instruction — max → quota-rejected, balanced → quota-rejected, **lite → ran**. Round 1 (on 52f1d3c): 12 findings (5 High: step-0 self-heal never cleared sysproxy_set → no-snapshot restore disables a user's pre-existing proxy; give_up unserialized with disconnect → black-hole re-installed AFTER an explicit disconnect; set-BEFORE-bind → a foreign port-9 owner receives the blocked traffic; listener stopped even when restore failed → stranded block, no retry, false \"restored\" log; diag header wrote user URLs verbatim → credential leak. 7 Medium: live diag toggle misses engine debug, failed enable leaves the toggle on, probes ride a session that is not the target profile, unbounded head buffer, port-0 edit, unvalidated REALITY edits, pop() = lowest-priority adapter). All 12 fixed (Core::proxy_mtx serializes every proxy hand-off with the bind hoisted out of the lock; bind-before-set with no-set-on-bind- failure; restore-first release + retry; redact_url; diag-on-live reconnect; failed-enable revert; Session.profile_id pins both probes; 64 KiB head cap; port-0 + REALITY structural validation; first-link selection). Round 2 (lite, on the fixes): CLEAN PASS, zero comments.",
-+          "kind": "body"
-+        },
-         {
-           "text": "- **Stage**: S19 CLOSED — v0.13.0 released and verified (tag run 44910934439 SUCCESS ~7 min; CI all-green on the rerun after the documented mt-bond runner-flake round — LEDGER 15:10Z).",
-           "kind": "body"
-@@ -5616,6 +5665,26 @@
-         }
-       ]
-     },
-+    {
-+      "id": "release:v0.13.1",
-+      "type": "release",
-+      "title": "Release v0.13.1 (tagged 4923566)",
-+      "tags": [
-+        "v0.13.1"
-+      ],
-+      "sources": [
-+        {
-+          "file": "git:tags/v0.13.1",
-+          "anchor": "4923566"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "Release v0.13.1: tag points at commit 4923566.",
-+          "kind": "body"
-+        }
-+      ]
-+    },
-     {
-       "id": "release:v0.2.0",
-       "type": "release",
-@@ -6496,6 +6565,122 @@
-         }
-       ]
-     },
-+    {
-+      "id": "report:s20-copilot-review-transcript",
-+      "type": "report",
-+      "title": "S20 Copilot code review transcript (v0.13.1, PR #1)",
-+      "tags": [
-+        "agent-reports"
-+      ],
-+      "sources": [
-+        {
-+          "file": "harness/memory/agent-reports/s20-copilot-review-transcript.md",
-+          "anchor": ""
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "# S20 Copilot code review transcript (v0.13.1, PR #1)",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "Reviewer: copilot-pull-request-reviewer[bot] via the REST endpoint POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "Effort ladder (per the fallback instruction): `max` → rejected by the account's remaining quota; `balanced` → rejected; `lite` → ran. The standalone @github/copilot CLI path stayed blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 — authentic server response; the permission can only be added by editing the PAT in the GitHub web UI).",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "---",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "## Round 1 — effort Lite, commit 52f1d3c",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "### Review summary",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "### 🟡 Changes recommended",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "Multiple unresolved critical correctness and security issues remain, including kill-switch races and failed restoration handling that can leave traffic misrouted, plus diagnostic URL leakage of credentials.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "<details open> <summary><strong>12 open issues</strong></summary>",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Clear proxy ownership after kill-switch self-heal](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411193) · New - <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Serialize kill-switch proxy changes with disconnect](https://github.com/maniesh-NR/MultiTunnel/pull/1#discussion_r4656411210) · New - <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img ",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "<sub>Review effort: Lite</sub> ```",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "### Findings and discussion",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "#### [4656411193] src/real_service.rs L922",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "**Copilot:** The self-heal restores the OS proxy and stops the black-hole, but it never clears `core.sysproxy_set`. After a kill-switch failure, the next connect with `system_proxy` disabled leaves this flag set; a later disconnect then calls `restore()` with no snapshot and can disable the user's pre-existing proxy instead of leaving it untouched. Reset the ownership flag together with this self-heal.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "**Maintainer:** **Fixed in 4923566.** The step-0 self-heal now clears `sysproxy_set` on a successful restore (and — new this round — keeps the flag AND the listener when the restore fails, so the next disconnect retries instead of stranding a black-holed proxy). Regression test: `connect_selfheal_clears_stale_proxy_ownership`.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "#### [4656411210] src/real_service.rs L1363",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "**Copilot:** This check-and-set is not serialized with `disconnect()`: after `give_up` loads `kill_switch = true`, an explicit disconnect can swap `sysproxy_set` to false and restore the snapshot, then this awaited `sysproxy::set` can still install the black-hole and leave `sysproxy_set` true after disconnect has returned. That can re-block traffic even though the user explicitly disconnected. Serialize proxy hand-off with disconnect, or re-check ownership/settings after every awaited step and roll back if the session was released.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "**Maintainer:** **Fixed in 4923566.** New `Core::proxy_mtx` (std Mutex) is held across every proxy hand-off: `give_up`'s engage/restore decision, both disconnect branches, the kill-switch toggle-off escape hatch, the step-0 self-heal and the connect-time arming. `give_up` re-reads the flag under the lock, so the disconnect-then-re-block interleaving is gone. The black-hole bind is hoisted OUT of the lock (it awaits), so no std lock is ever held across an await — the crate's standing rule.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "#### [4656411223] src/real_service.rs L1367",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "**Copilot:** The proxy is pointed at `127.0.0.1:9` before `spawn_blackhole` binds that port. A local process can therefore bind the port in this window (or already own it); `sysproxy::set` succeeds, the subsequent bind fails, and WinINET traffic is sent to that process rather than a fail-closed listener. Bind and retain the listener before changing the system proxy, and only engage the kill switch if ownership succeeds (or otherwise use a per-run listener address that is reserved first).",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "**Maintainer:** **Fixed in 4923566.** The order is now bind → set: `bind_blackhole()` runs before any registry write, and `sysproxy::set` only executes when ownership is proven. On a bind failure the stale entry (which refuses) keeps blocking and nothing is ever routed to a foreign listener; on a `set` failure after a successful bind the freshly-bound listener is released. `spawn_blackhole` was split into `bind_blackhole` + `engage_blackhole` to make the locked section fully synchronous.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "#### [4656411231] src/real_service.rs L1620",
-+          "kind": "title"
-+        },
-+        {
-+          "text": "**Copilot:** The no-session disconnect path clears `sysproxy_set` before restoring, then stops the black-hole listener even when `restore` returns an error. In that failure case the system proxy can still point at `127.0.0.1:9`, but the listener is gone and the ownership flag is false, so later disconnects will not retry and the unconditional \"system proxy restored\" log is false. Keep the kill-switch ownership/listener until restore succeeds and surface a failed restore instead of claiming success.",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "This issue also appears in the following locations of the same file: - line 1635 - line 1860",
-+          "kind": "body"
-+        },
-+        {
-+          "text": "**Maintainer:** **Fixed in 4923566 (all three sites).** Every restore path now matches on the result: `Ok` clears the flag, stops the listener and logs “restored”; `Err` keeps the flag AND the listener (still fail-closed), emits an `ERROR system proxy restore failed … retry` GUI log line, and the same path retries on the next disconnect/toggle. The “system proxy restored” line only appears after a successful restore. Note: the failure branch is Windows-registry-only, so it is covered by review rather than a Linux unit test — the retry semantics themselves are what the tests pin.",
-+          "kind": "body"
-+        }
-+      ]
-+    },
-     {
-       "id": "report:s3-implementation",
-       "type": "report",
-@@ -8996,6 +9181,18 @@
-       "rel": "part_of",
-       "evidence": "project ledger"
-     },
-+    {
-+      "src": "ledger:s20",
-+      "dst": "project:multitunnel",
-+      "rel": "part_of",
-+      "evidence": "project ledger"
-+    },
-+    {
-+      "src": "ledger:s20",
-+      "dst": "release:v0.13.1",
-+      "rel": "released_in",
-+      "evidence": "2026-11-22T04:16Z | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED."
-+    },
-     {
-       "src": "ledger:s3",
-       "dst": "project:multitunnel",
-@@ -9200,6 +9397,12 @@
-       "rel": "built_from",
-       "evidence": "git tag v0.13.0"
-     },
-+    {
-+      "src": "release:v0.13.1",
-+      "dst": "commit:4923566",
-+      "rel": "built_from",
-+      "evidence": "git tag v0.13.1"
-+    },
-     {
-       "src": "release:v0.2.0",
-       "dst": "commit:06881a6",
-@@ -9320,6 +9523,12 @@
-       "rel": "reports_on",
-       "evidence": "filename stage prefix"
-     },
-+    {
-+      "src": "report:s20-copilot-review-transcript",
-+      "dst": "ledger:s20",
-+      "rel": "reports_on",
-+      "evidence": "filename stage prefix"
-+    },
-     {
-       "src": "report:s3-implementation",
-       "dst": "ledger:s3",
+### Commit: e510e43 - backup(s21-release-prep-2): 2026-11-24T20:08:15Z (Z User, 2026-11-24)
+diff --git a/QUICKSTART.md b/QUICKSTART.md
+index 2662060..7cf41a5 100755
+--- a/QUICKSTART.md
++++ b/QUICKSTART.md
+@@ -98,6 +98,17 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
+ > DIAGNOSTICS mode that writes one paste-ready support log file
+ > (connection lifecycle + engine output, credentials redacted).
+ >
++> v0.14: adding a second server and switching to it while connected no
++> longer kills the tunnel until restart (lingering proxy connections are
++> force-closed at shutdown and busy listener binds retry briefly);
++> throughput/stability parity work (TCP_NODELAY on every carrier leg,
++> coalesced ACKs, batched carrier writes, honest per-carrier RTTs, no
++> more probe blackouts on the only link); Settings → Network gained a
++> **QoS FAIR SHARE** toggle — when two sites race for a loaded tunnel,
++> each gets an equal share instead of one download hogging everything
++> (flips live, no reconnect); the Status tab's exit-IP and speed-test
++> cards merged into one compact **Exit & speed** panel.
++>
+ > v0.13.1 (Copilot code-review round): kill-switch hardening — the
+ > black-hole port is owned BEFORE the proxy points at it, the proxy
+ > hand-off is serialized with disconnect, a failed restore keeps the
 
-### Commit: 4923566 - s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the "Copilot Requests" permission (api.individual.githubcopilot.com 401 "Personal Access Token does not have Copilot Requests permission" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI). All 12 findings addressed: (1) [high] connect step-0 self-heal now CLEARS sysproxy_set on a successful restore — the stale flag made a later no-session disconnect restore with NO snapshot, which DISABLES the user's pre-existing proxy (restore_plan(Ok(None)) = Disable); (2) [high] give_up's check-and-set serialized with disconnect via new Core::proxy_mtx (std Mutex, never held across an await — the black-hole BIND is hoisted out): the old window let an explicit disconnect restore the proxy and THEN have give_up's awaited sysproxy::set re-install the black-hole with sysproxy_set left true after disconnect returned; (3) [high] give_up BINDS the black-hole port BEFORE sysproxy::set and only re-points the proxy when ownership is proven — the old set-then-bind order let a local process that owned port 9 receive the black-holed traffic; bind failure = keep the stale (refused) entry, never route to a foreign listener; spawn_blackhole split into bind_blackhole (async, unlocked) + engage_blackhole (sync, under the lock); (4) [high] every restore path (both disconnect branches, kill-switch toggle-off, step-0) now restores FIRST and only releases ownership + the listener on SUCCESS — a failed restore keeps the black-hole engaged (fail-closed), logs an ERROR line and retries on the next disconnect/toggle instead of stranding a black-holed proxy with no owner and a false "restored" log; (5) [high] diagnostics header renders user-configurable URLs via new redact_url() — scheme://host:port/path only; userinfo (http://user:pass@), query (?token=) and fragment stripped (those slots carry API keys in custom probe/speed endpoints); unparseable URLs never echo; (6) [medium] enabling diagnostics on a LIVE session reconnects it (engines read the log level only at spawn — the sink silently missed engine debug output otherwise); (7) [medium] a failed diagnostics::enable REVERTS the persisted toggle + ERROR log (the UI previously showed the mode on with no file being written and no retry path); (8) [medium] exit probe + speed test only ride the live session when it was BUILT from the target profile (Session.profile_id; switching the active profile without reconnecting now falls back to the temporary probe tunnel instead of reporting the old tunnel's exit against the new profile — speed_test's old is_active check had the same hole); (9) [medium] speed-test response head capped independently at 64 KiB (SPEED_TEST_MAX_HEAD) — until \r\n\r\n lands nothing counts toward the 64 MiB payload cap, so a header-less byte flood could grow the buffer for the whole 30 s budget; (10) [medium] edit rejects port 0 (u16::parse accepted it; imported links and the dialog range are 1-65535); (11) [medium] edited REALITY material gets the link parser's structural rules (sni non-empty, pbk 43-char unpadded base64url via crate::vless::is_base64url, sid empty-or-1-16-hex) inside the existing capability gate — never-convertible profiles still edit freely; fingerprint intentionally unchecked (the import parser accepts any fp= verbatim — parity); (12) [medium] temp_link_for takes the FIRST link (top-priority bonded adapter — engine_specs_for preserves the user's order; pop() silently selected the LAST) — test_latency's identical pop() fixed for consistency. TESTS: 474/0 (+8: selfheal ownership clear, port-0/REALITY edit rejection, diag URL redaction, header flood, profile-switch fallback both probes, first-link end-to-end, diag enable revert, diag live reconnect). Gates: fmt/clippy host+windows-gnu -D warnings clean; vendored iced 6/0; mt-app --smoke 0; rig launch+render-healthy (no GUI code changed); zigbuild PE32+ x4 (multitunnel 19.2MB, mt-app 14.9MB, tray 10.1MB, merge-server 2.4MB) + ELF x2 (x86_64 1.23MB, aarch64 1.21MB); version 0.13.1; README v0.13.1 section + QUICKSTART note. (Z User, 2026-11-22)
-diff --git a/Cargo.lock b/Cargo.lock
-index ca35e7c..91f9783 100755
---- a/Cargo.lock
-+++ b/Cargo.lock
-@@ -1962,7 +1962,7 @@ dependencies = [
- 
- [[package]]
- name = "mt-app"
--version = "0.13.0"
-+version = "0.13.1"
- dependencies = [
-  "async-trait",
-  "iced",
-@@ -2073,7 +2073,7 @@ dependencies = [
- 
- [[package]]
- name = "multitunnel"
--version = "0.13.0"
-+version = "0.13.1"
- dependencies = [
-  "anyhow",
-  "async-trait",
+### Commit: 1a9849f - backup(s21-release-prep): 2026-11-24T20:08:00Z (Z User, 2026-11-24)
 diff --git a/Cargo.toml b/Cargo.toml
-index c40fea9..e436401 100755
+index e436401..c96f339 100755
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -18,7 +18,7 @@ members = ["crates/*"]
  resolver = "2"
  
  [workspace.package]
--version = "0.13.0"
-+version = "0.13.1"
+-version = "0.13.1"
++version = "0.14.0"
  
  [lib]
  name = "multitunnel"
-diff --git a/QUICKSTART.md b/QUICKSTART.md
-index fbe19d9..2662060 100755
---- a/QUICKSTART.md
-+++ b/QUICKSTART.md
-@@ -97,6 +97,17 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
- > proxy blocks traffic instead of silently going direct) and a
- > DIAGNOSTICS mode that writes one paste-ready support log file
- > (connection lifecycle + engine output, credentials redacted).
-+>
-+> v0.13.1 (Copilot code-review round): kill-switch hardening — the
-+> black-hole port is owned BEFORE the proxy points at it, the proxy
-+> hand-off is serialized with disconnect, a failed restore keeps the
-+> block and retries, and a stale ownership flag can no longer disable a
-+> pre-existing proxy; diagnostics now redact URL credentials, reconnect
-+> a live session when enabled (so engines log at debug) and revert the
-+> toggle if the log file cannot be created; exit-IP/speed probes only
-+> ride a live session that belongs to the selected server and offline
-+> probes use the top-priority bonded adapter; the Edit dialog rejects
-+> port 0 and invalid REALITY fields.
- 
- **SMOKE TEST — this is the first time the GUI binary runs on real Windows.**
- The development sandbox is Linux; the window has been cross-compiled and
 diff --git a/README.md b/README.md
-index 69d7e74..beca1eb 100755
+index beca1eb..580d5db 100755
 --- a/README.md
 +++ b/README.md
-@@ -398,6 +398,25 @@ GUI, no new dependencies):
-   settings/profile summary — UUIDs, passwords and public keys never
-   appear in it. Turn it on, reproduce a connection issue, then paste the
-   file into a support chat.
-+- **v0.13.1 — Copilot code-review hardening**: a GitHub Copilot review
-+  pass over the v0.13 changes produced twelve findings, all addressed.
-+  The kill switch now proves ownership of the black-hole port BEFORE the
-+  system proxy is re-pointed at it (a foreign process can never receive
-+  the blocked traffic), the proxy hand-off is serialized with
-+  disconnect (no re-block after an explicit disconnect), a failed
-+  restore keeps the block and retries on the next disconnect, and the
-+  connect self-heal clears stale ownership (a leftover flag could
-+  otherwise disable a user's pre-existing proxy). Diagnostics redact
-+  URL credentials (userinfo/query never reach the support file), a
-+  failed log-file start reverts the toggle, and enabling the mode on a
-+  live session reconnects it so the engines actually log at `debug`.
-+  The exit-IP check and speed test only ride a live session that was
-+  built from the selected server (switching servers without
-+  reconnecting now falls back to a temporary probe tunnel), offline
-+  probes use the top-priority bonded adapter, the speed test caps the
-+  response head independently of the payload limit, and the Edit dialog
-+  rejects port 0 and structurally invalid REALITY fields (empty SNI,
-+  malformed public key / short ID).
- - **Quick Settings on right-click**: the tray menu is built fresh from
-   live state — Connect/Disconnect (state-reflecting), the server list
-   (radio-checked on the active profile), Open MultiTunnel and Exit.
-diff --git a/harness/memory/store/memory_graph.json b/harness/memory/store/memory_graph.json
-index 1747d50..b881b6a 100644
---- a/harness/memory/store/memory_graph.json
-+++ b/harness/memory/store/memory_graph.json
-@@ -1,6 +1,6 @@
- {
-   "schema_version": 1,
--  "as_of": "666bc16 2026-11-21T14:58:33Z",
-+  "as_of": "52f1d3c 2026-11-21T15:07:33Z",
-   "sources": [
-     "PROJECT_MEMORY.md",
-     "harness/memory/STATE.md",
-@@ -11,8 +11,8 @@
-     "git (tags + full log)",
-     "harness/memory/curated/"
-   ],
--  "node_count": 274,
--  "edge_count": 281,
-+  "node_count": 275,
-+  "edge_count": 282,
-   "nodes": [
-     {
-       "id": "bug:freedom-loopback-blackhole",
-@@ -695,6 +695,26 @@
-         }
-       ]
-     },
-+    {
-+      "id": "commit:52f1d3c",
-+      "type": "commit",
-+      "title": "backup(s19-close-v0.13.0): 2026-11-21T15:07:33Z",
-+      "tags": [
-+        "2026-11-21"
-+      ],
-+      "sources": [
-+        {
-+          "file": "git:log",
-+          "anchor": "52f1d3c"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "backup(s19-close-v0.13.0): 2026-11-21T15:07:33Z",
-+          "kind": "title"
-+        }
-+      ]
-+    },
-     {
-       "id": "commit:56340a5",
-       "type": "commit",
-@@ -8016,6 +8036,12 @@
-       "rel": "part_of",
-       "evidence": "subject stage label (s15)"
-     },
-+    {
-+      "src": "commit:52f1d3c",
-+      "dst": "ledger:s19",
-+      "rel": "part_of",
-+      "evidence": "subject stage label (s19)"
-+    },
-     {
-       "src": "commit:56340a5",
-       "dst": "ledger:s4",
-diff --git a/src/real_service.rs b/src/real_service.rs
-index 65e2703..0b8d457 100755
---- a/src/real_service.rs
-+++ b/src/real_service.rs
-@@ -161,6 +161,12 @@ const SPEED_TEST_MAX_BYTES: u64 = 64 * 1024 * 1024;
- /// S19: per-read stall limit inside a speed test — a server that trickles
- /// slower than this yields the partial measurement instead of hanging.
- const SPEED_TEST_STALL: Duration = Duration::from_secs(5);
-+/// S20 (Copilot round 2): the response-head buffer in a speed test is
-+/// capped INDEPENDENTLY of the 64 MiB payload limit — until `\r\n\r\n`
-+/// is found nothing counts toward `total`, so an endpoint streaming a
-+/// header-less byte flood would otherwise grow the buffer for the whole
-+/// 30 s budget. A legitimate HTTP head never approaches 64 KiB.
-+const SPEED_TEST_MAX_HEAD: usize = 64 * 1024;
- /// S19: the kill switch's black-hole proxy target — a loopback port
- /// nothing legitimately listens on (discard). With the system proxy
- /// pointed here, WinINET consumers get instant connection-refused
-@@ -746,6 +752,12 @@ fn default_lan_rules() -> Vec<Rule> {
- /// One live connect session (server + its tasks + lifecycle signals).
- struct Session {
-     server: Arc<ProxyServer>,
-+    /// S20 (Copilot round 2): the profile this session was BUILT from —
-+    /// the active profile can be switched without reconnecting, and the
-+    /// exit probe / speed test must only ride the live listeners when
-+    /// they actually belong to the target profile (otherwise the old
-+    /// tunnel's exit gets reported against the new profile's endpoint).
-+    profile_id: String,
-     /// S9: present when stream bonding engaged — the per-carrier status
-     /// surface AND the owner of the per-adapter engines.
-     bond: Option<Arc<BondOutbound>>,
-@@ -769,6 +781,14 @@ struct Core {
-     /// Per-link `(up, down)` byte totals accrued from `ConnClosed` events.
-     bytes: Mutex<HashMap<String, (u64, u64)>>,
-     sysproxy_set: AtomicBool,
-+    /// S20 (Copilot round 2): serializes every system-proxy hand-off
-+    /// (give_up's kill-switch engage, both disconnect restore paths, the
-+    /// kill-switch toggle-off escape hatch, connect step-0 self-heal and
-+    /// the connect-time arming) so a `give_up` racing an explicit
-+    /// disconnect can never re-install the black-hole AFTER the disconnect
-+    /// already restored the user's proxy. Std lock, never held across an
-+    /// await (the black-hole BIND is hoisted out, see `give_up`).
-+    proxy_mtx: Mutex<()>,
-     /// S19 (review fix): the kill switch's black-hole listener — while
-     /// engaged we OWN [`KILL_SWITCH_BLACKHOLE_PORT`] so a local process
-     /// cannot pre-bind it and turn the black hole into its own proxy.
-@@ -867,6 +887,7 @@ impl RealService {
-                 session: Mutex::new(None),
-                 bytes: Mutex::new(HashMap::new()),
-                 sysproxy_set: AtomicBool::new(false),
-+                proxy_mtx: Mutex::new(()),
-                 blackhole: Mutex::new(None),
-                 disconnect_requested: AtomicBool::new(false),
-                 restarts: AtomicU32::new(0),
-@@ -918,8 +939,25 @@ impl RealService {
-         //    may have left the registry pointing at a dead local listener.
-         //    Best-effort — a failure never blocks connecting. This also
-         //    clears any KILL SWITCH black-hole from a previous session.
--        let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
--        stop_blackhole(&self.core);
-+        //    S20 (Copilot round 2): under the proxy lock — and the OWNERSHIP
-+        //    flag clears with a successful restore. Leaving it set after
-+        //    the self-heal consumed the snapshot meant a later disconnect
-+        //    "restored" with no snapshot, which DISABLES the user's
-+        //    pre-existing proxy instead of leaving it untouched.
-+        {
-+            let _guard = lock(&self.core.proxy_mtx);
-+            let engaged = self.core.sysproxy_set.load(Ordering::SeqCst);
-+            if crate::sysproxy::restore(&self.core.paths.state_dir).is_ok() {
-+                self.core.sysproxy_set.store(false, Ordering::SeqCst);
-+                stop_blackhole(&self.core);
-+            } else if !engaged {
-+                // Nothing owned — release any dangling listener.
-+                stop_blackhole(&self.core);
-+            }
-+            // engaged && restore failed: keep the flag AND the listener —
-+            // the proxy still points at the black hole (fail-closed) and
-+            // the next disconnect retries the restore.
-+        }
- 
-         let settings = SettingsFile::load(&self.core.paths.settings_file());
-         // S9: refresh the engine log level BEFORE links are built.
-@@ -1140,6 +1178,7 @@ impl RealService {
- 
-         let session = Session {
-             server,
-+            profile_id: profile.id.clone(),
-             bond,
-             shutdown: shutdown_tx,
-             run_handle,
-@@ -1162,6 +1201,9 @@ impl RealService {
-         // System proxy AFTER Connected, non-fatal (step 5 of the v0.2
-         // connect_sequence discipline). Skipped for ephemeral binds (port 0
-         // in settings — the tests' mode; a registry write would be pointless).
-+        // S20 (Copilot round 2): under the proxy lock — an explicit
-+        // disconnect landing mid-connect must never observe a half-armed
-+        // proxy hand-off.
-         if settings.settings.system_proxy && settings.socks_port != 0 && settings.http_port != 0 {
-             let http_addr = lock(&self.core.session)
-                 .as_ref()
-@@ -1170,6 +1212,7 @@ impl RealService {
-                 // The v0.2 full LAN-bypass override (S6-REV-C P1-4): LAN and
-                 // loopback hosts must never ride the tunnel.
-                 let override_list = crate::config::default_proxy_override();
-+                let _guard = lock(&self.core.proxy_mtx);
-                 match crate::sysproxy::set(
-                     &http.to_string(),
-                     &override_list,
-@@ -1288,18 +1331,31 @@ async fn pump(
- /// fail-closed); only the local pre-bind guarantee is lost. On Windows an
- /// unprivileged process may bind port 9; dev hosts without that right
- /// simply take the fallback.
--async fn spawn_blackhole(core: &Core) {
-+///
-+/// S20 (Copilot round 2): split into [`bind_blackhole`] (the async bind,
-+/// hoisted OUT of the proxy lock) and [`engage_blackhole`] (the sync
-+/// accept-loop install) so `give_up` can bind FIRST and only point the
-+/// system proxy at the port once ownership is proven — the old order
-+/// (set-then-bind) left a window where a local process could own port 9
-+/// and receive the black-holed traffic.
-+async fn bind_blackhole() -> Option<tokio::net::TcpListener> {
-     let addr = SocketAddr::from(([127, 0, 0, 1], KILL_SWITCH_BLACKHOLE_PORT));
--    let listener = match tokio::net::TcpListener::bind(addr).await {
--        Ok(l) => l,
-+    match tokio::net::TcpListener::bind(addr).await {
-+        Ok(l) => Some(l),
-         Err(e) => {
-             tracing::warn!(
-                 "kill switch: could not own the black-hole port {addr} ({e}) \
-                  — dead-port fallback (still fail-closed)"
-             );
--            return;
-+            None
-         }
--    };
-+    }
-+}
-+
-+/// S20 (Copilot round 2): install the accept loop for an ALREADY-BOUND
-+/// listener and record it in [`Core::blackhole`]. Sync by design — called
-+/// with the proxy lock held (the bind was done beforehand).
-+fn engage_blackhole(core: &Core, listener: tokio::net::TcpListener) {
-     let (tx, mut rx) = tokio::sync::watch::channel(false);
-     tokio::spawn(async move {
-         loop {
-@@ -1348,48 +1404,81 @@ fn stop_blackhole(core: &Core) {
- ///   listeners die with the session and proxied connections were already
- ///   refused when all links were down.
- ///
-+/// S20 (Copilot round 2) hardening:
-+/// - the black-hole port is BOUND FIRST — `sysproxy::set` only runs once
-+///   ownership is proven, so a local process that owns port 9 can never
-+///   receive the black-holed traffic (the stale proxy entry keeps
-+///   blocking instead, which is still fail-closed);
-+/// - the whole hand-off runs under [`Core::proxy_mtx`], so an explicit
-+///   `disconnect()` can no longer restore the user's proxy in the window
-+///   between `give_up`'s flag read and its registry write (which used to
-+///   re-install the black-hole AFTER the disconnect had returned).
-+///
- /// Best-effort throughout — the app never dies invisibly (D15).
- async fn give_up(core: &Core, shutdown: &tokio::sync::watch::Sender<bool>) {
-     tracing::warn!("supervisor: all tunnel links exhausted — giving up");
--    if core.sysproxy_set.load(Ordering::SeqCst) {
--        let kill_switch = SettingsFile::load(&core.paths.settings_file())
--            .settings
--            .kill_switch;
--        if kill_switch {
--            // Keep sysproxy_set TRUE: we still own the proxy state (the
--            // black hole IS ours); the next explicit disconnect or connect
--            // self-heal restores it.
--            let override_list = crate::config::default_proxy_override();
--            match crate::sysproxy::set(
--                KILL_SWITCH_BLACKHOLE_PROXY,
--                &override_list,
--                &core.paths.state_dir,
--            ) {
--                Ok(()) => {
--                    // Review fix: OWN the port so a local process cannot
--                    // pre-bind it and turn the black hole into a proxy of
--                    // its own (the accept loop swallows connections).
--                    spawn_blackhole(core).await;
-+    // Bind BEFORE any registry write (and outside the proxy lock — the
-+    // bind awaits). Ownership is proven up front; the listener is dropped
-+    // unused whenever the decisions below do not engage the kill switch.
-+    let listener = bind_blackhole().await;
-+    {
-+        let _guard = lock(&core.proxy_mtx);
-+        if core.sysproxy_set.load(Ordering::SeqCst) {
-+            let kill_switch = SettingsFile::load(&core.paths.settings_file())
-+                .settings
-+                .kill_switch;
-+            if kill_switch {
-+                // Keep sysproxy_set TRUE: we still own the proxy state (the
-+                // black hole IS ours); the next explicit disconnect or
-+                // connect self-heal restores it.
-+                let override_list = crate::config::default_proxy_override();
-+                if let Some(listener) = listener {
-+                    match crate::sysproxy::set(
-+                        KILL_SWITCH_BLACKHOLE_PROXY,
-+                        &override_list,
-+                        &core.paths.state_dir,
-+                    ) {
-+                        Ok(()) => {
-+                            // Review fix: OWN the port so a local process
-+                            // cannot pre-bind it and turn the black hole
-+                            // into a proxy of its own (the accept loop
-+                            // swallows connections).
-+                            engage_blackhole(core, listener);
-+                            core.emit(ServiceEvent::LogLine(
-+                                "KILL SWITCH engaged: the tunnel died on its own — system traffic is \
-+                                 now BLOCKED (fail-closed) instead of leaking direct. Connect again \
-+                                 to resume, or toggle the kill switch off in Settings."
-+                                    .into(),
-+                            ));
-+                        }
-+                        Err(e) => {
-+                            // The registry still points at OUR dead local
-+                            // listener — still fail-closed, just less tidy.
-+                            // The freshly-bound listener is useless now
-+                            // (nothing points at port 9): release it.
-+                            drop(listener);
-+                            core.emit(ServiceEvent::LogLine(format!(
-+                                "KILL SWITCH: could not engage the black-hole proxy ({e}) — the stale \
-+                                 proxy entry keeps blocking traffic (fail-closed)"
-+                            )));
-+                        }
-+                    }
-+                } else {
-+                    // S20 (Copilot round 2): port 9 is owned by someone else
-+                    // (or unbindable) — do NOT point the system proxy at
-+                    // it; the stale entry keeps refusing (fail-closed).
-                     core.emit(ServiceEvent::LogLine(
--                        "KILL SWITCH engaged: the tunnel died on its own — system traffic is \
--                         now BLOCKED (fail-closed) instead of leaking direct. Connect again \
--                         to resume, or toggle the kill switch off in Settings."
-+                        "KILL SWITCH: could not own the black-hole port — the stale proxy entry \
-+                         keeps blocking traffic (fail-closed; nothing is routed to a foreign \
-+                         listener)"
-                             .into(),
-                     ));
-                 }
--                Err(e) => {
--                    // The registry still points at OUR dead local listener
--                    // — still fail-closed, just less tidy.
--                    core.emit(ServiceEvent::LogLine(format!(
--                        "KILL SWITCH: could not engage the black-hole proxy ({e}) — the stale \
--                         proxy entry keeps blocking traffic (fail-closed)"
--                    )));
-+            } else if core.sysproxy_set.swap(false, Ordering::SeqCst) {
-+                if let Err(e) = crate::sysproxy::restore(&core.paths.state_dir) {
-+                    tracing::warn!("system proxy restore failed: {e}");
-                 }
+@@ -374,6 +374,31 @@ GUI, no new dependencies):
+   color-scheme), re-checked every few seconds while the app runs. A
+   survey of the multipath-bonding literature (BLEST, ECF, MP-QUIC…) and
+   how it maps onto the scheduler shipped alongside in `docs/research/`.
++- **P0 reconnect fix + performance parity work + QoS + merged panel
++  (v0.14)**: adding a second server and switching to it while connected
++  no longer kills the tunnel until restart — in-flight proxy connections
++  are now tracked and force-closed when the drain grace expires (on
++  Windows their sockets used to pin the 10808/10809 local endpoints and
++  the next connect landed `ADDRINUSE` → `Failed`), the listeners retry a
++  busy bind for a few seconds instead of failing instantly, engine
++  config/log files carry an endpoint-identity hash so two profiles
++  sharing a tag can no longer overwrite each other's Xray config, and
++  profiles.json edits are serialized. Throughput/stability parity work:
++  TCP_NODELAY on every carrier/target leg (Nagle + delayed-ACK used to
++  stall each 16 KiB bonding frame behind a 40 ms ACK), cumulative ACKs
++  coalesced (8 frames / 20 ms, flushed by CLOSE and the 1 s heartbeat),
++  the carrier writer batches co-queued frames into one vectored write,
++  the send path drops two of its five per-frame copies, PONGs echo on
++  the carrier they arrived on (per-carrier RTT samples were
++  cross-contaminated), a probe can no longer quarantine the ONLY link
++  into a blackout (fail-open dial instead), and the background prober
++  now uses the user-configured probe target. Settings → Network gained
++  a **QoS fair share** toggle: connections are grouped by destination
++  and, when ≥2 groups race for a loaded tunnel, each gets an equal
++  share — one site/download can no longer dominate all bandwidth
++  (applies live, no reconnect; a single group or an idle tunnel runs at
++  full speed). The Status tab's exit-IP and speed-test cards merged into
++  one compact **Exit & speed** panel with both triggers side by side.
+ - **Server editing, offline probes, kill switch, diagnostics (v0.13)**:
+   every server card gained an **Edit** button — name, remark, address,
+   port, UUID and the REALITY fields (SNI, fingerprint, public key, short
+
+### Commit: 685e95c - backup(s21-features-qos-merged-panel): 2026-11-24T20:07:19Z (Z User, 2026-11-24)
+diff --git a/crates/mt-app/src/app.rs b/crates/mt-app/src/app.rs
+index 4cb0442..849c6f8 100755
+--- a/crates/mt-app/src/app.rs
++++ b/crates/mt-app/src/app.rs
+@@ -387,6 +387,8 @@ pub enum Message {
+     SpeedTested(Result<mt_service::SpeedTestInfo, String>),
+     /// Kill switch toggled (Settings → Network).
+     KillSwitchToggled(bool),
++    /// S21 (feature o): the fair-share bandwidth scheduler toggle.
++    QosToggled(bool),
+     /// Diagnostics mode toggled (Settings → Diagnostics).
+     DiagnosticsToggled(bool),
+     /// The diagnostics file path arrived (init / after a toggle).
+@@ -676,6 +678,7 @@ impl App {
+             kill_switch: false,
+             diagnostics: false,
+             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
++            qos_fair: false,
+         };
+         // S18: detect the OS appearance once so the System mode (the
+         // stock default) starts honest.
+@@ -1721,6 +1724,11 @@ impl App {
+                 self.settings.kill_switch = v;
+                 return self.save_settings(self.settings.clone());
              }
--        } else if core.sysproxy_set.swap(false, Ordering::SeqCst) {
--            if let Err(e) = crate::sysproxy::restore(&core.paths.state_dir) {
--                tracing::warn!("system proxy restore failed: {e}");
--            }
++            // S21 (feature o): flips live in the service (no reconnect).
++            Message::QosToggled(v) => {
++                self.settings.qos_fair = v;
++                return self.save_settings(self.settings.clone());
++            }
+             Message::DiagnosticsToggled(v) => {
+                 self.settings.diagnostics = v;
+                 // Review fix: CHAIN the path refresh after the save — a
+@@ -3256,6 +3264,21 @@ mod tests {
+         assert!(app.logs.iter().any(|l| l.contains("speed test")));
+     }
+ 
++    /// S21 (feature o): the QoS toggle updates the draft settings exactly
++    /// like the kill-switch twin (persistence through the service is
++    /// proven directly in real_service's qos_toggle test).
++    #[cfg(feature = "mock")]
++    #[tokio::test]
++    async fn s21_qos_toggle_updates_draft() {
++        let service = Arc::new(crate::mock::MockService::new());
++        let mut app = App::init_async(service, Flags::default()).await;
++        assert!(!app.settings.qos_fair);
++        drop(app.update(Message::QosToggled(true)));
++        assert!(app.settings.qos_fair);
++        drop(app.update(Message::QosToggled(false)));
++        assert!(!app.settings.qos_fair);
++    }
++
+     /// S19: kill switch + diagnostics + speed-URL toggles update the draft
+     /// settings (the save task is runtime-driven; persistence through the
+     /// service is proven directly like the S15/S16 twins) and the view
+diff --git a/crates/mt-app/src/mock.rs b/crates/mt-app/src/mock.rs
+index 54fb875..38443a5 100755
+--- a/crates/mt-app/src/mock.rs
++++ b/crates/mt-app/src/mock.rs
+@@ -110,6 +110,7 @@ impl MockService {
+             kill_switch: false,
+             diagnostics: false,
+             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
++            qos_fair: false,
+         };
+         let inner = Inner {
+             state: ServiceState::Disconnected,
+diff --git a/crates/mt-app/src/screens.rs b/crates/mt-app/src/screens.rs
+index 1a2d355..1ab8b5e 100755
+--- a/crates/mt-app/src/screens.rs
++++ b/crates/mt-app/src/screens.rs
+@@ -468,37 +468,75 @@ pub fn status(app: &App) -> Element<'_> {
+         .height(Length::Fixed(STATUS_GRAPH_HEIGHT));
+     let _ = util::fmt_bps; // rate labels live in graph.rs; kept for chips/tests
+ 
+-    // --- exit probe card (D18; S19 works offline too) ----------------------
++    // --- merged exit & speed panel (S21, user ask p) -------------------------
++    // The two separate cards each carried a title + subtitle + button +
++    // result rows with lots of air between them; ONE panel shares the
++    // header, puts both triggers side by side and stacks the result rows
++    // compactly. All state/messages are unchanged — a pure view merge
++    // inside the page scrollable (D24: nothing growable in the frame).
+     let has_active = app.profiles.iter().any(|p| p.active);
+-    let mut exit_col = column![
+-        text("Exit identity")
+-            .size(ts.title_m.size)
+-            .color(s.on_surface),
+-        text(if has_active {
+-            "checks which IP the internet sees — connected (rides the live tunnel) or not \
+-             (spawns a temporary probe tunnel)"
+-        } else {
+-            "checks which IP the internet sees — pick an active server first"
+-        })
+-        .size(ts.body_s.size)
+-        .color(s.on_surface_variant),
+-    ]
+-    .spacing(6);
+-    if app.exit_probing {
+-        exit_col = exit_col.push(
++    // Both triggers live in ONE row (S21 merged panel). Explicit Element
++    // annotations: the two branches build different widget types and the
++    // row needs a single erased type.
++    let exit_ctl: Element = if app.exit_probing {
++        container(
+             text("probing…")
+                 .size(ts.body_m.size)
+                 .color(s.on_surface_variant),
+-        );
++        )
++        .width(Length::Fill)
++        .into()
+     } else {
+-        exit_col = exit_col.push(m3_button(
++        container(m3_button(
+             "Check exit IP",
+-            has_active,
++            has_active && !app.speed_testing,
+             ButtonKind::Tonal,
+             Message::ExitProbe,
+             app,
+-        ));
+-    }
++        ))
++        .width(Length::Fill)
++        .into()
++    };
++    let speed_ctl: Element = if app.speed_testing {
++        container(
++            text("testing… (up to 30 s)")
++                .size(ts.body_m.size)
++                .color(s.on_surface_variant),
++        )
++        .width(Length::Fill)
++        .into()
++    } else {
++        container(m3_button(
++            "Run speed test",
++            has_active && !app.exit_probing,
++            ButtonKind::Tonal,
++            Message::SpeedTest,
++            app,
++        ))
++        .width(Length::Fill)
++        .into()
++    };
++    let mut diag_col = column![
++        text("Exit & speed")
++            .size(ts.title_m.size)
++            .color(s.on_surface),
++        text(if has_active {
++            "check which IP the internet sees and measure the download rate — the live \
++             tunnel when connected, a temporary probe tunnel otherwise (setup is \
++             excluded from the rate)"
++        } else {
++            "check which IP the internet sees and measure the download rate — pick an \
++             active server first"
++        })
++        .size(ts.body_s.size)
++        .color(s.on_surface_variant),
++    ]
++    .spacing(6)
++    .push(
++        row![exit_ctl, speed_ctl]
++            .spacing(12)
++            .align_y(iced::Alignment::Center),
++    );
+     if let Some(res) = &app.exit {
+         match res {
+             Ok(info) => {
+@@ -521,9 +559,12 @@ pub fn status(app: &App) -> Element<'_> {
+                         s.on_error_container,
+                     )
+                 };
+-                exit_col = exit_col
++                diag_col = diag_col
+                     .push(
+                         row![
++                            text("exit")
++                                .size(ts.label_m.size)
++                                .color(s.on_surface_variant),
+                             text(info.exit_ip.clone())
+                                 .size(ts.headline_s.size)
+                                 .color(s.on_surface),
+@@ -567,53 +608,23 @@ pub fn status(app: &App) -> Element<'_> {
+                     );
+             }
+             Err(e) => {
+-                exit_col = exit_col.push(
+-                    text(format!("probe failed: {e}"))
++                diag_col = diag_col.push(
++                    text(format!("exit probe failed: {e}"))
+                         .size(ts.body_s.size)
+                         .color(s.error),
+                 );
+             }
          }
      }
-     // Retire the session so status/profiles views stop reporting the dead
-@@ -1499,6 +1588,31 @@ pub fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
-     Some((host.to_string(), port, path))
- }
+-    let exit_card = container(exit_col.spacing(8).padding(16))
+-        .style(t3::card(s, s.surface_container_low))
+-        .width(Length::Fill);
+-
+-    // --- speed test card (S19) ---------------------------------------------
+-    let mut speed_col = column![
+-        text("Speed test").size(ts.title_m.size).color(s.on_surface),
+-        text(if has_active {
+-            "downloads a test payload through the active server — the live tunnel when \
+-             connected, a temporary probe tunnel otherwise (single carrier; setup is \
+-             excluded from the rate)"
+-        } else {
+-            "downloads a test payload through the active server — pick an active server first"
+-        })
+-        .size(ts.body_s.size)
+-        .color(s.on_surface_variant),
+-    ]
+-    .spacing(6);
+-    if app.speed_testing {
+-        speed_col = speed_col.push(
+-            text("testing… (up to 30 s)")
+-                .size(ts.body_m.size)
+-                .color(s.on_surface_variant),
+-        );
+-    } else {
+-        speed_col = speed_col.push(m3_button(
+-            "Run speed test",
+-            has_active,
+-            ButtonKind::Tonal,
+-            Message::SpeedTest,
+-            app,
+-        ));
+-    }
+     if let Some(res) = &app.speed {
+         match res {
+             Ok(info) => {
+-                speed_col = speed_col
++                diag_col = diag_col
+                     .push(
+                         row![
++                            text("speed")
++                                .size(ts.label_m.size)
++                                .color(s.on_surface_variant),
+                             text(format!("{:.1} Mbps", info.mbps))
+                                 .size(ts.headline_s.size)
+                                 .color(s.on_surface),
+@@ -659,7 +670,7 @@ pub fn status(app: &App) -> Element<'_> {
+                     );
+             }
+             Err(e) => {
+-                speed_col = speed_col.push(
++                diag_col = diag_col.push(
+                     text(format!("speed test failed: {e}"))
+                         .size(ts.body_s.size)
+                         .color(s.error),
+@@ -667,7 +678,7 @@ pub fn status(app: &App) -> Element<'_> {
+             }
+         }
+     }
+-    let speed_card = container(speed_col.spacing(8).padding(16))
++    let diag_card = container(diag_col.spacing(8).padding(16))
+         .style(t3::card(s, s.surface_container_low))
+         .width(Length::Fill);
  
-+/// S20 (Copilot round 2): a support-file-safe rendering of a
-+/// user-configurable URL — scheme + host + port + path ONLY. Userinfo
-+/// (`http://user:pass@host/`), query strings (`?token=...`) and
-+/// fragments are stripped: those slots routinely carry API keys in
-+/// custom probe/speed endpoints, and the diagnostics file is designed
-+/// to be pasted into a chat verbatim. An unparseable URL renders as a
-+/// fixed placeholder (never echoed — the raw value may embed a secret).
-+fn redact_url(url: &str) -> String {
-+    match parse_http_url(url) {
-+        Some((host, port, path)) => {
-+            // parse_http_url leaves userinfo attached to the host
-+            // ("user:pass@host") — strip everything up to the last '@'.
-+            let host = match host.rsplit_once('@') {
-+                Some((_, h)) => h.to_string(),
-+                None => host,
-+            };
-+            // Path only up to the query ('?' — parse_http_url keeps it in
-+            // the path) and the fragment ('#').
-+            let path = path.split(['?', '#']).next().unwrap_or("/").to_string();
-+            format!("http://{host}:{port}{path}")
+@@ -828,8 +839,7 @@ pub fn status(app: &App) -> Element<'_> {
+             .width(Length::Fill),
+         );
+     }
+-    below = below.push(exit_card);
+-    below = below.push(speed_card);
++    below = below.push(diag_card);
+     below = below.push(bottom_card);
+     let page_scroll = scrollable(container(below).width(Length::Fill))
+         .width(Length::Fill)
+@@ -2025,6 +2035,24 @@ pub fn settings(app: &App) -> Element<'_> {
+         )
+         .size(ts.body_s.size)
+         .color(s.on_surface_variant),
++        // S21 (feature o): the fair-share bandwidth scheduler.
++        toggler(app.settings.qos_fair)
++            .label("QoS fair share (stop one app hogging all bandwidth)")
++            .size(28.0)
++            .on_toggle(Message::QosToggled)
++            .style(t3::switch(s)),
++        text(
++            "on: connections are grouped by the site they talk to; when two or \
++             more groups race for a loaded tunnel, each gets an equal share — \
++             a single download cannot starve everything else. One group alone \
++             (or an idle tunnel) runs at full speed. Applies immediately, no \
++             reconnect. off (default): every connection competes freely and \
++             one busy site can take all of it. Note: grouping is per \
++             destination — a download manager spreading over many servers \
++             counts as several groups.",
++        )
++        .size(ts.body_s.size)
++        .color(s.on_surface_variant),
+         row![
+             text("merge policy")
+                 .size(ts.body_m.size)
+diff --git a/crates/mt-app/src/theme.rs b/crates/mt-app/src/theme.rs
+index e3c33ec..719c205 100755
+--- a/crates/mt-app/src/theme.rs
++++ b/crates/mt-app/src/theme.rs
+@@ -693,6 +693,7 @@ mod tests {
+             kill_switch: false,
+             diagnostics: false,
+             speed_test_url: String::new(),
++            qos_fair: false,
+         });
+         assert_eq!(t.palette.seed(), 0x4285F4);
+         assert!(!t.dark);
+diff --git a/crates/mt-net/src/lib.rs b/crates/mt-net/src/lib.rs
+index c41ad63..764831a 100755
+--- a/crates/mt-net/src/lib.rs
++++ b/crates/mt-net/src/lib.rs
+@@ -183,6 +183,7 @@ mod error;
+ mod http;
+ mod merge;
+ mod outbound;
++mod qos;
+ mod router;
+ mod server;
+ mod shutdown;
+@@ -196,6 +197,7 @@ pub use merge::{
+     CAPACITY_FLOOR_BPS, CONN_RESERVE_BPS, SATURATION_FRACTION,
+ };
+ pub use outbound::DirectOutbound;
++pub use qos::QosScheduler;
+ pub use router::Router;
+ pub use server::ProxyServer;
+ pub use socks5::Socks5Outbound;
+diff --git a/crates/mt-net/src/qos.rs b/crates/mt-net/src/qos.rs
+new file mode 100644
+index 0000000..61a2e5b
+--- /dev/null
++++ b/crates/mt-net/src/qos.rs
+@@ -0,0 +1,278 @@
++//! Per-destination fair-share bandwidth scheduler (S21, user ask o):
++//! "a QoS toggle that can be turned on to prevent a single application
++//! from dominating all the bandwidth".
++//!
++//! DESIGN (pick one and document it — the mt-net discipline):
++//! - Every proxied connection is one FLOW; flows are grouped by their
++//!   TARGET (`host:port`). A browser's many connections to one site form
++//!   one group; a download manager hitting one CDN also forms one group —
++//!   exactly the "one application hogs everything" shape the toggle is
++//!   about.
++//! - The 1 s ticker measures the tunnel's aggregate up+down rate and, when
++//!   ≥2 groups are active AND the aggregate is above
++//!   [`QOS_CONTENTION_FLOOR`], refills every group's token bucket with
++//!   `aggregate / groups` bytes. A greedy group is then throttled at each
++//!   read (its pump sleeps until the next refill) while everyone else
++//!   keeps their full share. Below the floor — or with a single active
++//!   group — buckets are UNLIMITED: one app alone never pays a
++//!   throughput tax, and idle tunnels are never shaped.
++//! - The pump acquires budget BEFORE each read (the read is capped by
++//!   `PUMP_BUF`), so over-reserve is bounded by one buffer and the OS
++//!   socket buffers; writes back-pressure naturally behind reads.
++//! - Live toggle: the enabled flag is an AtomicBool the service flips on
++//!   the settings toggle WITHOUT rebuilding the session (no reconnect —
++//!   unlike the diagnostics toggle, nothing here needs a data-plane
++//!   rebuild).
++//!
++//! NOT an app-level classifier: local flows arrive from 127.0.0.1 with
++//! per-connection ephemeral ports, so per-PROCESS attribution is not
++//! available at this layer; per-target grouping is the honest proxy-level
++//! approximation (documented in the Settings copy).
++
++use std::collections::HashMap;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::Mutex;
++use std::time::Duration;
++
++/// Aggregate rate below which no shaping happens (bytes/s): shaping only
++/// engages when the tunnel is actually loaded — a 1 Mbps tunnel cannot
++/// "hog" anything.
++pub const QOS_CONTENTION_FLOOR: u64 = 2 * 1024 * 1024;
++/// How long a throttled pump sleeps between acquire attempts (the next
++/// refill lands within one 1 s tick).
++const QOS_RETRY: Duration = Duration::from_millis(20);
++/// How long a group with no active flows stays in the table (ticks it was
++/// last seen with a live flow).
++const GROUP_STALE_TICKS: u32 = 3;
++
++#[derive(Default)]
++struct GroupState {
++    /// Token budget for the CURRENT tick (bytes this group may still read).
++    tokens: u64,
++    /// Live flows in this group (the pump registers/unregisters).
++    flows: usize,
++    /// Ticks since the last refill where the group had no flows.
++    idle_ticks: u32,
++}
++
++/// Fair-share scheduler shared by the proxy pumps (see module docs).
++/// Cheap in the hot path: one AtomicBool load + a short mutex critical
++/// section per ≤16 KiB read.
++#[derive(Default)]
++pub struct QosScheduler {
++    enabled: AtomicBool,
++    groups: Mutex<HashMap<String, GroupState>>,
++}
++
++impl QosScheduler {
++    pub fn new(enabled: bool) -> Self {
++        Self {
++            enabled: AtomicBool::new(enabled),
++            groups: Mutex::new(HashMap::new()),
 +        }
-+        None => "<redacted (invalid URL)>".to_string(),
++    }
++
++    /// Whether shaping is currently ON.
++    pub fn enabled(&self) -> bool {
++        self.enabled.load(Ordering::SeqCst)
++    }
++
++    /// Live-toggle the scheduler (Settings toggle; no reconnect needed).
++    /// Turning it OFF also unblocks every waiting pump (they re-check the
++    /// flag each retry) and clears the group table.
++    pub fn set_enabled(&self, on: bool) {
++        self.enabled.store(on, Ordering::SeqCst);
++        if !on {
++            if let Ok(mut g) = self.groups.lock() {
++                g.clear();
++            }
++        }
++    }
++
++    /// A flow starts (tunnel entry).
++    pub fn register(&self, group: &str) {
++        if let Ok(mut g) = self.groups.lock() {
++            g.entry(group.to_string()).or_default().flows += 1;
++        }
++    }
++
++    /// A flow ends (tunnel exit).
++    pub fn unregister(&self, group: &str) {
++        if let Ok(mut g) = self.groups.lock() {
++            if let Some(state) = g.get_mut(group) {
++                state.flows = state.flows.saturating_sub(1);
++            }
++        }
++    }
++
++    /// 1 s tick: refill buckets from the measured aggregate rate. Called
++    /// from the proxy ticker with the window's up+down bytes/s.
++    pub fn tick(&self, up_bps: u64, down_bps: u64) {
++        let aggregate = up_bps.saturating_add(down_bps);
++        let Ok(mut g) = self.groups.lock() else {
++            return;
++        };
++        g.retain(|_, s| {
++            s.flows > 0 || {
++                s.idle_ticks += 1;
++                s.idle_ticks < GROUP_STALE_TICKS
++            }
++        });
++        let active: usize = g.values().filter(|s| s.flows > 0).count();
++        // Shaping engages ONLY under real contention: ≥2 groups racing for
++        // an aggregate above the floor. Otherwise everything is unlimited.
++        if active < 2 || aggregate < QOS_CONTENTION_FLOOR {
++            for s in g.values_mut() {
++                s.tokens = u64::MAX;
++            }
++            return;
++        }
++        let quantum = aggregate / active as u64;
++        for s in g.values_mut() {
++            s.tokens = quantum;
++        }
++    }
++
++    /// The pump's read gate: wait until this group has budget for one
++    /// buffer-sized read (or shaping is off / not contended). Blocks at
++    /// most until the next 1 s refill.
++    pub async fn acquire(&self, group: &str, budget: u64) {
++        loop {
++            if !self.enabled() {
++                return;
++            }
++            {
++                let Ok(mut g) = self.groups.lock() else {
++                    return; // poisoned lock: fail open, never stall traffic
++                };
++                let state = g.entry(group.to_string()).or_default();
++                if state.tokens >= budget {
++                    state.tokens -= budget;
++                    return;
++                }
++            }
++            tokio::time::sleep(QOS_RETRY).await;
++        }
++    }
++
++    /// Test/observability hook: the tokens currently available to a group.
++    #[cfg(test)]
++    pub(crate) fn tokens_of(&self, group: &str) -> u64 {
++        self.groups
++            .lock()
++            .map(|g| g.get(group).map(|s| s.tokens).unwrap_or(0))
++            .unwrap_or(0)
 +    }
 +}
 +
- /// `host:port` → [`TargetAddr`] (IP literals become [`Host::Ip`]; brackets
- /// for IPv6 are unwrapped by the v0.2 parser we reuse).
- pub fn parse_probe_target(spec: &str) -> Option<TargetAddr> {
-@@ -1613,13 +1727,30 @@ impl MtService for RealService {
-             // black-hole (or any proxy state we still own from a session
-             // that already died) — the user asked to stop tunneling, not
-             // to keep the network blocked.
--            if self.core.sysproxy_set.swap(false, Ordering::SeqCst) {
--                if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
--                    tracing::warn!("system proxy restore failed: {e}");
-+            // S20 (Copilot round 2): under the proxy lock, and the
-+            // ownership/listener are only released when the restore
-+            // SUCCEEDED — a failed restore keeps the black-hole engaged
-+            // (fail-closed) and this same path retries on the next
-+            // disconnect; the "restored" log line is only truthful then.
-+            {
-+                let _guard = lock(&self.core.proxy_mtx);
-+                if self.core.sysproxy_set.load(Ordering::SeqCst) {
-+                    match crate::sysproxy::restore(&self.core.paths.state_dir) {
-+                        Ok(()) => {
-+                            self.core.sysproxy_set.store(false, Ordering::SeqCst);
-+                            stop_blackhole(&self.core);
-+                            self.core
-+                                .emit(ServiceEvent::LogLine("system proxy restored".into()));
-+                        }
-+                        Err(e) => {
-+                            tracing::warn!("system proxy restore failed: {e}");
-+                            self.core.emit(ServiceEvent::LogLine(format!(
-+                                "ERROR system proxy restore failed: {e} — the kill switch stays \
-+                                 engaged; disconnect again to retry"
-+                            )));
-+                        }
-+                    }
-                 }
--                stop_blackhole(&self.core);
--                self.core
--                    .emit(ServiceEvent::LogLine("system proxy restored".into()));
-             }
-             return;
-         };
-@@ -1631,11 +1762,25 @@ impl MtService for RealService {
-         drop(session.shutdown); // run() also exits when the sender drops
-         let _ = session.run_handle.await;
-         let _ = session.pump_handle.await;
--        if self.core.sysproxy_set.swap(false, Ordering::SeqCst) {
--            if let Err(e) = crate::sysproxy::restore(&self.core.paths.state_dir) {
--                tracing::warn!("system proxy restore failed: {e}");
-+        // S20 (Copilot round 2): same locked, restore-first discipline as
-+        // the no-session branch above.
-+        {
-+            let _guard = lock(&self.core.proxy_mtx);
-+            if self.core.sysproxy_set.load(Ordering::SeqCst) {
-+                match crate::sysproxy::restore(&self.core.paths.state_dir) {
-+                    Ok(()) => {
-+                        self.core.sysproxy_set.store(false, Ordering::SeqCst);
-+                        stop_blackhole(&self.core);
-+                    }
-+                    Err(e) => {
-+                        tracing::warn!("system proxy restore failed: {e}");
-+                        self.core.emit(ServiceEvent::LogLine(format!(
-+                            "ERROR system proxy restore failed: {e} — the kill switch stays \
-+                             engaged; disconnect again to retry"
-+                        )));
-+                    }
-+                }
-             }
--            stop_blackhole(&self.core);
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::Arc;
++
++    fn groups_active(s: &QosScheduler) -> usize {
++        s.groups
++            .lock()
++            .unwrap()
++            .values()
++            .filter(|g| g.flows > 0)
++            .count()
++    }
++
++    #[tokio::test]
++    async fn single_group_is_never_shaped() {
++        let s = QosScheduler::new(true);
++        s.register("a.example:443");
++        s.register("a.example:443");
++        assert_eq!(groups_active(&s), 1);
++        s.tick(100 * 1024 * 1024, 0); // 100 Mbps, 1 group
++                                      // Unlimited tokens: big acquires never block.
++        tokio::time::timeout(
++            Duration::from_millis(100),
++            s.acquire("a.example:443", 1024 * 1024),
++        )
++        .await
++        .expect("unlimited group must not block");
++    }
++
++    #[tokio::test]
++    async fn disabled_scheduler_never_blocks() {
++        let s = QosScheduler::new(false);
++        s.set_enabled(false);
++        s.register("a:1");
++        s.register("b:1");
++        s.tick(1024 * 1024 * 1024, 0);
++        tokio::time::timeout(Duration::from_millis(50), s.acquire("a:1", 1 << 30))
++            .await
++            .expect("disabled scheduler must not block");
++    }
++
++    #[tokio::test]
++    async fn contended_groups_get_a_fair_quantum() {
++        let s = QosScheduler::new(true);
++        s.register("greedy:443");
++        s.register("small:443");
++        // 80 MiB/s aggregate, 2 groups → 40 MiB/s each per tick.
++        let agg = 80 * 1024 * 1024;
++        s.tick(agg, 0);
++        let quantum = agg / 2;
++        assert!(
++            s.tokens_of("greedy:443") == quantum,
++            "each contended group gets aggregate/groups"
++        );
++        // The greedy group exhausts its quantum, then must WAIT for the
++        // next refill (bounded: below one tick + retry cadence).
++        let started = std::time::Instant::now();
++        // Acquire the full quantum in one 1 MiB step: the NEXT acquire of
++        // another quantum-sized budget must block (not resolve instantly).
++        tokio::time::timeout(Duration::from_millis(200), s.acquire("greedy:443", quantum))
++            .await
++            .expect("initial quantum is available");
++        let blocked = tokio::time::timeout(Duration::from_millis(60), async {
++            s.acquire("greedy:443", quantum).await;
++        })
++        .await;
++        assert!(blocked.is_err(), "exhausted group must block (no budget)");
++        // The small group keeps its own full quantum meanwhile.
++        tokio::time::timeout(Duration::from_millis(50), s.acquire("small:443", quantum))
++            .await
++            .expect("the other group still has its share");
++        assert!(started.elapsed() < Duration::from_secs(2));
++    }
++
++    #[tokio::test]
++    async fn idle_flow_groups_expire() {
++        let s = QosScheduler::new(true);
++        s.register("gone:80");
++        s.unregister("gone:80");
++        for _ in 0..GROUP_STALE_TICKS + 1 {
++            s.tick(0, 0);
++        }
++        assert!(
++            s.groups.lock().unwrap().is_empty(),
++            "flow-less groups are garbage-collected"
++        );
++    }
++
++    #[tokio::test]
++    async fn set_enabled_false_unblocks_waiters() {
++        let s = Arc::new(QosScheduler::new(true));
++        s.register("a:1");
++        s.register("b:1");
++        s.tick(80 * 1024 * 1024, 0);
++        let quantum = 40 * 1024 * 1024;
++        tokio::time::timeout(Duration::from_millis(200), s.acquire("a:1", quantum))
++            .await
++            .expect("first quantum ok");
++        let waiter = {
++            let s2 = Arc::clone(&s);
++            tokio::spawn(async move { s2.acquire("a:1", quantum).await })
++        };
++        tokio::time::sleep(Duration::from_millis(60)).await;
++        s.set_enabled(false); // live toggle must unblock the pump
++        tokio::time::timeout(Duration::from_secs(2), waiter)
++            .await
++            .expect("join")
++            .expect("waiter resolves after disable");
++    }
++}
+diff --git a/crates/mt-net/src/server.rs b/crates/mt-net/src/server.rs
+index 7d57ab9..b7e0cc2 100755
+--- a/crates/mt-net/src/server.rs
++++ b/crates/mt-net/src/server.rs
+@@ -68,6 +68,7 @@ use tokio::time::timeout;
+ 
+ use crate::merge::{prober_loop, Aggregator};
+ use crate::outbound::DirectOutbound;
++use crate::qos::QosScheduler;
+ use crate::router::Router;
+ use crate::shutdown::wait_for_shutdown;
+ use crate::socks5::{self, rep};
+@@ -190,6 +191,10 @@ pub struct ProxyServer {
+     direct: Arc<dyn Outbound>,
+     events: broadcast::Sender<ProxyEvent>,
+     shared: Arc<Shared>,
++    /// S21 (feature o): optional fair-share scheduler. `None` = disabled
++    /// (all stock builders/tests); production attaches one when the
++    /// Settings toggle is on, and can live-flip the flag mid-session.
++    qos: Option<Arc<QosScheduler>>,
+ }
+ 
+ impl ProxyServer {
+@@ -215,9 +220,23 @@ impl ProxyServer {
+             direct: Arc::new(DirectOutbound::new()),
+             events,
+             shared: Arc::new(Shared::default()),
++            qos: None,
          }
-         self.core.bytes_reset();
-         self.core.set_state(ServiceState::Disconnected);
-@@ -1711,13 +1856,16 @@ impl MtService for RealService {
-             &settings.settings.bonded_adapters,
-             &mt_platform::enumerate_adapters(),
+     }
+ 
++    /// S21 (feature o): attach the fair-share scheduler (per-target group
++    /// shaping; see [`QosScheduler`]).
++    pub fn with_qos(mut self, qos: Arc<QosScheduler>) -> Self {
++        self.qos = Some(qos);
++        self
++    }
++
++    /// The attached fair-share scheduler, if any (the service live-flips
++    /// its enabled flag on the Settings toggle).
++    pub fn qos(&self) -> Option<Arc<QosScheduler>> {
++        self.qos.clone()
++    }
++
+     /// Override the background probe interval.
+     pub fn with_probe_interval(mut self, interval: Duration) -> Self {
+         self.probe_interval = interval;
+@@ -293,6 +312,7 @@ impl ProxyServer {
+         background.push(tokio::spawn(tick_loop(
+             Arc::clone(&self.shared),
+             Arc::clone(&self.aggregator),
++            self.qos.clone(),
+             self.events.clone(),
+             shutdown.clone(),
+         )));
+@@ -609,6 +629,15 @@ impl ProxyServer {
+         let down_count = Arc::new(AtomicU64::new(0));
+         // S11: the per-link counter (up+down combined) the pumps bump.
+         let link_counter = link_idx.and_then(|i| self.aggregator.link_bytes(i));
++        // S21 (feature o): flows group by TARGET for fair sharing — one
++        // application = one group regardless of how many connections it
++        // opens. Registered/unregistered around the pump lifetime so the
++        // ticker's contention math counts live groups only.
++        let group = target.to_string();
++        let qos = self.qos.as_ref().map(|q| {
++            q.register(&group);
++            (Arc::clone(q), group.clone())
++        });
+         let (client_rd, client_wr) = tokio::io::split(client);
+         let (up_rd, up_wr) = tokio::io::split(upstream);
+         let pump_up = tokio::spawn(pump(
+@@ -618,6 +647,7 @@ impl ProxyServer {
+             Arc::clone(&up_count),
+             Arc::clone(&self.shared.up_total),
+             link_counter.clone(),
++            qos.clone(),
+         ));
+         let pump_down = tokio::spawn(pump(
+             up_rd,
+@@ -626,6 +656,7 @@ impl ProxyServer {
+             Arc::clone(&down_count),
+             Arc::clone(&self.shared.down_total),
+             link_counter,
++            qos,
+         ));
+         // S21 P0 fix: the pumps are DETACHED children of this task — if a
+         // shutdown force-close aborts THIS task, dropping their JoinHandles
+@@ -643,6 +674,9 @@ impl ProxyServer {
+         }
+         let up = up_count.load(Ordering::Relaxed);
+         let down = down_count.load(Ordering::Relaxed);
++        if let Some(q) = &self.qos {
++            q.unregister(&group);
++        }
+         let dur_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+         tracing::debug!(target = %target, link, up, down, dur_ms, "connection closed");
+         if let Some(idx) = link_idx {
+@@ -668,6 +702,7 @@ async fn pump<R, W>(
+     conn: Arc<AtomicU64>,
+     global: Arc<AtomicU64>,
+     per_link: Option<Arc<AtomicU64>>,
++    qos: Option<(Arc<QosScheduler>, String)>,
+ ) -> std::io::Result<()>
+ where
+     R: tokio::io::AsyncRead + Unpin + Send + 'static,
+@@ -679,6 +714,12 @@ where
+     }
+     let mut buf = vec![0u8; PUMP_BUF];
+     loop {
++        // S21 (feature o): the fair-share gate — blocks this pump until
++        // the flow's target group has budget for one read. Cheap when
++        // shaping is off or uncontended (one atomic load + map lookup).
++        if let Some((sched, group)) = &qos {
++            sched.acquire(group, PUMP_BUF as u64).await;
++        }
+         let n = rd.read(&mut buf).await?;
+         if n == 0 {
+             let _ = wr.shutdown().await;
+@@ -769,6 +810,7 @@ async fn accept_loop(server: Arc<ProxyServer>, listener: TcpListener, kind: Inbo
+ async fn tick_loop(
+     shared: Arc<Shared>,
+     aggregator: Arc<Aggregator>,
++    qos: Option<Arc<QosScheduler>>,
+     events: broadcast::Sender<ProxyEvent>,
+     mut shutdown: watch::Receiver<bool>,
+ ) {
+@@ -787,13 +829,17 @@ async fn tick_loop(
+         last_tick = now;
+         let up = shared.up_total.load(Ordering::Relaxed);
+         let down = shared.down_total.load(Ordering::Relaxed);
+-        let ev = ProxyEvent::Tick {
+-            up_bps: up.saturating_sub(last_up),
+-            down_bps: down.saturating_sub(last_down),
+-        };
++        let up_bps = up.saturating_sub(last_up);
++        let down_bps = down.saturating_sub(last_down);
++        let ev = ProxyEvent::Tick { up_bps, down_bps };
+         last_up = up;
+         last_down = down;
+         aggregator.tick_loads(dt).await;
++        // S21 (feature o): the fair-share refill runs on the same 1 s
++        // cadence, off the measured aggregate (no extra sampling).
++        if let Some(q) = &qos {
++            q.tick(up_bps, down_bps);
++        }
+         let _ = events.send(ev);
+     }
+ }
+diff --git a/crates/mt-service/src/lib.rs b/crates/mt-service/src/lib.rs
+index 321af51..c850187 100755
+--- a/crates/mt-service/src/lib.rs
++++ b/crates/mt-service/src/lib.rs
+@@ -172,6 +172,14 @@ pub struct SettingsView {
+     /// payload needs no TLS of its own (D18's zero-TLS rule).
+     #[serde(default = "default_speed_test_url")]
+     pub speed_test_url: String,
++    /// S21 (feature o): fair-share bandwidth scheduler ("QoS") — when ON,
++    /// the proxy groups flows by TARGET and, under contention (≥2 groups
++    /// racing for an aggregate above the floor), caps each group at its
++    /// `aggregate / groups` share, so no single application/site can
++    /// dominate all the bandwidth. Flips live (no reconnect). Absent in
++    /// older files → false (D8 version-free migration by serde default).
++    #[serde(default)]
++    pub qos_fair: bool,
+ }
+ 
+ /// S18: how the app resolves light vs dark appearance. Serialized as
+@@ -885,6 +893,7 @@ mod close_to_tray_migration_tests {
+                 kill_switch: false,
+                 diagnostics: false,
+                 speed_test_url: default_speed_test_url(),
++                qos_fair: false,
+             }
+         }
+     }
+@@ -1029,4 +1038,27 @@ mod s19_migration_tests {
+         assert!(back.diagnostics);
+         assert_eq!(back.speed_test_url, "http://127.0.0.1:9/down");
+     }
++
++    /// S21 (feature o): settings.json written by v0.13 and older (no
++    /// `qos_fair` key) loads with the scheduler OFF (D8 version-free
++    /// migration via serde default), and an explicit choice round-trips.
++    #[test]
++    fn s21_qos_fair_defaults_and_roundtrip() {
++        let json = r#"{
++            "theme_seed": 42,
++            "dark_mode": false,
++            "system_proxy": true,
++            "merge_policy": "balanced",
++            "autostart": false,
++            "log_level": "info"
++        }"#;
++        let v: SettingsView = serde_json::from_str(json).expect("old settings load");
++        assert!(!v.qos_fair, "absent key → scheduler off");
++        let mut v = SettingsView::default_settings_for_tests();
++        v.qos_fair = true;
++        let json = serde_json::to_string(&v).expect("serialize");
++        assert!(json.contains("\"qos_fair\":true"));
++        let back: SettingsView = serde_json::from_str(&json).expect("reload");
++        assert!(back.qos_fair);
++    }
+ }
+diff --git a/src/real_service.rs b/src/real_service.rs
+index 3e222ff..b8a3bab 100755
+--- a/src/real_service.rs
++++ b/src/real_service.rs
+@@ -609,6 +609,7 @@ impl Default for SettingsFile {
+                 kill_switch: false,
+                 diagnostics: false,
+                 speed_test_url: default_speed_test_url(),
++                qos_fair: false,
+             },
+             // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
+             // settings.json must carry private-CIDR → direct rules, mirroring
+@@ -1112,7 +1113,13 @@ impl RealService {
+             };
+         let server = Arc::new(
+             ProxyServer::new(socks, http, links.clone(), router, policy)
+-                .with_probe_target(probe_target.clone()),
++                .with_probe_target(probe_target.clone())
++                // S21 (feature o): the fair-share scheduler is ALWAYS
++                // attached (initialized from settings) so the Settings
++                // toggle can flip it live without rebuilding the session.
++                .with_qos(Arc::new(mt_net::QosScheduler::new(
++                    settings.settings.qos_fair,
++                ))),
          );
--        let mut links = self
-+        let links = self
-             .core
-             .factory
-             .build(&profile, &bonded)
-             .await
-             .map_err(|e| e.to_string())?;
--        let Some(link) = links.pop() else {
-+        // S20 (Copilot round 2): the FIRST link is the top-priority
-+        // adapter (engine_specs_for preserves the user's order) — pop()
-+        // used to probe through the lowest-priority one.
-+        let Some(link) = links.first().cloned() else {
-             return Err("link factory produced no links".to_string());
-         };
-         let target = parse_probe_target(&settings.probe_target)
-@@ -1814,19 +1962,22 @@ impl MtService for RealService {
+         let proxy_events = server.subscribe();
+ 
+@@ -1987,6 +1994,10 @@ impl MtService for RealService {
          // on them AFTER the (successful) persist below.
          let diagnostics_changed = file.settings.diagnostics != settings.diagnostics;
          let kill_switch_disabled = file.settings.kill_switch && !settings.kill_switch;
-+        // S20 (Copilot round 2): the engines only pick up the debug log
-+        // level at SPAWN time, so enabling diagnostics while CONNECTED
-+        // must reconnect — otherwise the file silently misses the engine
-+        // debug output the UI promises.
-+        let diag_enabled_live = !file.settings.diagnostics
-+            && settings.diagnostics
-+            && self.core.get_state() == ServiceState::Connected;
-+        // S20: only set when the sink actually started (a failed + reverted
-+        // enable must NOT trigger the live reconnect below).
-+        let mut diag_started = false;
-         let mut settings = settings;
-         settings.bonded_adapters = file.settings.bonded_adapters.clone();
-         file.settings = settings.clone();
-         file.sync_legacy();
-         file.save(&self.core.paths.settings_file())
-             .map_err(|e| e.to_string())?;
--        if dataplane_changed && self.core.get_state() == ServiceState::Connected {
--            self.core.emit(ServiceEvent::LogLine(
--                "data-plane settings changed — reconnecting".into(),
--            ));
--            self.disconnect().await;
--            self.connect().await;
--        }
-         // S19: diagnostics mode transitions (only after a successful save —
-         // a rejected settings change never touches the log file).
-         if diagnostics_changed {
-@@ -1834,14 +1985,27 @@ impl MtService for RealService {
-                 let header = self.build_diag_header(&settings);
-                 match crate::diagnostics::enable(&self.core.paths.log_dir, &header) {
-                     Ok(p) => {
-+                        diag_started = true;
-                         self.core.emit(ServiceEvent::LogLine(format!(
-                             "INFO  diagnostics mode ON — writing {}",
-                             p.display()
-                         )));
-                     }
-                     Err(e) => {
-+                        // S20 (Copilot round 2): the toggle must not stay
-+                        // persisted-ON with no sink behind it (the UI
-+                        // would show the mode enabled while nothing is
-+                        // written, and a later settings save would skip
-+                        // the enable because the diff vanished). Revert
-+                        // the persisted flag and say so.
-+                        file.settings.diagnostics = false;
-+                        file.sync_legacy();
-+                        if let Err(save_err) = file.save(&self.core.paths.settings_file()) {
-+                            tracing::warn!("reverting the diagnostics toggle failed: {save_err}");
-+                        }
-                         self.core.emit(ServiceEvent::LogLine(format!(
--                            "WARN  diagnostics mode could not start: {e}"
-+                            "ERROR diagnostics mode could not start: {e} — the toggle was \
-+                             reverted; fix the cause and enable it again"
-                         )));
-                     }
-                 }
-@@ -1852,18 +2016,49 @@ impl MtService for RealService {
-                 )));
-             }
++        // S21 (feature o): the QoS fair-share scheduler flips LIVE on the
++        // attached session — no reconnect (nothing in the data plane
++        // changes; the scheduler's enabled flag is atomic).
++        let qos_changed = file.settings.qos_fair != settings.qos_fair;
+         // S20 (Copilot round 2): the engines only pick up the debug log
+         // level at SPAWN time, so enabling diagnostics while CONNECTED
+         // must reconnect — otherwise the file silently misses the engine
+@@ -2057,6 +2068,28 @@ impl MtService for RealService {
+             self.disconnect().await;
+             self.connect().await;
          }
-+        // Reconnect when the LIVE data plane changed, or when diagnostics
-+        // was enabled on a live session (S20: the engines re-read their
-+        // log level only at spawn — see diag_enabled_live above). Both
-+        // AFTER the diagnostics transition so connect_flow sees the new
-+        // sink state.
-+        if (dataplane_changed || (diag_enabled_live && diag_started))
-+            && self.core.get_state() == ServiceState::Connected
-+        {
-+            self.core.emit(ServiceEvent::LogLine(if dataplane_changed {
-+                "data-plane settings changed — reconnecting".into()
-+            } else {
-+                "diagnostics on — reconnecting so the engines log at debug".into()
-+            }));
-+            self.disconnect().await;
-+            self.connect().await;
++        // S21 (feature o): live QoS flip — applies to the attached session
++        // immediately (the pump gate re-checks the flag per read) and to
++        // every future session through settings.json.
++        if qos_changed {
++            let sched = lock(&self.core.session)
++                .as_ref()
++                .and_then(|s| s.server.qos());
++            match sched {
++                Some(q) => {
++                    q.set_enabled(settings.qos_fair);
++                    self.core.emit(ServiceEvent::LogLine(if settings.qos_fair {
++                        "INFO  QoS fair share ON — no single site/application can hog the bandwidth anymore".into()
++                    } else {
++                        "INFO  QoS fair share OFF".into()
++                    }));
++                }
++                None => {
++                    // No live session: the flag persists; the next connect
++                    // attaches a scheduler initialized from settings.json.
++                }
++            }
 +        }
          // S19: turning the kill switch off is an explicit escape hatch for
          // an engaged black-hole (the give_up path keeps the proxy blocked
--        // while the switch stays on).
--        if kill_switch_disabled
--            && self.core.get_state() != ServiceState::Connected
--            && self.core.sysproxy_set.swap(false, Ordering::SeqCst)
--        {
--            let _ = crate::sysproxy::restore(&self.core.paths.state_dir);
--            stop_blackhole(&self.core);
--            self.core.emit(ServiceEvent::LogLine(
--                "kill switch disabled — system proxy restored".into(),
--            ));
-+        // while the switch stays on). S20 (Copilot round 2): under the
-+        // proxy lock, restore-first — ownership and the listener are only
-+        // released on a successful restore, so a failed escape hatch can
-+        // be retried instead of stranding a black-holed proxy with no
-+        // owner.
-+        if kill_switch_disabled && self.core.get_state() != ServiceState::Connected {
-+            let _guard = lock(&self.core.proxy_mtx);
-+            if self.core.sysproxy_set.load(Ordering::SeqCst) {
-+                match crate::sysproxy::restore(&self.core.paths.state_dir) {
-+                    Ok(()) => {
-+                        self.core.sysproxy_set.store(false, Ordering::SeqCst);
-+                        stop_blackhole(&self.core);
-+                        self.core.emit(ServiceEvent::LogLine(
-+                            "kill switch disabled — system proxy restored".into(),
-+                        ));
-+                    }
-+                    Err(e) => {
-+                        tracing::warn!("system proxy restore failed: {e}");
-+                        self.core.emit(ServiceEvent::LogLine(format!(
-+                            "ERROR system proxy restore failed: {e} — the black hole stays \
-+                             engaged; toggle the kill switch off again to retry"
-+                        )));
-+                    }
-+                }
-+            }
-         }
-         if autostart_changed {
-             let exe = std::env::current_exe()
-@@ -1946,13 +2141,10 @@ impl MtService for RealService {
-         //    session, fall back to a TEMPORARY probe tunnel through the
-         //    active profile — same exit identity, works while the app is
-         //    disconnected, no session left behind.
--        let socks_addr = {
--            let guard = lock(&self.core.session);
--            match guard.as_ref() {
--                Some(s) => s.server.socks_local_addr(),
--                None => None,
--            }
--        };
-+        //    S20 (Copilot round 2): the live listeners only count when the
-+        //    session was BUILT from this profile — the active profile can
-+        //    be switched without reconnecting, and the old tunnel's exit
-+        //    must never be reported against the new profile's endpoint.
-         let store = self.core.load_store_lossy();
-         let Some(profile) = store
-             .active
-@@ -1962,6 +2154,13 @@ impl MtService for RealService {
-         else {
-             return Err("no active profile — pick a server first".to_string());
-         };
-+        let socks_addr = {
-+            let guard = lock(&self.core.session);
-+            match guard.as_ref() {
-+                Some(s) if s.profile_id == profile.id => s.server.socks_local_addr(),
-+                _ => None,
-+            }
-+        };
-         let settings = SettingsFile::load(&self.core.paths.settings_file());
-         let url = settings.settings.exit_probe_url;
-         let (host, port, path) =
-@@ -2047,17 +2246,15 @@ impl MtService for RealService {
+         // while the switch stays on). S20 (Copilot round 2): under the
+@@ -2908,6 +2941,7 @@ mod tests {
+                 kill_switch: false,
+                 diagnostics: false,
+                 speed_test_url: default_speed_test_url(),
++                qos_fair: false,
              },
-             port,
-         };
--        // 2. The LIVE session only counts when it belongs to the target
--        //    (the active profile) — otherwise a temporary tunnel through
--        //    the target profile.
--        let is_active = store.active.as_deref() == Some(profile.id.as_str());
--        let live_socks = if is_active {
--            lock(&self.core.session)
--                .as_ref()
--                .and_then(|s| s.server.socks_local_addr())
--        } else {
--            None
--        };
-+        // 2. The LIVE session only counts when it was BUILT from the
-+        //    target profile (S20, Copilot round 2 — the active profile can
-+        //    be switched without reconnecting, so matching on "is the
-+        //    target the active one" is not enough); otherwise a temporary
-+        //    tunnel through the target profile.
-+        let live_socks = lock(&self.core.session)
+             rules: Vec::new(),
+             socks_port: 0,
+@@ -4036,6 +4070,51 @@ mod tests {
+         assert_eq!(&buf, b"ping");
+     }
+ 
++    /// S21 (feature o): the QoS toggle persists, flips the LIVE session's
++    /// scheduler WITHOUT a reconnect, and is visible to a fresh service
++    /// instance (settings.json round-trip).
++    #[tokio::test]
++    async fn qos_toggle_flips_live_without_reconnect_and_persists() {
++        let echo = spawn_echo().await;
++        let paths = scratch("qos");
++        write_settings(&paths, echo.port(), false);
++        let svc = RealService::with(paths.clone(), Arc::new(FakeFactory { echo, fail: false }));
++        let view = svc.import_link(VLESS_REALITY).await.expect("import");
++        svc.set_active_profile(&view.tag).await.expect("activate");
++        svc.connect().await;
++        assert_eq!(svc.status().await.state, ServiceState::Connected);
++
++        // Flip ON: persisted, live scheduler enabled, session untouched.
++        let mut settings = svc.settings().await;
++        settings.qos_fair = true;
++        svc.set_settings(settings).await.expect("save");
++        assert!(svc.settings().await.qos_fair, "persisted");
++        let sched = lock(&svc.core.session)
 +            .as_ref()
-+            .filter(|s| s.profile_id == profile.id)
-+            .and_then(|s| s.server.socks_local_addr());
-         let via_temp = live_socks.is_none();
-         let connect = async {
-             Ok::<_, anyhow::Error>(if let Some(socks) = live_socks {
-@@ -2122,6 +2319,17 @@ impl MtService for RealService {
-                     // when the head straddled reads).
-                     total += head.len() as u64 - split as u64;
-                     first = false;
-+                } else if head.len() > SPEED_TEST_MAX_HEAD {
-+                    // S20 (Copilot round 2): still inside the head past
-+                    // 64 KiB — no legitimate HTTP head is this big. Cap
-+                    // INDEPENDENTLY of the payload limit: until the
-+                    // terminator is found nothing counts toward `total`,
-+                    // so a header-less byte flood would otherwise grow
-+                    // this buffer for the whole 30 s budget.
-+                    return Err(format!(
-+                        "speed test: malformed response (no header end within {} KiB)",
-+                        SPEED_TEST_MAX_HEAD / 1024
-+                    ));
-                 }
-                 // Still inside the head (a slow server dribbling headers):
-                 // keep buffering, nothing counts yet.
-@@ -2194,7 +2402,16 @@ impl MtService for RealService {
-             .port
-             .trim()
-             .parse::<u16>()
--            .map_err(|_| format!("port must be a number 0-65535 ({:?})", edit.port))?;
-+            .map_err(|_| format!("port must be a number 1-65535 ({:?})", edit.port))?;
-+        // S20 (Copilot round 2): u16::parse happily accepts 0, but a
-+        // server port of 0 is meaningless (imported links reject it; the
-+        // engine would only fail later at connect time).
-+        if updated.port == 0 {
-+            return Err(format!(
-+                "port 0 is not a valid server port ({:?}) — use 1-65535",
-+                edit.port
-+            ));
-+        }
-         let identity = edit.identity.trim().to_string();
-         if identity.is_empty() {
-             return Err("identity (UUID/password) cannot be empty".to_string());
-@@ -2220,9 +2437,38 @@ impl MtService for RealService {
-         // Capability regression check: if the ORIGINAL could drive the
-         // engine, the edited one must still be able to (fail loud BEFORE
-         // the save; a profile that never could connect may be edited
--        // freely — its inability predates the edit).
-+        // freely — its inability predates the edit). S20 (Copilot round
-+        // 2): for convertible profiles the edited REALITY material gets
-+        // the SAME structural validation the link parser enforces — an
-+        // empty SNI, a wrong-length/non-base64url public key or an
-+        // invalid short ID must not silently reach the Xray config.
-         if endpoint_from_profile(&original).is_ok() {
-             endpoint_from_profile(&updated).map_err(|e| e.to_string())?;
-+            if let Security::Reality {
-+                sni,
-+                fingerprint: _,
-+                public_key,
-+                short_id,
-+                spider_x: _,
-+            } = &updated.security
-+            {
-+                if sni.is_empty() {
-+                    return Err("sni cannot be empty (the REALITY serverName)".to_string());
-+                }
-+                if public_key.len() != 43 || !public_key.bytes().all(crate::vless::is_base64url) {
-+                    return Err(format!(
-+                        "public key must be 43 unpadded base64url characters \
-+                         (a 32-byte X25519 key); got {}",
-+                        public_key.len()
-+                    ));
-+                }
-+                if short_id.len() > 16 || !short_id.bytes().all(|c| c.is_ascii_hexdigit()) {
-+                    return Err(format!(
-+                        "short id must be empty or 1-16 hex characters; got {}",
-+                        short_id.len()
-+                    ));
-+                }
-+            }
-         }
-         if !store.update(&target, updated.clone()) {
-             return Err(format!("no profile matches {id:?}"));
-@@ -2325,20 +2571,24 @@ fn parse_exit_info(body: &[u8]) -> Result<ExitDoc, String> {
- /// S19: build a one-shot link for `profile` (offline probes: exit-IP,
- /// speed test). Mirrors `test_latency`'s factory use — engines spawn
- /// lazily and die with the returned Arcs. With several bonded adapters
--/// the FIRST link (the top-priority adapter) carries the probe.
-+/// the FIRST link (the top-priority adapter) carries the probe — S20
-+/// (Copilot round 2): `engine_specs_for` preserves the user's priority
-+/// order, and `pop()` used to silently select the LAST (lowest-priority)
-+/// link instead.
- async fn temp_link_for(core: &Core, profile: &Profile) -> Result<Arc<dyn Outbound>, String> {
-     let settings = SettingsFile::load(&core.paths.settings_file());
-     let bonded = resolve_bonded(
-         &settings.settings.bonded_adapters,
-         &mt_platform::enumerate_adapters(),
-     );
--    let mut links = core
-+    let links = core
-         .factory
-         .build(profile, &bonded)
-         .await
-         .map_err(|e| e.to_string())?;
-     links
--        .pop()
-+        .into_iter()
-+        .next()
-         .ok_or_else(|| "link factory produced no links".to_string())
- }
- 
-@@ -2435,7 +2685,9 @@ impl RealService {
-         ));
-         out.push_str(&format!(
-             "probe_target={} exit_probe_url={} speed_test_url={}\n",
--            settings.probe_target, settings.exit_probe_url, settings.speed_test_url
-+            settings.probe_target,
-+            redact_url(&settings.exit_probe_url),
-+            redact_url(&settings.speed_test_url)
-         ));
-         let store = self.core.load_store_lossy();
-         out.push_str("=== profiles (endpoints only — ids/secrets redacted) ===\n");
-@@ -3099,12 +3351,15 @@ mod tests {
-         assert!(saw_restore, "the restore is announced in the GUI log");
-     }
- 
--    /// S19 (review fix): spawn_blackhole OWNS the port while engaged (a
-+    /// S19 (review fix): the black-hole OWNERS the port while engaged (a
-     /// local process cannot pre-bind it) and stop_blackhole releases it —
-     /// the accept loop swallows connections (an open TCP dial to it lands
-     /// and closes immediately instead of being answered by anyone else).
--    /// On hosts where binding port 9 is not permitted the spawn is a
-+    /// On hosts where binding port 9 is not permitted the bind is a
-     /// documented no-op fallback (dev/linux root-only port).
-+    /// S20 (Copilot round 2): the bind and the engage are separate steps —
-+    /// give_up binds FIRST and only points the proxy at the port once
-+    /// ownership is proven.
-     #[tokio::test]
-     async fn blackhole_listener_owns_and_releases_the_port() {
-         let exit = spawn_exit_echo("127.0.0.1").await;
-@@ -3117,10 +3372,12 @@ mod tests {
-                 fail: false,
-             }),
-         );
--        // Engage.
--        spawn_blackhole(&svc.core).await;
--        let guard_taken = svc.core.blackhole.lock().unwrap().is_some();
--        if guard_taken {
-+        // Engage (bind first, then install the accept loop — the give_up
-+        // order).
-+        if let Some(listener) = bind_blackhole().await {
-+            engage_blackhole(&svc.core, listener);
-+            let guard_taken = svc.core.blackhole.lock().unwrap().is_some();
-+            assert!(guard_taken, "engage records the listener");
-             // The port answers to US: a connect lands (accepted + dropped).
-             let dial = tokio::net::TcpStream::connect("127.0.0.1:9").await;
-             assert!(dial.is_ok(), "our own listener owns the port");
-@@ -3137,6 +3394,393 @@ mod tests {
-         }
-     }
- 
-+    /// S20 (Copilot round 2, high finding): the connect step-0 self-heal
-+    /// must CLEAR `sysproxy_set` together with the restore — after a
-+    /// kill-switch give-up + reconnect, a stale-true flag made a later
-+    /// no-session disconnect "restore" with no snapshot (which DISABLES
-+    /// the user's pre-existing proxy instead of leaving it untouched).
-+    #[tokio::test]
-+    async fn connect_selfheal_clears_stale_proxy_ownership() {
-+        let exit = spawn_exit_echo("127.0.0.1").await;
-+        let paths = scratch("selfheal");
-+        write_settings(&paths, exit.port(), false);
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(FakeFactory {
-+                echo: exit,
-+                fail: false,
-+            }),
-+        );
-+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
-+        svc.set_active_profile(&view.tag).await.expect("active");
-+        // Simulate the post-give-up state: ownership armed, no session.
-+        svc.core.sysproxy_set.store(true, Ordering::SeqCst);
-+        svc.connect().await;
-+        assert_eq!(svc.status().await.state, ServiceState::Connected);
-+        assert!(
-+            !svc.core.sysproxy_set.load(Ordering::SeqCst),
-+            "the step-0 self-heal consumed the snapshot — ownership MUST clear"
-+        );
-+        svc.disconnect().await;
-+        assert!(!svc.core.sysproxy_set.load(Ordering::SeqCst));
-+    }
-+
-+    /// S20 (Copilot round 2, medium findings): the edit dialog must reject
-+    /// port 0 and REALITY material the link parser would refuse — an empty
-+    /// SNI, a wrong-length/non-base64url public key or an invalid short ID
-+    /// must not silently reach the Xray config.
-+    #[tokio::test]
-+    async fn update_profile_rejects_port_zero_and_invalid_reality() {
-+        let exit = spawn_exit_echo("127.0.0.1").await;
-+        let paths = scratch("editreality");
-+        write_settings(&paths, exit.port(), false);
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(FakeFactory {
-+                echo: exit,
-+                fail: false,
-+            }),
-+        );
-+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
-+        svc.set_active_profile(&view.tag).await.expect("active");
-+
-+        // Port 0 parses as u16 but is not a server port.
-+        let mut d = svc.profile_details(&view.id).await.expect("details");
-+        d.port = "0".into();
-+        let err = svc.update_profile(&view.id, d).await.unwrap_err();
-+        assert!(err.contains("port 0"), "{err}");
-+        // Empty SNI.
-+        let mut d = svc.profile_details(&view.id).await.expect("details");
-+        d.sni = "   ".into();
-+        let err = svc.update_profile(&view.id, d).await.unwrap_err();
-+        assert!(err.contains("sni"), "{err}");
-+        // Wrong-length public key.
-+        let mut d = svc.profile_details(&view.id).await.expect("details");
-+        d.public_key = "short".into();
-+        let err = svc.update_profile(&view.id, d).await.unwrap_err();
-+        assert!(err.contains("public key"), "{err}");
-+        // Non-hex short id.
-+        let mut d = svc.profile_details(&view.id).await.expect("details");
-+        d.short_id = "zzzz".into();
-+        let err = svc.update_profile(&view.id, d).await.unwrap_err();
-+        assert!(err.contains("short id"), "{err}");
-+        // A fully valid edit still saves; an EMPTY short id is legal
-+        // (the parser allows `sid=` empty).
-+        let mut d = svc.profile_details(&view.id).await.expect("details");
-+        d.short_id = "".into();
-+        d.tag = "still fine".into();
-+        let updated = svc.update_profile(&view.id, d).await.expect("valid edit");
-+        assert_eq!(updated.tag, "still fine");
-+        // Nothing from the rejected edits leaked into the store.
-+        let store = svc.core.load_store().expect("reload");
-+        assert_eq!(store.profiles[0].tag, "still fine");
-+        assert_eq!(store.profiles[0].port, 443);
-+    }
-+
-+    /// S20 (Copilot round 2, high finding): user-configurable URLs carry
-+    /// credentials in userinfo/query — the diagnostics header must render
-+    /// host:port:path only (the file is pasted into chats verbatim).
-+    #[tokio::test]
-+    async fn diag_header_redacts_url_credentials() {
-+        let exit = spawn_exit_echo("127.0.0.1").await;
-+        let paths = scratch("diagredact");
-+        write_settings(&paths, exit.port(), false);
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(FakeFactory {
-+                echo: exit,
-+                fail: false,
-+            }),
-+        );
-+        let mut s = svc.settings().await;
-+        s.exit_probe_url = "http://user:hunter2@probe.example.com:8080/path?token=T0PS3CRET".into();
-+        s.speed_test_url = "http://speed.example.com/down?key=abc123#frag".into();
-+        let header = svc.build_diag_header(&s);
-+        assert!(header.contains("probe.example.com:8080/path"), "{header}");
-+        assert!(header.contains("speed.example.com:80/down"), "{header}");
-+        for secret in ["hunter2", "user:", "T0PS3CRET", "abc123", "#frag"] {
-+            assert!(!header.contains(secret), "leaked {secret:?} in:\n{header}");
-+        }
-+        // Unparseable URLs never echo the raw value.
-+        s.exit_probe_url = "not a url at all".into();
-+        let header = svc.build_diag_header(&s);
-+        assert!(header.contains("<redacted (invalid URL)>"), "{header}");
-+        assert!(!header.contains("not a url"), "{header}");
-+    }
-+
-+    /// S20 (Copilot round 2, medium finding): until `\r\n\r\n` is found
-+    /// nothing counts toward the 64 MiB payload cap — an endpoint flooding
-+    /// header-less bytes must hit the independent 64 KiB head cap fast
-+    /// instead of growing the buffer for the whole 30 s budget.
-+    #[tokio::test]
-+    async fn speed_test_rejects_a_header_flood() {
-+        // A server that answers with 256 KiB of header-less bytes and then
-+        // holds the connection open.
-+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-+            .await
-+            .expect("bind flood");
-+        let flood = listener.local_addr().expect("flood addr");
-+        tokio::spawn(async move {
-+            loop {
-+                let Ok((mut stream, _)) = listener.accept().await else {
-+                    break;
-+                };
-+                tokio::spawn(async move {
-+                    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-+                    let mut buf = vec![0u8; 1024];
-+                    let _ = stream.read(&mut buf).await; // drain the request
-+                    let flood = vec![b'x'; 256 * 1024];
-+                    let _ = stream.write_all(&flood).await;
-+                    // Keep the connection open (no EOF, no \r\n\r\n).
-+                    loop {
-+                        tokio::time::sleep(Duration::from_secs(60)).await;
-+                    }
-+                });
-+            }
-+        });
-+        let paths = scratch("flood");
-+        write_settings(&paths, flood.port(), false);
-+        let mut file = SettingsFile::load(&paths.settings_file());
-+        file.settings.speed_test_url = format!("http://127.0.0.1:{}/down", flood.port());
-+        file.save(&paths.settings_file()).expect("save settings");
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(FakeFactory {
-+                echo: flood,
-+                fail: false,
-+            }),
-+        );
-+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
-+        svc.set_active_profile(&view.tag).await.expect("active");
-+        let started = Instant::now();
-+        let err = svc.speed_test(None).await.unwrap_err();
-+        assert!(err.contains("malformed response"), "{err}");
-+        assert!(
-+            started.elapsed() < Duration::from_secs(10),
-+            "the head cap must fire long before the 30 s budget"
-+        );
-+    }
-+
-+    /// S20 (Copilot round 2, medium finding): the exit probe and speed test
-+    /// may only ride the LIVE listeners when the session was built from the
-+    /// target profile — switching the active profile without reconnecting
-+    /// must fall back to the temporary tunnel (not report the old tunnel's
-+    /// exit against the new profile's endpoint).
-+    #[tokio::test]
-+    async fn probes_fall_back_when_active_profile_switched() {
-+        let exit = spawn_exit_echo("198.51.100.7").await;
-+        let echo = spawn_echo().await;
-+        let paths = scratch("switched");
-+        // Probe target = echo (so connect() succeeds); exit URL = exit echo.
-+        write_settings(&paths, echo.port(), false);
-+        let mut file = SettingsFile::load(&paths.settings_file());
-+        file.settings.exit_probe_url = format!("http://127.0.0.1:{}/json", exit.port());
-+        file.settings.speed_test_url = format!("http://127.0.0.1:{}/down", exit.port());
-+        file.save(&paths.settings_file()).expect("save settings");
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(FakeFactory {
-+                echo: exit,
-+                fail: false,
-+            }),
-+        );
-+        let a = svc.import_link(VLESS_REALITY).await.expect("import A");
-+        let b = svc
-+            .import_link(
-+                &VLESS_REALITY
-+                    .replace("203.0.113.10", "203.0.113.11")
-+                    .replace("synthetic-reality", "second-server"),
-+            )
-+            .await
-+            .expect("import B");
-+        svc.set_active_profile(&a.tag).await.expect("active A");
-+        svc.connect().await;
-+        assert_eq!(svc.status().await.state, ServiceState::Connected);
-+        // Matching session → the probe rides the live listeners.
-+        let live = svc.exit_probe().await.expect("live probe");
-+        assert!(!live.via_temp_tunnel, "session matches the active profile");
-+        // Switch the active profile WITHOUT reconnecting → both probes
-+        // must report the temporary-tunnel path.
-+        svc.set_active_profile(&b.tag).await.expect("active B");
-+        let temp = svc.exit_probe().await.expect("temp probe");
-+        assert!(
-+            temp.via_temp_tunnel,
-+            "stale session must not pose as B's tunnel"
-+        );
-+        let speed = svc
-+            .speed_test(Some(b.id.clone()))
-+            .await
-+            .expect("temp speed");
-+        assert!(speed.via_temp_tunnel, "speed test ditto");
-+        // And an explicit target that DOES match the session still rides it.
-+        let live_speed = svc
-+            .speed_test(Some(a.id.clone()))
-+            .await
-+            .expect("live speed");
-+        assert!(!live_speed.via_temp_tunnel);
-+        svc.disconnect().await;
-+    }
-+
-+    /// S20 (Copilot round 2, medium finding): `engine_specs_for` preserves
-+    /// the user's bonded-adapter priority order — the one-shot probe link
-+    /// must be the FIRST (top-priority), not whatever `pop()` produced.
-+    #[tokio::test]
-+    async fn temp_link_uses_the_top_priority_first_link() {
-+        let first_exit = spawn_exit_echo("203.0.113.7").await;
-+        let second_exit = spawn_exit_echo("203.0.113.9").await;
-+        let paths = scratch("templink");
-+        write_settings(&paths, first_exit.port(), false);
-+        struct TwoLinkFactory {
-+            first: SocketAddr,
-+            second: SocketAddr,
-+        }
-+        #[async_trait::async_trait]
-+        impl LinkFactory for TwoLinkFactory {
-+            async fn build(
-+                &self,
-+                _profile: &Profile,
-+                _bonded: &[BondedAdapter],
-+            ) -> anyhow::Result<Vec<Arc<dyn Outbound>>> {
-+                Ok(vec![
-+                    Arc::new(FakeLinkNamed {
-+                        name: "first [Wi-Fi]".into(),
-+                        echo: self.first,
-+                    }) as Arc<dyn Outbound>,
-+                    Arc::new(FakeLinkNamed {
-+                        name: "second [LTE]".into(),
-+                        echo: self.second,
-+                    }),
-+                ])
-+            }
-+        }
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(TwoLinkFactory {
-+                first: first_exit,
-+                second: second_exit,
-+            }),
-+        );
-+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
-+        let store = svc.core.load_store().expect("store");
-+        let profile = store
-+            .profiles
-+            .iter()
-+            .find(|p| p.id == view.id)
-+            .cloned()
-+            .expect("profile");
-+        let link = temp_link_for(&svc.core, &profile)
-+            .await
-+            .expect("one-shot link");
-+        assert_eq!(
-+            link.name(),
-+            "first [Wi-Fi]",
-+            "the FIRST link carries the probe"
-+        );
-+        // Prove it end-to-end: the chosen link dials the FIRST exit echo.
-+        let target = TargetAddr {
-+            host: Host::Domain("irrelevant.example".into()),
-+            port: 80,
-+        };
-+        let mut stream = link.connect(&target).await.expect("connect");
-+        let body = http_get(&mut stream, "irrelevant.example", "/", EXIT_PROBE_MAX_BYTES)
-+            .await
-+            .expect("http get");
-+        let exit = parse_exit_info(&body).expect("identity");
-+        assert_eq!(exit.exit_ip, "203.0.113.7", "rode the top-priority link");
-+    }
-+
-+    /// S20 (Copilot round 2, medium finding): a failed `diagnostics::enable`
-+    /// (e.g. the log dir is unwritable) must REVERT the persisted toggle —
-+    /// the UI must never show the mode enabled with no file being written
-+    /// and no retry path.
-+    #[tokio::test]
-+    async fn diagnostics_enable_failure_reverts_the_toggle() {
-+        let _guard = crate::diagnostics::TEST_LOCK.lock().await;
-+        let _ = crate::diagnostics::disable();
-+        let exit = spawn_exit_echo("127.0.0.1").await;
-+        let paths = scratch("diagfail");
-+        write_settings(&paths, exit.port(), false);
-+        // Make the log dir unusable: a FILE where the dir should be.
-+        std::fs::create_dir_all(&paths.config_dir).expect("base");
-+        std::fs::write(&paths.log_dir, b"not a directory").expect("block log dir");
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(FakeFactory {
-+                echo: exit,
-+                fail: false,
-+            }),
-+        );
-+        let mut events = svc.events();
-+        let mut s = svc.settings().await;
-+        s.diagnostics = true;
-+        svc.set_settings(s).await.expect("settings still save");
-+        // The persisted toggle is back OFF.
-+        let reloaded = SettingsFile::load(&svc.core.paths.settings_file());
-+        assert!(!reloaded.settings.diagnostics, "toggle reverted on failure");
-+        assert!(svc.diagnostics_path().await.is_none());
-+        let mut saw_revert = false;
-+        while let Ok(ev) = events.try_recv() {
-+            if let ServiceEvent::LogLine(l) = ev {
-+                if l.contains("could not start") && l.contains("reverted") {
-+                    saw_revert = true;
-+                }
-+            }
-+        }
-+        assert!(
-+            saw_revert,
-+            "the failure + revert is announced in the GUI log"
-+        );
-+    }
-+
-+    /// S20 (Copilot round 2, medium finding): engines only read the debug
-+    /// log level at SPAWN time — enabling diagnostics on a LIVE session
-+    /// must reconnect, or the file silently misses the engine debug output
-+    /// the UI promises.
-+    #[tokio::test]
-+    async fn diagnostics_enable_while_connected_reconnects() {
-+        let _guard = crate::diagnostics::TEST_LOCK.lock().await;
-+        let _ = crate::diagnostics::disable();
-+        let exit = spawn_exit_echo("127.0.0.1").await;
-+        let echo = spawn_echo().await;
-+        let paths = scratch("diaglive");
-+        write_settings(&paths, echo.port(), false);
-+        let svc = RealService::with(
-+            paths,
-+            Arc::new(FakeFactory {
-+                echo: exit,
-+                fail: false,
-+            }),
-+        );
-+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
-+        svc.set_active_profile(&view.tag).await.expect("active");
-+        svc.connect().await;
-+        assert_eq!(svc.status().await.state, ServiceState::Connected);
-+        let restarts_before = svc.core.restarts.load(Ordering::SeqCst);
-+
-+        let mut s = svc.settings().await;
-+        s.diagnostics = true;
-+        svc.set_settings(s).await.expect("enable diagnostics");
-+
-+        // The session was rebuilt at debug level.
++            .and_then(|s| s.server.qos())
++            .expect("the live session carries the scheduler");
++        assert!(sched.enabled(), "live flip applies without a rebuild");
 +        assert_eq!(
 +            svc.status().await.state,
 +            ServiceState::Connected,
-+            "the reconnect restores the session"
++            "the QoS toggle must NOT reconnect"
 +        );
-+        assert!(
-+            svc.core.restarts.load(Ordering::SeqCst) > restarts_before,
-+            "the live session reconnected"
-+        );
-+        let level = wlock(&svc.core.engine_log_level).clone();
-+        assert_eq!(level.as_deref(), Some("debug"));
-+        assert!(svc.diagnostics_path().await.is_some());
-+        svc.disconnect().await;
-+        let mut s = svc.settings().await;
-+        s.diagnostics = false;
-+        svc.set_settings(s).await.expect("disable diagnostics");
-+        assert!(svc.diagnostics_path().await.is_none());
++
++        // Flip OFF: live disable.
++        let mut settings = svc.settings().await;
++        settings.qos_fair = false;
++        svc.set_settings(settings).await.expect("save");
++        assert!(!svc.settings().await.qos_fair);
++        assert!(!sched.enabled(), "live disable applies");
++
++        // Flip ON again and prove persistence across instances.
++        let mut settings = svc.settings().await;
++        settings.qos_fair = true;
++        svc.set_settings(settings).await.expect("save");
++        let svc2 = RealService::with(paths, Arc::new(FakeFactory { echo, fail: false }));
++        assert!(svc2.settings().await.qos_fair, "survives a restart");
 +    }
 +
      #[tokio::test]
-     async fn stream_bond_mode_connects_and_carries_traffic() {
-         let (daemon, _guard) = spawn_merge_daemon().await;
-diff --git a/src/vless.rs b/src/vless.rs
-index 27f7c34..65826f0 100755
---- a/src/vless.rs
-+++ b/src/vless.rs
-@@ -152,7 +152,9 @@ fn valid_uuid(s: &str) -> bool {
- }
- 
- /// base64url alphabet WITHOUT padding: A-Z a-z 0-9 '-' '_'.
--fn is_base64url(c: u8) -> bool {
-+/// S20: crate-visible — the profile EDIT path reuses the exact structural
-+/// rule the link parser enforces on `pbk=`.
-+pub(crate) fn is_base64url(c: u8) -> bool {
-     c.is_ascii_alphanumeric() || c == b'-' || c == b'_'
- }
- 
-
-### Commit: 52f1d3c - backup(s19-close-v0.13.0): 2026-11-21T15:07:33Z (Z User, 2026-11-21)
-diff --git a/harness/memory/LEDGER.md b/harness/memory/LEDGER.md
-index bcb7935..ee6160f 100755
---- a/harness/memory/LEDGER.md
-+++ b/harness/memory/LEDGER.md
-@@ -215,3 +215,4 @@
- 2026-11-21T07:17Z | s18 | v0.12.0 RELEASED: push attempt-1 REJECTED by GitHub — PROJECT_MEMORY.md had crossed the 100 MB per-file hard limit (the update_memory.py self-embedding recursion: each ritual run committed its own previous section into the file, so the next diff contained it — 81 MB at S17 close → 134 MB after this session's two runs; detected via the LFS-error push message, NOTHING reached origin). FIX: update_memory.py now excludes PROJECT_MEMORY.md's own diff (pathspec :(exclude) + an elision note), local history rewritten pre-push (reset --soft to origin/main, regenerated the section → 77 KB, re-committed s18 + re-tagged v0.12.0 — the oversized blobs never left the sandbox and are now unreachable). Attempt-2 push OK → release run 44879546925 SUCCESS on the first try (no cold-cache stall this time) + ci 44879546922 running. Assets verified by download+unzip: multitunnel-v0.12.0-windows-x64.zip 6,430,469 B integrity OK (multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI + README v0.9–v0.12 section + QUICKSTART v0.12 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) and mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs.
- 2026-11-21T08:30Z | s18 | OPS: the ci run on the s18 commit (44879546922) — lint/cross-check/test(ubuntu) all green; the windows test leg sat 69 min inside cargo test with no live logs fetchable mid-run → CANCELLED per the S11/S17 ops protocol. Verdict: 100%-cold rust-cache, not a wedge — the s18 commit changed Cargo.lock (version bumps + windows-sys feature), no windows job with that lock had ever completed, so Swatinem/rust-cache had nothing to restore and the leg compiled ~450 crates from zero (the exact S17 attempt-1 signature, cancelled at 68 min). Same-commit green proof on a REAL windows-latest runner exists: release run 44879546925's build-windows leg ran fmt + clippy + cargo test + packaging and PASSED (its zip is the verified v0.12.0 artifact). No rerun: the next ci.yml run would face the same cold cache (the release workflow's cache is keyed to a different workflow file); the S13 precedent (slow-cold cancelled, green proof elsewhere, no rerun) applies. The NEXT stage's ci will find the cache the release job saved for ITS key only — expect one more cold windows leg on the next Cargo.lock change.
- 2026-11-21T14:20Z | s19 | IMPLEMENTED (six asks, v0.13.0): (1) server editing — Servers per-card Edit → full-window modal (S16 overlay discipline; dim backdrop cancels), mt-service ProfileDetails round-trip, ProfileStore::update by id (id/position/active preserved, no dedupe on explicit edit), primitive + capability-regression validation (a never-convertible profile edits freely); (2) exit-IP while OFFLINE — temp_link_for() one-shot factory link through the active profile, ExitInfo.via_temp_tunnel chip; (3) speed test — live session for the active profile else temp tunnel, settings.speed_test_url (cloudflare __down 25MB default, plain-HTTP verified), clock starts after connect, 5s stall/30s budget/64MiB caps, ≥400 rejected, SpeedTestInfo chips; (4) diagnostics mode — src/diagnostics.rs redacted paste-ready file (header + LogLine tee + hand-rolled global tracing subscriber, no tracing-subscriber dep, engine level forced debug, redaction test-pinned), Settings card + Open log folder; (5) kill switch — give_up() fail-closed at 127.0.0.1:9, review fix: app BINDS the port while engaged (spawn_blackhole swallows connections; dead-port fallback documented), stop_blackhole on every restore path (both disconnect branches, toggle-off, connect step-0), explicit disconnect restores with no session, Status "KILL SWITCH ACTIVE" banner (Failed+armed, pure gate tested); (6) code review — Copilot unavailable (no entitlement → reviewer silently dropped; models.github.ai proxy-intercepted "OK"), 3-round discussion-based review on the strongest reachable model instead, 4 valid findings fixed (port pre-bind ownership, banner, edit-failure logging, chained diag-path refresh), 7 assessed non-issues documented (transcript /tmp/s19-review-transcript.md, copied to harness/memory/agent-reports/s19-review-transcript.md); review PR #1 (base v0.12-line) left open for an entitled-machine Copilot pass. 466/0 (+19); gates fmt/clippy host+windows-gnu; iced 6/0; smoke 0; rig sf=1.0+1.5 (52.0 Mbps chips, offline exit-IP chip, modal fields, rename→save, Cancel+backdrop, kill-switch + diagnostics toggles, banner gate unit-tested); PE32+ ×4 (multitunnel 19.2MB, mt-app 14.9MB, tray 10.1MB, merge-server 2.4MB) + ELF ×2. LESSONS: z-ai CLI --thinking broken; window is 1080x720 (clicks beyond x=1080 miss); locate-then-click per scroll position; ENOSPC — stage binaries before wiping target trees.
-+2026-11-21T15:10Z | s19 | RELEASED v0.13.0 (tag run 44910934439 SUCCESS ~7 min; assets verified by download+unzip: multitunnel-v0.13.0-windows-x64.zip 6,506,263 B, 11-entry manifest integrity OK, README/QUICKSTART/server scripts carried; mt-merge-server x86_64 1,826,272 B + aarch64 1,860,808 B; zip staged in sandbox download/v0.13.0-staging/). CI SAGA: the push leg failed on mt-bond carrier_death (documented runner flake, 4th occurrence) → rerun wedged 54 min inside domain_targets_dial (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 5/6 tests ok, domain_targets 'over 60 seconds', cargo+integration orphans killed) → HARDENED both tests with 60-90 s deadlines (bodies untouched; a wedge now fails in a minute with a LEDGER pointer) → next push run: BOTH tests failed loudly on runners (windows carrier_death 'no live bond carrier', ubuntu domain_targets deadline) while the same-commit PR run was fully green and local 2-core taskset stress (8× integration at test-threads=6) stayed 0-fail → rerun: ALL FOUR JOBS GREEN. ROOT-CAUSE LEAD (backlog, top priority): pick_carrier's 'no live bond carrier' = usable() empty = Wi-Fi dead + LTE flagged !alive mid-death-replay — a carrier-lifecycle race in PRE-EXISTING S11/S18 mt-bond code, GitHub-runner-only (slower I/O scheduling), never reproduced locally; investigate the death handler's replay path + LTE alive-flag transitions on a runner-like environment. Review PR #1 commented + left open.
-diff --git a/harness/memory/store/memory_graph.json b/harness/memory/store/memory_graph.json
-index 14882ff..1747d50 100644
---- a/harness/memory/store/memory_graph.json
-+++ b/harness/memory/store/memory_graph.json
-@@ -1,6 +1,6 @@
- {
-   "schema_version": 1,
--  "as_of": "702293b 2026-11-21T14:58:33Z",
-+  "as_of": "666bc16 2026-11-21T14:58:33Z",
-   "sources": [
-     "PROJECT_MEMORY.md",
-     "harness/memory/STATE.md",
-@@ -11,8 +11,8 @@
-     "git (tags + full log)",
-     "harness/memory/curated/"
-   ],
--  "node_count": 273,
--  "edge_count": 279,
-+  "node_count": 274,
-+  "edge_count": 281,
-   "nodes": [
-     {
-       "id": "bug:freedom-loopback-blackhole",
-@@ -915,6 +915,26 @@
-         }
-       ]
-     },
-+    {
-+      "id": "commit:666bc16",
-+      "type": "commit",
-+      "title": "backup(s19-ci-hardening): 2026-11-21T14:58:33Z",
-+      "tags": [
-+        "2026-11-21"
-+      ],
-+      "sources": [
-+        {
-+          "file": "git:log",
-+          "anchor": "666bc16"
-+        }
-+      ],
-+      "passages": [
-+        {
-+          "text": "backup(s19-ci-hardening): 2026-11-21T14:58:33Z",
-+          "kind": "title"
-+        }
-+      ]
-+    },
-     {
-       "id": "commit:6a4bd7c",
-       "type": "commit",
-@@ -4576,6 +4596,10 @@
-         {
-           "text": "2026-11-21T14:20Z | IMPLEMENTED (six asks, v0.13.0): (1) server editing — Servers per-card Edit → full-window modal (S16 overlay discipline; dim backdrop cancels), mt-service ProfileDetails round-trip, ProfileStore::update by id (id/position/active preserved, no dedupe on explicit edit), primitive + capability-regression validation (a never-convertible profile edits freely); (2) exit-IP while OFFLINE — temp_link_for() one-shot factory link through the active profile, ExitInfo.via_temp_tunnel chip; (3) speed test — live session for the active profile else temp tunnel, settings.speed_test_url (cloudflare __down 25MB default, plain-HTTP verified), clock starts after connect, 5s stall/30s budget/64MiB caps, ≥400 rejected, SpeedTestInfo chips; (4) diagnostics mode — src/diagnostics.rs redacted paste-ready file (header + LogLine tee + hand-rolled global tracing subscriber, no tracing-subscriber dep, engine level forced debug, redaction test-pinned), Settings card + Open log folder; (5) kill switch — give_up() fail-closed at 127.0.0.1:9, review fix: app BINDS the port while engaged (spawn_blackhole swallows connections; dead-port fallback documented), stop_blackhole on every restore path (both disconnect branches, toggle-off, connect step-0), explicit disconnect restores with no session, Status \"KILL SWITCH ACTIVE\" banner (Failed+armed, pure gate tested); (6) code review — Copilot unavailable (no entitlement → reviewer silently dropped; models.github.ai proxy-intercepted \"OK\"), 3-round discussion-based review on the strongest reachable model instead, 4 valid findings fixed (port ",
-           "kind": "body"
-+        },
-+        {
-+          "text": "2026-11-21T15:10Z | RELEASED v0.13.0 (tag run 44910934439 SUCCESS ~7 min; assets verified by download+unzip: multitunnel-v0.13.0-windows-x64.zip 6,506,263 B, 11-entry manifest integrity OK, README/QUICKSTART/server scripts carried; mt-merge-server x86_64 1,826,272 B + aarch64 1,860,808 B; zip staged in sandbox download/v0.13.0-staging/). CI SAGA: the push leg failed on mt-bond carrier_death (documented runner flake, 4th occurrence) → rerun wedged 54 min inside domain_targets_dial (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 5/6 tests ok, domain_targets 'over 60 seconds', cargo+integration orphans killed) → HARDENED both tests with 60-90 s deadlines (bodies untouched; a wedge now fails in a minute with a LEDGER pointer) → next push run: BOTH tests failed loudly on runners (windows carrier_death 'no live bond carrier', ubuntu domain_targets deadline) while the same-commit PR run was fully green and local 2-core taskset stress (8× integration at test-threads=6) stayed 0-fail → rerun: ALL FOUR JOBS GREEN. ROOT-CAUSE LEAD (backlog, top priority): pick_carrier's 'no live bond carrier' = usable() empty = Wi-Fi dead + LTE flagged !alive mid-death-replay — a carrier-lifecycle race in PRE-EXISTING S11/S18 mt-bond code, GitHub-runner-only (slower I/O scheduling), never reproduced locally; investigate the death handler's replay path + LTE alive-flag transitions on a runner-like environment. Review PR #1 commented + left open.",
-+          "kind": "body"
-         }
-       ]
-     },
-@@ -5379,7 +5403,7 @@
-       ],
-       "passages": [
-         {
--          "text": "- **Stage**: S19 IMPLEMENTED, gates green, v0.13.0 releasing — the six asks shipped: (1) server EDITING (Servers → per-card Edit button → full-window modal; mt-service ProfileDetails round-trip via profile_details/update_profile; ProfileStore::update replaces BY ID in place — id/position/active preserved, no dedupe on explicit edits; primitive + capability-regression validation; editing the active server logs \"reconnect to apply\"); (2) exit-IP while OFFLINE (exit_probe falls back to temp_link_for — a one-shot factory link through the active profile, same engine path as test_latency; ExitInfo.via_temp_tunnel → \"temporary probe tunnel\" chip); (3) SPEED TEST (Status card; rides the live session for the active profile else the temp tunnel; settings.speed_test_url default http://speed.cloudflare.com/__down?bytes=25000000; clock starts AFTER connect so engine spawn never pollutes the rate; 5 s stall / 30 s budget / 64 MiB caps; HTTP ≥400 rejected); (4) DIAGNOSTICS MODE (SettingsView.diagnostics; src/diagnostics.rs writes one redacted paste-ready <log_dir>/diagnostics-*.log — header + GUI LogLine tee + ALL tracing events via a hand-rolled process-global subscriber (the e2e PrintSubscriber pattern, no tracing-subscriber dep); engine log level forced debug while ON; redaction test-pinned; Settings card + Open log folder); (5) KILL SWITCH (SettingsView.kill_switch; give_up() is fail-CLOSED: system proxy → 127.0.0.1:9 via sysproxy::set (keep-first snapshot survives for the true restore); REVIEW FIX: the app BINDS port 9 itself while engaged (spawn_blackhole accept loop swallows ",
-+          "text": "- **Stage**: S19 CLOSED — v0.13.0 released and verified (tag run 44910934439 SUCCESS ~7 min; CI all-green on the rerun after the documented mt-bond runner-flake round — LEDGER 15:10Z).",
-           "kind": "body"
-         }
-       ]
-@@ -8046,6 +8070,12 @@
-       "rel": "part_of",
-       "evidence": "subject stage label (s17)"
-     },
-+    {
-+      "src": "commit:666bc16",
-+      "dst": "ledger:s19",
-+      "rel": "part_of",
-+      "evidence": "subject stage label (s19)"
-+    },
-     {
-       "src": "commit:6a4bd7c",
-       "dst": "ledger:s9.1",
-@@ -8910,6 +8940,12 @@
-       "rel": "part_of",
-       "evidence": "project ledger"
-     },
-+    {
-+      "src": "ledger:s19",
-+      "dst": "release:v0.13.0",
-+      "rel": "released_in",
-+      "evidence": "2026-11-21T15:10Z | RELEASED v0.13.0 (tag run 44910934439 SUCCESS ~7 min; assets verified by download+unzip: multitunnel-v0.13.0-windows-x64.zip 6,506,263 B, 11-entry manifest integrity OK, README/QUICKSTART/server scripts carried; mt-merge-server x86_64 1,826,272 B + aarch64 1,860,808 B; zip staged in sandbox download/v0.13.0-staging/). CI SAGA: the push leg failed on mt-bond carrier_death (documented runner flake, 4th occurrence) → rerun wedged 54 min inside domain_targets_dial (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 5/6 tests ok, domain_targets 'over 60 seconds', cargo+integration orphans killed) → HARDENED both tests with 60-90 s deadlines (bodies untouched; a wedge now fails in a minute with a LEDGER pointer) → next push run: BOTH tests failed loudly on runners (windows carrier_death 'no live bond carrier', ubuntu domain_targets deadline) while the same-commit PR run was fully green and local 2-core taskset stress (8× integration at test-threads=6) stayed 0-fail → rerun: ALL FOUR JOBS GREEN. ROOT-CAUSE LEAD (backlog, top priority): pick_carrier's 'no live bond carrier' = usable() empty = Wi-Fi dead + LTE flagged !alive mid-death-replay — a carrier-lifecycle race in PRE-EXISTING S11/S18 mt-bond code, GitHub-runner-only (slower I/O scheduling), never reproduced locally; investigate the death handler's replay path + LTE alive-flag transitions on a runner-like environment. Review PR #1 commented + left open."
-+    },
-     {
-       "src": "ledger:s2",
-       "dst": "project:multitunnel",
+     async fn factory_failure_reports_failed_with_no_leftover_server() {
+         let paths = scratch("fail");
+@@ -4092,6 +4171,7 @@ mod tests {
+             kill_switch: false,
+             diagnostics: false, // never true here: the sink is process-global
+             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
++            qos_fair: true, // round-trips a non-default value
+         };
+         svc.set_settings(view.clone()).await.expect("save settings");
+         assert_eq!(svc.settings().await, view);
 
 ( PROJECT_MEMORY.md's own diff is elided here — the durable
   sections above are hand-maintained; see harness/memory/LEDGER.md

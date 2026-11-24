@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "c0d8f15 2026-11-22T04:16:12Z",
+  "as_of": "e510e43 2026-11-24T20:08:15Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 281,
-  "edge_count": 287,
+  "node_count": 290,
+  "edge_count": 298,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -336,6 +336,26 @@
       ]
     },
     {
+      "id": "commit:1a9849f",
+      "type": "commit",
+      "title": "backup(s21-release-prep): 2026-11-24T20:08:00Z",
+      "tags": [
+        "2026-11-24"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "1a9849f"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s21-release-prep): 2026-11-24T20:08:00Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:1b2fe0b",
       "type": "commit",
       "title": "backup(s6-wave1-experts): 2026-11-17T16:01:09Z",
@@ -551,6 +571,26 @@
       "passages": [
         {
           "text": "backup(s2-implementers-fixed): 2026-11-17T06:52:37Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:3cd904d",
+      "type": "commit",
+      "title": "backup(s21-p0-second-connection): 2026-11-24T18:40:42Z",
+      "tags": [
+        "2026-11-24"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "3cd904d"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s21-p0-second-connection): 2026-11-24T18:40:42Z",
           "kind": "title"
         }
       ]
@@ -991,6 +1031,26 @@
       "passages": [
         {
           "text": "backup(s19-ci-hardening): 2026-11-21T14:58:33Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:685e95c",
+      "type": "commit",
+      "title": "backup(s21-features-qos-merged-panel): 2026-11-24T20:07:19Z",
+      "tags": [
+        "2026-11-24"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "685e95c"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s21-features-qos-merged-panel): 2026-11-24T20:07:19Z",
           "kind": "title"
         }
       ]
@@ -1836,6 +1896,26 @@
       ]
     },
     {
+      "id": "commit:cccc77a",
+      "type": "commit",
+      "title": "backup(s21-p1-perf-stability): 2026-11-24T18:51:55Z",
+      "tags": [
+        "2026-11-24"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "cccc77a"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s21-p1-perf-stability): 2026-11-24T18:51:55Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:ce6af07",
       "type": "commit",
       "title": "backup(s17-pre-release): 2026-11-20T15:46:40Z [no changes]",
@@ -2071,6 +2151,26 @@
       "passages": [
         {
           "text": "backup(s2-verified): 2026-11-13T05:57:16Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:e510e43",
+      "type": "commit",
+      "title": "backup(s21-release-prep-2): 2026-11-24T20:08:15Z",
+      "tags": [
+        "2026-11-24"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "e510e43"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s21-release-prep-2): 2026-11-24T20:08:15Z",
           "kind": "title"
         }
       ]
@@ -3272,6 +3372,24 @@
       ]
     },
     {
+      "id": "decision:D29",
+      "type": "decision",
+      "title": "D29 P0 reconnect force-close + bind retry",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/curated/",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "Second-connection bug root cause: untracked connection tasks pinned listener-port sockets past the drain; Windows re-bind WSAEADDRINUSE (Linux tolerates re-bind over non-listening sockets — proven by scripts/rebind_probe.rs). Fix: Shared.conns AbortHandles + end-of-drain force-close + AbortPumpsOnDrop (pumps detach on JoinHandle drop) + bind_with_retry 5s. engine_file_stem FNV identity hash separates same-tag profiles (H2); store_mtx serializes profiles.json RMW (H3). source=src/real_service.rs#connect",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "decision:D3",
       "type": "decision",
       "title": "D3 — Single crate, two bin targets",
@@ -3287,6 +3405,24 @@
       "passages": [
         {
           "text": "One `multitunnel` crate: lib (all logic) + `multitunnel` (console) + `multitunnel-tray` (GUI, windows_subsystem via cfg_attr).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "decision:D30",
+      "type": "decision",
+      "title": "D30 QoS fair share + merged Exit&speed panel",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/curated/",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "QoS: per-destination groups, 1 s tick refills aggregate/groups only under contention (>=2 groups AND >=2 MiB/s aggregate floor), pump read gate blocks until budget, scheduler ALWAYS attached so the Settings qos_fair toggle flips live (no reconnect). Merged Exit & speed Status panel (view-only merge, D24-safe, both triggers side-by-side). P1 parity: TCP_NODELAY x4 legs, ACK coalescing 8 frames/20ms with CLOSE+PING flush, same-carrier PONG echo (RTT was cross-contaminated), send-path copies 5->3 (encode_session_borrowed, wire-identity test), writev batching (<=16 frames), quarantine last-resort fallback (no sole-link blackout), production prober uses user probe target. source=crates/mt-net/src/qos.rs",
           "kind": "body"
         }
       ]
@@ -4829,6 +4965,24 @@
       ]
     },
     {
+      "id": "ledger:s21",
+      "type": "ledger",
+      "title": "S21: P0 second-connection fix, perf parity, QoS toggle, merged panel (v0.14.0)",
+      "tags": [],
+      "sources": [
+        {
+          "file": "harness/memory/curated/",
+          "anchor": ""
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-24T21:00Z | s21 | IMPLEMENTED + RELEASED v0.14.0: P0 = tracked connection tasks + end-of-drain force-close + pump-abort guard + bind retry (Windows WSAEADDRINUSE root cause; Linux-tolerant re-bind proven; regression test fails pre-fix) + engine_file_stem FNV identity hash + store_mtx; P1 = TCP_NODELAY x4 legs, ACK coalescing 8/20ms, same-carrier PONG echo, copies 5->3, writev <=16, quarantine last-resort fallback, user probe target; o = QoS fair share (per-destination groups, >=2 groups + >=2 MiB/s floor, live toggle, no reconnect); p = merged Exit & speed panel. 490/0; all 8 gates; release run 45477702090 SUCCESS attempt-3 (2 documented runner-flake legs rerun; logs archived s21-ci-*); assets verified. source=harness/memory/LEDGER.md#s21",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "ledger:s3",
       "type": "ledger",
       "title": "Stage s3 ledger",
@@ -5508,6 +5662,10 @@
       ],
       "passages": [
         {
+          "text": "- **Stage**: S21 CLOSED — v0.14.0 released and verified (tag on e510e43, release run 45477702090 SUCCESS on attempt 3, same-commit ci green on both OS legs, assets download-verified). The user's four asks shipped: (1) P0 SECOND-CONNECTION BUG — mid-traffic reconnect re-binds the fixed listener ports while untracked in-flight connection tasks pin their sockets (no SO_REUSEADDR); on Windows the re-bind lands WSAEADDRINUSE → connect Failed → dead tunnel until restart. Linux tolerates the re-bind (std rebind probe), so the regression test asserts the platform-independent observable: the lingering client connection sees EOF after the picker switch (pre-fix FAILS, post-fix passes). Fix: Shared.conns tracks every connection task's AbortHandle; run() force-closes whatever the 3 s drain could not reap; AbortPumpsOnDrop aborts the DETACHED pump children (dropping JoinHandles leaves them running — found when the first EOF assertion failed); bind_with_retry 5 s (BIND_WAIT 2→8 s). H2: engine config/log stems carry a deterministic FNV-1a hash of the full endpoint identity (engine_file_stem) — same-tag different-endpoint profiles can no longer overwrite each other's Xray config (temp probe tunnels corrupting the LIVE engine → phantom respawn → DEGRADED while GUI showed Connected). H3: Core.store_mtx serializes profiles.json read-modify-write.",
+          "kind": "body"
+        },
+        {
           "text": "- **Stage**: S20 CLOSED — the S19 leftover (Copilot code review) COMPLETED and shipped as v0.13.1 (tag on 4923566, release run 44983522874 SUCCESS, ci ×2 green, assets download-verified). The cloud Copilot reviewer ran via `POST /repos/maniesh-NR/MultiTunnel/pulls/1/copilot-code-review` (needs only pull-requests:write, which the PAT has): effort ladder per the fallback instruction — max → quota-rejected, balanced → quota-rejected, **lite → ran**. Round 1 (on 52f1d3c): 12 findings (5 High: step-0 self-heal never cleared sysproxy_set → no-snapshot restore disables a user's pre-existing proxy; give_up unserialized with disconnect → black-hole re-installed AFTER an explicit disconnect; set-BEFORE-bind → a foreign port-9 owner receives the blocked traffic; listener stopped even when restore failed → stranded block, no retry, false \"restored\" log; diag header wrote user URLs verbatim → credential leak. 7 Medium: live diag toggle misses engine debug, failed enable leaves the toggle on, probes ride a session that is not the target profile, unbounded head buffer, port-0 edit, unvalidated REALITY edits, pop() = lowest-priority adapter). All 12 fixed (Core::proxy_mtx serializes every proxy hand-off with the bind hoisted out of the lock; bind-before-set with no-set-on-bind- failure; restore-first release + retry; redact_url; diag-on-live reconnect; failed-enable revert; Session.profile_id pins both probes; 64 KiB head cap; port-0 + REALITY structural validation; first-link selection). Round 2 (lite, on the fixes): CLEAN PASS, zero comments.",
           "kind": "body"
         },
@@ -5721,6 +5879,26 @@
       "passages": [
         {
           "text": "Release v0.13.1: tag points at commit 4923566.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "release:v0.14.0",
+      "type": "release",
+      "title": "Release v0.14.0 (tagged e510e43)",
+      "tags": [
+        "v0.14.0"
+      ],
+      "sources": [
+        {
+          "file": "git:tags/v0.14.0",
+          "anchor": "e510e43"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Release v0.14.0: tag points at commit e510e43.",
           "kind": "body"
         }
       ]
@@ -8160,6 +8338,12 @@
       "evidence": "subject stage label (v0.3.1)"
     },
     {
+      "src": "commit:1a9849f",
+      "dst": "ledger:s21",
+      "rel": "part_of",
+      "evidence": "subject stage label (s21)"
+    },
+    {
       "src": "commit:1b2fe0b",
       "dst": "ledger:s6-wave1",
       "rel": "part_of",
@@ -8212,6 +8396,12 @@
       "dst": "ledger:s2",
       "rel": "part_of",
       "evidence": "subject stage label (s2)"
+    },
+    {
+      "src": "commit:3cd904d",
+      "dst": "ledger:s21",
+      "rel": "part_of",
+      "evidence": "subject stage label (s21)"
     },
     {
       "src": "commit:3da17ad",
@@ -8326,6 +8516,12 @@
       "dst": "ledger:s19",
       "rel": "part_of",
       "evidence": "subject stage label (s19)"
+    },
+    {
+      "src": "commit:685e95c",
+      "dst": "ledger:s21",
+      "rel": "part_of",
+      "evidence": "subject stage label (s21)"
     },
     {
       "src": "commit:6a4bd7c",
@@ -8520,6 +8716,12 @@
       "evidence": "subject stage label (s13)"
     },
     {
+      "src": "commit:cccc77a",
+      "dst": "ledger:s21",
+      "rel": "part_of",
+      "evidence": "subject stage label (s21)"
+    },
+    {
       "src": "commit:ce6af07",
       "dst": "ledger:s17",
       "rel": "part_of",
@@ -8578,6 +8780,12 @@
       "dst": "ledger:s2",
       "rel": "part_of",
       "evidence": "subject stage label (s2)"
+    },
+    {
+      "src": "commit:e510e43",
+      "dst": "ledger:s21",
+      "rel": "part_of",
+      "evidence": "subject stage label (s21)"
     },
     {
       "src": "commit:eb1235a",
@@ -8826,7 +9034,31 @@
       "evidence": "project decision log"
     },
     {
+      "src": "decision:D29",
+      "dst": "ledger:s21",
+      "rel": "decided_in",
+      "evidence": "agent-curated"
+    },
+    {
+      "src": "decision:D29",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project decision log"
+    },
+    {
       "src": "decision:D3",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project decision log"
+    },
+    {
+      "src": "decision:D30",
+      "dst": "ledger:s21",
+      "rel": "decided_in",
+      "evidence": "agent-curated"
+    },
+    {
+      "src": "decision:D30",
       "dst": "project:multitunnel",
       "rel": "part_of",
       "evidence": "project decision log"
@@ -9240,6 +9472,12 @@
       "evidence": "2026-11-22T04:16Z | v0.13.1 RELEASED: tag on 4923566 → release run 44983522874 SUCCESS (~4 min, no cold-cache stall); ci ×2 on main (44983512609/44983518575) ALL GREEN first try. Assets verified by download+unzip: multitunnel-v0.13.1-windows-x64.zip 6,511,395 B integrity OK (multitunnel.exe PE32+ console 13.8 MB + multitunnel-tray.exe PE32+ GUI 2.95 MB + README v0.13.1 section + QUICKSTART v0.13.1 note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example) + mt-merge-server {x86_64 1,826,272 B, aarch64 1,860,808 B} ELFs. Verified copies staged in sandbox download/ (v0.13.1-verify-*). S20 CLOSED."
     },
     {
+      "src": "ledger:s21",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
       "src": "ledger:s3",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -9448,6 +9686,12 @@
       "dst": "commit:4923566",
       "rel": "built_from",
       "evidence": "git tag v0.13.1"
+    },
+    {
+      "src": "release:v0.14.0",
+      "dst": "commit:e510e43",
+      "rel": "built_from",
+      "evidence": "git tag v0.14.0"
     },
     {
       "src": "release:v0.2.0",

@@ -512,3 +512,76 @@ apps' changelogs.
    Verge Rev / v2rayN / FlClash / Hiddify / Speedify changelogs mapped
    to shipped vs proposed (next: per-link live status badges, exit-IP
    auto-refresh, empty states).
+
+## D29 — S21: P0 reconnect fix — tracked force-close at drain end + bind retry (2026-11-24)
+
+User report: "The connection works for some time, but it stops working
+when a second connection is added. The application must be restart for it
+to work again."
+
+1. ROOT CAUSE (H1): connection tasks spawned per accepted proxy
+   connection were UNTRACKED; a shutdown drained for 3 s and returned
+   WITH LIVE CONNECTIONS. Each lingering socket pins the listener port's
+   local endpoint; the next connect re-binds 10808/10809. Linux tolerates
+   a listen re-bind over non-listening sockets (proven with a standalone
+   std probe — scripts/rebind_probe.rs); WINDOWS does NOT
+   (WSAEADDRINUSE), so every picker switch after a busy session landed
+   Failed and only process death (RST) freed the ports. Reproduced
+   first: the regression test fails pre-fix (EOF never arrives) and
+   passes post-fix (bug-first contract).
+2. FIX: track every connection task's AbortHandle in `Shared.conns`
+   (pruned at 4096 pushes; aborting finished tasks is a no-op), and at
+   the END of the drain grace FORCE-CLOSE whatever wait_idle could not
+   reap. Listeners re-bind after a `bind_with_retry` (5 s budget / 250 ms
+   interval; BIND_WAIT 2→8 s) absorbing the kernel teardown race.
+3. PUMP DETACHMENT: `tunnel` spawns two pump tasks; aborting the outer
+   connection task merely DROPS their JoinHandles (detach), leaving the
+   socket halves open — the EOF assertion caught it. `AbortPumpsOnDrop`
+   aborts the pumps whenever the tunnel future dies (normal completion
+   too: no-op).
+4. H2 (same report family): engine config/log filenames keyed by tag
+   alone collided across profiles sharing a `#fragment` — a temp
+   probe/speed-test engine REWROTE the live engine's config and its next
+   respawn dialed the wrong server into DEGRADED while the GUI showed
+   Connected. `engine_file_stem` appends a deterministic FNV-1a hash of
+   the full endpoint identity (same profile → same file across
+   reconnects; different profiles → different files). Wire files gain a
+   hash suffix; only mt-engine's lifecycle-test helper had to follow.
+5. H3: profiles.json load→mutate→save cycles are now serialized by
+   `Core::store_mtx` (GUI iced tasks run concurrently; the CLI can race
+   the GUI; shared per-PID temp name collided on Windows).
+
+## D30 — S21: QoS fair share by destination + live toggle; merged Status panel (2026-11-24)
+
+User asks (verbatim): "Include a QoS toggle that can be turned on to
+prevent a single application from dominating all the bandwidth." / "Have
+the 'check exit ip' and 'speed test' in the same UI block, as there is a
+lot of blank space in their individual blocks."
+
+1. GROUPING: local flows all originate from 127.0.0.1 ephemeral ports —
+   per-PROCESS attribution is impossible at the proxy layer. Flows group
+   by TARGET (`host:port`): one site/app = one group regardless of how
+   many connections it opens (a download manager spreading over many
+   servers counts as several groups — documented in the Settings copy).
+2. SHAPING: the existing 1 s ticker measures aggregate up+down and
+   refills per-group token buckets at `aggregate/groups` ONLY under real
+   contention (≥2 active groups AND aggregate ≥ 2 MiB/s floor). Pumps
+   acquire a `PUMP_BUF`-sized budget before each read (20 ms retry until
+   the next refill). One group alone / idle tunnels are UNLIMITED — no
+   throughput tax without contention.
+3. LIVE TOGGLE: the scheduler is ALWAYS attached at connect (initialized
+   from settings), so `set_settings` flips an AtomicBool — NO reconnect
+   (unlike diagnostics/kill-switch, nothing in the data plane changes).
+   Disabling unblocks waiters and clears the table (tested).
+4. MERGED PANEL: exit-IP + speed-test share ONE Status card (shared
+   header, both triggers side-by-side Fill-width, result rows stacked
+   with label prefixes "exit"/"speed"); all messages/state unchanged
+   (pure view merge inside the D24 page scrollable).
+5. P1 PARITY (same batch): TCP_NODELAY on all four carrier legs; ACK
+   coalescing (8 frames / 20 ms, CLOSE+PING flush, cumulative semantics
+   unchanged); PONG echoes on the receiving carrier (RTT was
+   cross-contaminated); send-path copies 5→3 per frame (single-pass
+   encoder, wire-identity test); carrier writer batches ≤16 frames per
+   write_vectored; quarantine last-resort fallback (a probe can no
+   longer blackhole the only link); production prober uses the
+   user-configured probe target.

@@ -61,6 +61,18 @@
       "evidence": "workspace crate"
     },
     {
+      "src": "decision:D29",
+      "dst": "ledger:s21",
+      "rel": "decided_in",
+      "evidence": "agent-curated"
+    },
+    {
+      "src": "decision:D30",
+      "dst": "ledger:s21",
+      "rel": "decided_in",
+      "evidence": "agent-curated"
+    },
+    {
       "src": "protocol:memory-graph",
       "dst": "protocol:pstack",
       "rel": "implements",
