@@ -374,6 +374,31 @@ GUI, no new dependencies):
   color-scheme), re-checked every few seconds while the app runs. A
   survey of the multipath-bonding literature (BLEST, ECF, MP-QUIC…) and
   how it maps onto the scheduler shipped alongside in `docs/research/`.
+- **P0 reconnect fix + performance parity work + QoS + merged panel
+  (v0.14)**: adding a second server and switching to it while connected
+  no longer kills the tunnel until restart — in-flight proxy connections
+  are now tracked and force-closed when the drain grace expires (on
+  Windows their sockets used to pin the 10808/10809 local endpoints and
+  the next connect landed `ADDRINUSE` → `Failed`), the listeners retry a
+  busy bind for a few seconds instead of failing instantly, engine
+  config/log files carry an endpoint-identity hash so two profiles
+  sharing a tag can no longer overwrite each other's Xray config, and
+  profiles.json edits are serialized. Throughput/stability parity work:
+  TCP_NODELAY on every carrier/target leg (Nagle + delayed-ACK used to
+  stall each 16 KiB bonding frame behind a 40 ms ACK), cumulative ACKs
+  coalesced (8 frames / 20 ms, flushed by CLOSE and the 1 s heartbeat),
+  the carrier writer batches co-queued frames into one vectored write,
+  the send path drops two of its five per-frame copies, PONGs echo on
+  the carrier they arrived on (per-carrier RTT samples were
+  cross-contaminated), a probe can no longer quarantine the ONLY link
+  into a blackout (fail-open dial instead), and the background prober
+  now uses the user-configured probe target. Settings → Network gained
+  a **QoS fair share** toggle: connections are grouped by destination
+  and, when ≥2 groups race for a loaded tunnel, each gets an equal
+  share — one site/download can no longer dominate all bandwidth
+  (applies live, no reconnect; a single group or an idle tunnel runs at
+  full speed). The Status tab's exit-IP and speed-test cards merged into
+  one compact **Exit & speed** panel with both triggers side by side.
 - **Server editing, offline probes, kill switch, diagnostics (v0.13)**:
   every server card gained an **Edit** button — name, remark, address,
   port, UUID and the REALITY fields (SNI, fingerprint, public key, short
