@@ -154,6 +154,33 @@ def content_bbox(img, bg, thresh=12):
     return minx, miny, maxx + 1, maxy + 1
 
 
+def alpha_bbox(img, thresh=8):
+    """Tight [x0, y0, x1, y1) box of pixels with alpha above `thresh`.
+
+    S20: the keyed-out emblem/lockup crops can still carry dead bands the
+    color-based source bbox could not see (e.g. the emblem crop's left
+    band is background gradient the flood fill keyed out to alpha=0, plus
+    dead bottom rows). Fitting that padded raster into a square tile
+    renders the mark smaller than intended and off-center; cropping to
+    the alpha bounding box hands the compositor only the visible mark."""
+    w, h, buf = img
+    minx, maxx, miny, maxy = w, -1, h, -1
+    for y in range(h):
+        for x in range(w):
+            if buf[(y * w + x) * 4 + 3] > thresh:
+                if x < minx:
+                    minx = x
+                if x > maxx:
+                    maxx = x
+                if y < miny:
+                    miny = y
+                if y > maxy:
+                    maxy = y
+    if maxx < 0:
+        raise SystemExit("image is fully transparent — no content found")
+    return minx, miny, maxx + 1, maxy + 1
+
+
 def row_has_content(img, y, x0, x1, bg, thresh=12):
     return any(dist(px(img, x, y), bg) >= thresh for x in range(x0, x1))
 
@@ -533,20 +560,34 @@ def main() -> int:
     opaque = sum(1 for i in range(len(emblem_t[2])) if i % 4 == 3 and emblem_t[2][i] > 0)
     print(f"transparent emblem: {opaque} opaque px of {emblem_t[0]*emblem_t[1]}")
 
+    # S20: re-crop both keyed-out rasters to their own alpha bounding boxes
+    # (alpha > 8). The emblem crop carries a dead left band (keyed-out
+    # gradient, alpha=0) plus dead bottom rows; fitting that padded raster
+    # into a square tile renders the mark smaller and off-center. The tight
+    # crops feed every contrast_boost / desaturate / square_on_bg below;
+    # `lockup_t` itself stays un-cropped so logo_transparent.png and
+    # banner.png stay byte-identical.
+    emblem_tight = crop(emblem_t, alpha_bbox(emblem_t))
+    lockup_tight = crop(lockup_t, alpha_bbox(lockup_t))
+    print(
+        f"tight crops: emblem {emblem_tight[0]}x{emblem_tight[1]}, "
+        f"lockup {lockup_tight[0]}x{lockup_tight[1]}"
+    )
+
     # S18: titlebar emblem: TRANSPARENT background with a contrast boost
     # (the pale pastel mark would wash out on LIGHT titlebars — light mode
     # shipped the same day), tight margin so the mark fills more of the
-    # 24px tile (0.08 → 0.04: the glyph grows ~8%).
-    emblem_boosted = contrast_boost(emblem_t)
-    sq24 = square_on_bg(emblem_boosted, 24, (0, 0, 0, 0), margin=0.04)
+    # 24px tile (0.08 → 0.04 → 0.02) on the alpha-tight crop (S20).
+    emblem_boosted = contrast_boost(emblem_tight)
+    sq24 = square_on_bg(emblem_boosted, 24, (0, 0, 0, 0), margin=0.02)
     with open(os.path.join(outdir, "logo_24.rgba"), "wb") as f:
         f.write(sq24[2])
     print(f"logo_24.rgba: {len(sq24[2])} bytes (24x24, transparent bg, contrast-boosted)")
 
     # S18: window/taskbar icon: TRANSPARENT background + the same boost
     # (was the emblem on the opaque canvas color — a hard tile in the
-    # taskbar). Tight margin, same as the tray entries.
-    sq64 = square_on_bg(emblem_boosted, 64, (0, 0, 0, 0), margin=0.04)
+    # taskbar). Tight margin (0.04 → 0.02), same as the tray entries.
+    sq64 = square_on_bg(emblem_boosted, 64, (0, 0, 0, 0), margin=0.02)
     with open(os.path.join(outdir, "logo_64.rgba"), "wb") as f:
         f.write(sq64[2])
     print(f"logo_64.rgba: {len(sq64[2])} bytes (64x64, transparent bg, contrast-boosted)")
@@ -565,14 +606,17 @@ def main() -> int:
     print(f"banner.png: {len(banner_png)} bytes (1280x360)")
 
     # S18 tray icon (connected): CLEAR (transparent) background + contrast
-    # boost + tighter margin (0.08 → 0.04) so the mark is larger and reads
-    # on light AND dark taskbars. 16/32/48 = boosted emblem; 256 = the full
+    # boost + tighter margins (0.08 → 0.04 → 0.02; 256 lockup 0.10 → 0.03)
+    # so the mark is larger and reads on light AND dark taskbars.
+    # square_on_bg's margin is per-side, so 0.03 → 94% inner box — 0.04
+    # (92% inner) capped the 1.25:1 lockup at 73.4% height, under the 74%
+    # target. 16/32/48 = boosted emblem (alpha-tight crop); 256 = the full
     # lockup, transparent (was the opaque canvas tile).
-    lockup_boosted = contrast_boost(lockup_t)
+    lockup_boosted = contrast_boost(lockup_tight)
     entries = []
     for size in (16, 32, 48, 256):
         src = emblem_boosted if size < 64 else lockup_boosted
-        sq = square_on_bg(src, size, (0, 0, 0, 0), margin=0.04 if size < 64 else 0.10)
+        sq = square_on_bg(src, size, (0, 0, 0, 0), margin=0.02 if size < 64 else 0.03)
         entries.append((size, ico_image(sq)))
     n = write_ico(os.path.join(outdir, "icon.ico"), entries)
     print(
@@ -581,16 +625,17 @@ def main() -> int:
     )
 
     # S18 tray icon (not connected): monochrome + transparent, the same
-    # tighter margin (0.08 → 0.04).
-    mono_emblem = desaturate(emblem_t)
-    mono_lockup = desaturate(lockup_t)
+    # tighter margins (0.08 → 0.04 → 0.02; 256 lockup 0.10 → 0.03) on the
+    # alpha-tight crops (S20).
+    mono_emblem = desaturate(emblem_tight)
+    mono_lockup = desaturate(lockup_tight)
     entries = []
     for size in (16, 32, 48, 256):
         sq = square_on_bg(
             mono_emblem if size < 64 else mono_lockup,
             size,
             (0, 0, 0, 0),
-            margin=0.04 if size < 64 else 0.10,
+            margin=0.02 if size < 64 else 0.03,
         )
         entries.append((size, ico_image(sq)))
     n = write_ico(os.path.join(outdir, "icon_mono.ico"), entries)

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "e510e43 2026-11-24T20:08:15Z",
+  "as_of": "033c009 2026-11-24T20:57:46Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 290,
-  "edge_count": 298,
+  "node_count": 291,
+  "edge_count": 299,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -111,6 +111,26 @@
       "passages": [
         {
           "text": "backup(s11-tag-v0.6.2): 2026-11-19T09:48:44Z [no changes]",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:033c009",
+      "type": "commit",
+      "title": "backup(s21-close-v0.14.0): 2026-11-24T20:57:46Z",
+      "tags": [
+        "2026-11-24"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "033c009"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s21-close-v0.14.0): 2026-11-24T20:57:46Z",
           "kind": "title"
         }
       ]
@@ -8294,6 +8314,12 @@
       "dst": "ledger:s11",
       "rel": "part_of",
       "evidence": "subject stage label (s11)"
+    },
+    {
+      "src": "commit:033c009",
+      "dst": "ledger:s21",
+      "rel": "part_of",
+      "evidence": "subject stage label (s21)"
     },
     {
       "src": "commit:0435e99",

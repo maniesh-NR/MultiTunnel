@@ -468,12 +468,14 @@ pub fn status(app: &App) -> Element<'_> {
         .height(Length::Fixed(STATUS_GRAPH_HEIGHT));
     let _ = util::fmt_bps; // rate labels live in graph.rs; kept for chips/tests
 
-    // --- merged exit & speed panel (S21, user ask p) -------------------------
+    // --- merged exit & speed panel (S21 ask p; S22 two-column split) ---------
     // The two separate cards each carried a title + subtitle + button +
     // result rows with lots of air between them; ONE panel shares the
-    // header, puts both triggers side by side and stacks the result rows
-    // compactly. All state/messages are unchanged — a pure view merge
-    // inside the page scrollable (D24: nothing growable in the frame).
+    // header and puts both triggers side by side. S22: the results are
+    // split into TWO columns — ALL exit-ip outputs on the LEFT side, ALL
+    // speed-test outputs on the RIGHT side (user wording, verbatim).
+    // Pure view change inside the page scrollable (D24: nothing growable
+    // in the frame).
     let has_active = app.profiles.iter().any(|p| p.active);
     // Both triggers live in ONE row (S21 merged panel). Explicit Element
     // annotations: the two branches build different widget types and the
@@ -537,6 +539,14 @@ pub fn status(app: &App) -> Element<'_> {
             .spacing(12)
             .align_y(iced::Alignment::Center),
     );
+    // S22 two-column split: ALL exit-ip outputs on the LEFT side, ALL
+    // speed-test outputs on the RIGHT side (user wording, verbatim).
+    // Each column: small heading, stacked result rows, quiet placeholder
+    // while idle.
+    let mut exit_out = column![text("Exit IP")
+        .size(ts.label_m.size)
+        .color(s.on_surface_variant),]
+    .spacing(6);
     if let Some(res) = &app.exit {
         match res {
             Ok(info) => {
@@ -559,28 +569,13 @@ pub fn status(app: &App) -> Element<'_> {
                         s.on_error_container,
                     )
                 };
-                diag_col = diag_col
+                exit_out = exit_out
                     .push(
                         row![
-                            text("exit")
-                                .size(ts.label_m.size)
-                                .color(s.on_surface_variant),
                             text(info.exit_ip.clone())
                                 .size(ts.headline_s.size)
                                 .color(s.on_surface),
                             horizontal_space().width(Length::Fill),
-                            chip(
-                                format!("{} {}", info.country, info.city),
-                                app,
-                                s.secondary_container,
-                                s.on_secondary_container
-                            ),
-                            chip(
-                                info.isp.clone(),
-                                app,
-                                s.secondary_container,
-                                s.on_secondary_container
-                            ),
                             if info.via_temp_tunnel {
                                 chip(
                                     "temporary probe tunnel",
@@ -601,6 +596,24 @@ pub fn status(app: &App) -> Element<'_> {
                         .align_y(iced::Alignment::Center),
                     )
                     .push(
+                        row![
+                            chip(
+                                format!("{} {}", info.country, info.city),
+                                app,
+                                s.secondary_container,
+                                s.on_secondary_container
+                            ),
+                            chip(
+                                info.isp.clone(),
+                                app,
+                                s.secondary_container,
+                                s.on_secondary_container
+                            ),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .push(
                         container(text(verdict).size(ts.body_s.size).color(vfg))
                             .padding(10)
                             .style(t3::card(s, vbg))
@@ -608,39 +621,34 @@ pub fn status(app: &App) -> Element<'_> {
                     );
             }
             Err(e) => {
-                diag_col = diag_col.push(
+                exit_out = exit_out.push(
                     text(format!("exit probe failed: {e}"))
                         .size(ts.body_s.size)
                         .color(s.error),
                 );
             }
         }
+    } else {
+        exit_out = exit_out.push(
+            text("no result yet — check the exit IP")
+                .size(ts.body_s.size)
+                .color(s.on_surface_variant),
+        );
     }
+    let mut speed_out = column![text("Speed test")
+        .size(ts.label_m.size)
+        .color(s.on_surface_variant),]
+    .spacing(6);
     if let Some(res) = &app.speed {
         match res {
             Ok(info) => {
-                diag_col = diag_col
+                speed_out = speed_out
                     .push(
                         row![
-                            text("speed")
-                                .size(ts.label_m.size)
-                                .color(s.on_surface_variant),
                             text(format!("{:.1} Mbps", info.mbps))
                                 .size(ts.headline_s.size)
                                 .color(s.on_surface),
                             horizontal_space().width(Length::Fill),
-                            chip(
-                                format!("{:.1} MB in {:.1} s", info.mbytes, info.seconds),
-                                app,
-                                s.secondary_container,
-                                s.on_secondary_container
-                            ),
-                            chip(
-                                util::short(&info.profile_tag, 24),
-                                app,
-                                s.surface_container_high,
-                                s.on_surface_variant
-                            ),
                             if info.via_temp_tunnel {
                                 chip(
                                     "temporary probe tunnel",
@@ -656,6 +664,24 @@ pub fn status(app: &App) -> Element<'_> {
                                     s.on_tertiary_container,
                                 )
                             },
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .push(
+                        row![
+                            chip(
+                                format!("{:.1} MB in {:.1} s", info.mbytes, info.seconds),
+                                app,
+                                s.secondary_container,
+                                s.on_secondary_container
+                            ),
+                            chip(
+                                util::short(&info.profile_tag, 24),
+                                app,
+                                s.surface_container_high,
+                                s.on_surface_variant
+                            ),
                         ]
                         .spacing(8)
                         .align_y(iced::Alignment::Center),
@@ -670,14 +696,23 @@ pub fn status(app: &App) -> Element<'_> {
                     );
             }
             Err(e) => {
-                diag_col = diag_col.push(
+                speed_out = speed_out.push(
                     text(format!("speed test failed: {e}"))
                         .size(ts.body_s.size)
                         .color(s.error),
                 );
             }
         }
+    } else {
+        speed_out = speed_out.push(
+            text("no result yet — run the speed test")
+                .size(ts.body_s.size)
+                .color(s.on_surface_variant),
+        );
     }
+    diag_col = diag_col.push(
+        row![exit_out.width(Length::Fill), speed_out.width(Length::Fill)].spacing(16),
+    );
     let diag_card = container(diag_col.spacing(8).padding(16))
         .style(t3::card(s, s.surface_container_low))
         .width(Length::Fill);
