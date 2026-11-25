@@ -1,0 +1,571 @@
+﻿2026-11-25T19:24:10.8664974Z Current runner version: '2.338.2'
+2026-11-25T19:24:10.8689301Z ##[group]Runner Image Provisioner
+2026-11-25T19:24:10.8690175Z Hosted Compute Agent
+2026-11-25T19:24:10.8690790Z Version: 20261111.635
+2026-11-25T19:24:10.8691569Z Commit: b8a594ea514ff44cadb5342986c68b1eac6e22ed
+2026-11-25T19:24:10.8692300Z Build Date: 2026-11-11T01:49:01Z
+2026-11-25T19:24:10.8693012Z Worker ID: {1d27284e-f9f5-4689-9010-fc5dae2ce851}
+2026-11-25T19:24:10.8694089Z Region: centralus
+2026-11-25T19:24:10.8694659Z Cloud: Azure
+2026-11-25T19:24:10.8695242Z ##[endgroup]
+2026-11-25T19:24:10.8696597Z ##[group]Operating System
+2026-11-25T19:24:10.8697219Z Ubuntu
+2026-11-25T19:24:10.8697746Z 26.04.1
+2026-11-25T19:24:10.8698284Z LTS
+2026-11-25T19:24:10.8698845Z ##[endgroup]
+2026-11-25T19:24:10.8699387Z ##[group]Runner Image
+2026-11-25T19:24:10.8699979Z Image: ubuntu-26.04
+2026-11-25T19:24:10.8700557Z Version: 20261116.202.1
+2026-11-25T19:24:10.8701833Z Included Software: https://github.com/actions/runner-images/blob/ubuntu26/20261116.202/images/ubuntu/Ubuntu2604-Readme.md
+2026-11-25T19:24:10.8703565Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu26%2F20261116.202
+2026-11-25T19:24:10.8704533Z ##[endgroup]
+2026-11-25T19:24:10.8705761Z ##[group]GITHUB_TOKEN Permissions
+2026-11-25T19:24:10.8707901Z Contents: read
+2026-11-25T19:24:10.8708552Z Metadata: read
+2026-11-25T19:24:10.8709114Z Packages: read
+2026-11-25T19:24:10.8710123Z ##[endgroup]
+2026-11-25T19:24:10.8712555Z Secret source: Actions
+2026-11-25T19:24:10.8713782Z Cache mode: write
+2026-11-25T19:24:10.8714655Z Prepare workflow directory
+2026-11-25T19:24:10.9053531Z Prepare all required actions
+2026-11-25T19:24:10.9102952Z Getting action download info
+2026-11-25T19:24:11.2658847Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-25T19:24:11.3636703Z Download action repository 'dtolnay/rust-toolchain@stable' (SHA:39008827e6b4319a349e9a42dfc90579dd25f1ca)
+2026-11-25T19:24:11.5168440Z Download action repository 'Swatinem/rust-cache@v2' (SHA:d1527c8f67ef9af357290475d4af4b0fab8f12e0)
+2026-11-25T19:24:12.1052902Z Complete job name: test (ubuntu-latest)
+2026-11-25T19:24:12.1901773Z ##[group]Run actions/checkout@v4
+2026-11-25T19:24:12.1902753Z with:
+2026-11-25T19:24:12.1903794Z   repository: maniesh-NR/MultiTunnel
+2026-11-25T19:24:12.1908822Z   token: ***
+2026-11-25T19:24:12.1909383Z   ssh-strict: true
+2026-11-25T19:24:12.1909977Z   ssh-user: git
+2026-11-25T19:24:12.1910695Z   persist-credentials: true
+2026-11-25T19:24:12.1911312Z   clean: true
+2026-11-25T19:24:12.1911937Z   sparse-checkout-cone-mode: true
+2026-11-25T19:24:12.1912619Z   fetch-depth: 1
+2026-11-25T19:24:12.1913587Z   fetch-tags: false
+2026-11-25T19:24:12.1914215Z   show-progress: true
+2026-11-25T19:24:12.1914780Z   lfs: false
+2026-11-25T19:24:12.1915408Z   submodules: false
+2026-11-25T19:24:12.1916011Z   set-safe-directory: true
+2026-11-25T19:24:12.1916663Z   allow-unsafe-pr-checkout: false
+2026-11-25T19:24:12.1917612Z ##[endgroup]
+2026-11-25T19:24:12.4787343Z Syncing repository: maniesh-NR/MultiTunnel
+2026-11-25T19:24:12.4791866Z ##[group]Getting Git version info
+2026-11-25T19:24:12.4794161Z Working directory is '/home/runner/work/MultiTunnel/MultiTunnel'
+2026-11-25T19:24:12.4797575Z [command]/usr/bin/git version
+2026-11-25T19:24:12.4834128Z git version 2.56.1
+2026-11-25T19:24:12.4855906Z ##[endgroup]
+2026-11-25T19:24:12.4867693Z Temporarily overriding HOME='/home/runner/work/_temp/ab98ff89-ea3e-4d9d-a40f-c9b9e32eecc4' before making global git config changes
+2026-11-25T19:24:12.4872902Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-25T19:24:12.4878355Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/MultiTunnel/MultiTunnel
+2026-11-25T19:24:12.4939104Z Deleting the contents of '/home/runner/work/MultiTunnel/MultiTunnel'
+2026-11-25T19:24:12.4943878Z ##[group]Initializing the repository
+2026-11-25T19:24:12.4946984Z [command]/usr/bin/git init /home/runner/work/MultiTunnel/MultiTunnel
+2026-11-25T19:24:12.5071400Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-25T19:24:12.5075061Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-25T19:24:12.5077991Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-25T19:24:12.5080448Z hint: call:
+2026-11-25T19:24:12.5082095Z hint:
+2026-11-25T19:24:12.5084131Z hint: 	git config --global init.defaultBranch <name>
+2026-11-25T19:24:12.5086410Z hint:
+2026-11-25T19:24:12.5088249Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-25T19:24:12.5090944Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-25T19:24:12.5093493Z hint:
+2026-11-25T19:24:12.5094930Z hint: 	git branch -m <name>
+2026-11-25T19:24:12.5096391Z hint:
+2026-11-25T19:24:12.5098248Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-25T19:24:12.5101587Z Initialized empty Git repository in /home/runner/work/MultiTunnel/MultiTunnel/.git/
+2026-11-25T19:24:12.5109351Z [command]/usr/bin/git remote add origin https://github.com/maniesh-NR/MultiTunnel
+2026-11-25T19:24:12.5158198Z ##[endgroup]
+2026-11-25T19:24:12.5160774Z ##[group]Disabling automatic garbage collection
+2026-11-25T19:24:12.5162862Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-25T19:24:12.5201322Z ##[endgroup]
+2026-11-25T19:24:12.5203925Z ##[group]Setting up auth
+2026-11-25T19:24:12.5208375Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-25T19:24:12.5245543Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-25T19:24:12.5687389Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-25T19:24:12.5724870Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-25T19:24:12.5956525Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-25T19:24:12.5988715Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-25T19:24:12.6217709Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-25T19:24:12.6261463Z ##[endgroup]
+2026-11-25T19:24:12.6264648Z ##[group]Fetching the repository
+2026-11-25T19:24:12.6275091Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +21fd59f9adb3f953247fe2f0d204d95a3d83acbf:refs/remotes/origin/main
+2026-11-25T19:24:13.2486494Z From https://github.com/maniesh-NR/MultiTunnel
+2026-11-25T19:24:13.2490201Z  * [new ref]         21fd59f9adb3f953247fe2f0d204d95a3d83acbf -> origin/main
+2026-11-25T19:24:13.2498049Z ##[endgroup]
+2026-11-25T19:24:13.2501392Z ##[group]Determining the checkout info
+2026-11-25T19:24:13.2505004Z ##[endgroup]
+2026-11-25T19:24:13.2507401Z [command]/usr/bin/git sparse-checkout disable
+2026-11-25T19:24:13.2563490Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-25T19:24:13.2595722Z ##[group]Checking out the ref
+2026-11-25T19:24:13.2598597Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-11-25T19:24:13.2990070Z Switched to a new branch 'main'
+2026-11-25T19:24:13.2995384Z branch 'main' set up to track 'origin/main'.
+2026-11-25T19:24:13.3003919Z ##[endgroup]
+2026-11-25T19:24:13.3050174Z [command]/usr/bin/git log -1 --format=%H
+2026-11-25T19:24:13.3075049Z 21fd59f9adb3f953247fe2f0d204d95a3d83acbf
+2026-11-25T19:24:13.3731750Z ##[group]Run dtolnay/rust-toolchain@stable
+2026-11-25T19:24:13.3733079Z with:
+2026-11-25T19:24:13.3734303Z   toolchain: stable
+2026-11-25T19:24:13.3735272Z ##[endgroup]
+2026-11-25T19:24:13.3845660Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-11-25T19:24:13.3938883Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-11-25T19:24:13.3940409Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-11-25T19:24:13.3943080Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-11-25T19:24:13.3945491Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-11-25T19:24:13.3946832Z [36;1m  exit 1[0m
+2026-11-25T19:24:13.3948289Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-11-25T19:24:13.3950006Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-11-25T19:24:13.3952275Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-11-25T19:24:13.3954498Z [36;1m  else[0m
+2026-11-25T19:24:13.3956217Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-11-25T19:24:13.3958145Z [36;1m  fi[0m
+2026-11-25T19:24:13.3959511Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-11-25T19:24:13.3961703Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-11-25T19:24:13.3963705Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-11-25T19:24:13.3965892Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-11-25T19:24:13.3967931Z [36;1melse[0m
+2026-11-25T19:24:13.3968883Z [36;1m  delimiter=EOF[0m
+2026-11-25T19:24:13.3970347Z [36;1m  while [[ $toolchain == *$delimiter* ]]; do delimiter+=_; done[0m
+2026-11-25T19:24:13.3972492Z [36;1m  printf 'toolchain<<%s\n%s\n%s\n' "$delimiter" "$toolchain" "$delimiter" >> $GITHUB_OUTPUT[0m
+2026-11-25T19:24:13.3974432Z [36;1mfi[0m
+2026-11-25T19:24:13.4006711Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:13.4008244Z env:
+2026-11-25T19:24:13.4009148Z   toolchain: stable
+2026-11-25T19:24:13.4010178Z ##[endgroup]
+2026-11-25T19:24:13.4144313Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=29]
+2026-11-25T19:24:13.4154242Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-11-25T19:24:13.4216700Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV
+2026-11-25T19:24:13.4218694Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-11-25T19:24:13.4246299Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:13.4247737Z ##[endgroup]
+2026-11-25T19:24:13.4324895Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=16]
+2026-11-25T19:24:13.4332139Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-11-25T19:24:13.4391950Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-11-25T19:24:13.4393739Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-11-25T19:24:13.4396630Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-11-25T19:24:13.4399450Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-11-25T19:24:13.4400695Z [36;1mfi[0m
+2026-11-25T19:24:13.4425230Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:13.4426579Z env:
+2026-11-25T19:24:13.4427800Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:13.4428900Z ##[endgroup]
+2026-11-25T19:24:13.4502763Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=16]
+2026-11-25T19:24:13.4510320Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-11-25T19:24:13.4527212Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-25T19:24:13.4548762Z ##[start-action display=rustup toolchain install stable;id=__dtolnay_rust-toolchain.__run_4]
+2026-11-25T19:24:13.4596587Z ##[group]Run set -f  # split targets and components on commas and whitespace, without glob expansion
+2026-11-25T19:24:13.4599145Z [36;1mset -f  # split targets and components on commas and whitespace, without glob expansion[0m
+2026-11-25T19:24:13.4600905Z [36;1mflags=()[0m
+2026-11-25T19:24:13.4602158Z [36;1mfor t in ${targets//,/ }; do flags+=(--target "$t"); done[0m
+2026-11-25T19:24:13.4603991Z [36;1mfor c in ${components//,/ }; do flags+=(--component "$c"); done[0m
+2026-11-25T19:24:13.4605996Z [36;1mif [[ $toolchain == nightly && -n $components ]]; then flags+=(--allow-downgrade); fi[0m
+2026-11-25T19:24:13.4607744Z [36;1mlog=$(mktemp)[0m
+2026-11-25T19:24:13.4608791Z [36;1mtrap 'rm -f "$log"' EXIT[0m
+2026-11-25T19:24:13.4609975Z [36;1mfor attempt in 1 2 3 4 5; do[0m
+2026-11-25T19:24:13.4612152Z [36;1m  if rustup toolchain install "$toolchain" "${flags[@]}" --profile minimal --no-self-update --force-non-host 2>&1 | tee "$log"; then[0m
+2026-11-25T19:24:13.4614582Z [36;1m    break[0m
+2026-11-25T19:24:13.4615533Z [36;1m  else[0m
+2026-11-25T19:24:13.4616465Z [36;1m    status=$?[0m
+2026-11-25T19:24:13.4617478Z [36;1m  fi[0m
+2026-11-25T19:24:13.4618706Z [36;1m  if [[ $attempt == 5 ]] || ! grep -Fq 'checksum failed for ' "$log" \[0m
+2026-11-25T19:24:13.4620991Z [36;1m      || ! grep -Fq 'this is likely due to an ongoing update of the official release server' "$log"; then[0m
+2026-11-25T19:24:13.4622878Z [36;1m    exit "$status"[0m
+2026-11-25T19:24:13.4624098Z [36;1m  fi[0m
+2026-11-25T19:24:13.4625628Z [36;1m  echo "Retrying rustup toolchain install in 30 seconds (retry $attempt of 4)" >&2[0m
+2026-11-25T19:24:13.4627365Z [36;1m  sleep 30[0m
+2026-11-25T19:24:13.4628340Z [36;1mdone[0m
+2026-11-25T19:24:13.4655225Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:13.4656623Z env:
+2026-11-25T19:24:13.4657538Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:13.4658680Z   toolchain: stable
+2026-11-25T19:24:13.4659623Z   targets: 
+2026-11-25T19:24:13.4660516Z   components: 
+2026-11-25T19:24:13.4661655Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-11-25T19:24:13.4662708Z ##[endgroup]
+2026-11-25T19:24:13.7968100Z info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+2026-11-25T19:24:14.0676903Z 
+2026-11-25T19:24:14.0772163Z   stable-x86_64-unknown-linux-gnu unchanged - rustc 1.100.0 (0ef1bc386 2026-11-09)
+2026-11-25T19:24:14.0774521Z 
+2026-11-25T19:24:14.0827265Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=627]
+2026-11-25T19:24:14.0841357Z ##[start-action display=rustup default stable;id=__dtolnay_rust-toolchain.__run_5]
+2026-11-25T19:24:14.0891848Z ##[group]Run rustup default "$toolchain" --force-non-host
+2026-11-25T19:24:14.0893532Z [36;1mrustup default "$toolchain" --force-non-host[0m
+2026-11-25T19:24:14.0923254Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:14.0924769Z env:
+2026-11-25T19:24:14.0925708Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:14.0926827Z   toolchain: stable
+2026-11-25T19:24:14.0927789Z ##[endgroup]
+2026-11-25T19:24:14.1033807Z info: using existing install for stable-x86_64-unknown-linux-gnu
+2026-11-25T19:24:14.1074127Z info: default toolchain set to stable-x86_64-unknown-linux-gnu
+2026-11-25T19:24:14.1075230Z 
+2026-11-25T19:24:14.1147111Z   stable-x86_64-unknown-linux-gnu unchanged - rustc 1.100.0 (0ef1bc386 2026-11-09)
+2026-11-25T19:24:14.1148657Z 
+2026-11-25T19:24:14.1169862Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=32]
+2026-11-25T19:24:14.1179152Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-11-25T19:24:14.1227819Z ##[group]Run DATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-11-25T19:24:14.1231015Z [36;1mDATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-11-25T19:24:14.1233758Z [36;1mHASH=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-11-25T19:24:14.1235793Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-11-25T19:24:14.1264612Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:14.1265971Z env:
+2026-11-25T19:24:14.1266934Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:14.1268156Z   toolchain: stable
+2026-11-25T19:24:14.1269106Z ##[endgroup]
+2026-11-25T19:24:14.1757931Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=57]
+2026-11-25T19:24:14.1766008Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-11-25T19:24:14.1816060Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-11-25T19:24:14.1817608Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-11-25T19:24:14.1818988Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-11-25T19:24:14.1820263Z [36;1mfi[0m
+2026-11-25T19:24:14.1849090Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:14.1850512Z env:
+2026-11-25T19:24:14.1851455Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:14.1852679Z ##[endgroup]
+2026-11-25T19:24:14.1925024Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=15]
+2026-11-25T19:24:14.1932162Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-11-25T19:24:14.1979175Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-11-25T19:24:14.1980680Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-11-25T19:24:14.1982096Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-11-25T19:24:14.1983552Z [36;1mfi[0m
+2026-11-25T19:24:14.2008480Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:14.2009931Z env:
+2026-11-25T19:24:14.2010861Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:14.2012027Z   CARGO_INCREMENTAL: 0
+2026-11-25T19:24:14.2013006Z ##[endgroup]
+2026-11-25T19:24:14.2084547Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=14]
+2026-11-25T19:24:14.2093401Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-11-25T19:24:14.2142159Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-11-25T19:24:14.2144223Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-11-25T19:24:14.2146750Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-11-25T19:24:14.2149408Z [36;1m  if rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-11-25T19:24:14.2151657Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-11-25T19:24:14.2154014Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-11-25T19:24:14.2156031Z [36;1m  elif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-11-25T19:24:14.2158277Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-11-25T19:24:14.2160239Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-11-25T19:24:14.2161683Z [36;1m  fi[0m
+2026-11-25T19:24:14.2162621Z [36;1mfi[0m
+2026-11-25T19:24:14.2188040Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:14.2189446Z env:
+2026-11-25T19:24:14.2190586Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:14.2191682Z   CARGO_INCREMENTAL: 0
+2026-11-25T19:24:14.2192697Z   CARGO_TERM_COLOR: always
+2026-11-25T19:24:14.2193900Z   toolchain: stable
+2026-11-25T19:24:14.2194805Z ##[endgroup]
+2026-11-25T19:24:14.2493034Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=39]
+2026-11-25T19:24:14.2502630Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-11-25T19:24:14.2552911Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-11-25T19:24:14.2555639Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-11-25T19:24:14.2557947Z [36;1mif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-11-25T19:24:14.2559863Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-11-25T19:24:14.2561216Z [36;1mfi[0m
+2026-11-25T19:24:14.2588777Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:14.2590204Z env:
+2026-11-25T19:24:14.2591150Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:14.2592239Z   CARGO_INCREMENTAL: 0
+2026-11-25T19:24:14.2593547Z   CARGO_TERM_COLOR: always
+2026-11-25T19:24:14.2594568Z   toolchain: stable
+2026-11-25T19:24:14.2595461Z ##[endgroup]
+2026-11-25T19:24:14.2782681Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=27]
+2026-11-25T19:24:14.2793756Z ##[start-action display=rustc +stable --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-11-25T19:24:14.2842501Z ##[group]Run rustc +"$toolchain" --version --verbose
+2026-11-25T19:24:14.2844642Z [36;1mrustc +"$toolchain" --version --verbose[0m
+2026-11-25T19:24:14.2875013Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-25T19:24:14.2876472Z env:
+2026-11-25T19:24:14.2877371Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:14.2878518Z   CARGO_INCREMENTAL: 0
+2026-11-25T19:24:14.2879534Z   CARGO_TERM_COLOR: always
+2026-11-25T19:24:14.2880518Z   toolchain: stable
+2026-11-25T19:24:14.2881504Z ##[endgroup]
+2026-11-25T19:24:14.3045644Z rustc 1.100.0 (0ef1bc386 2026-11-09)
+2026-11-25T19:24:14.3047443Z binary: rustc
+2026-11-25T19:24:14.3048708Z commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+2026-11-25T19:24:14.3050016Z commit-date: 2026-11-09
+2026-11-25T19:24:14.3051080Z host: x86_64-unknown-linux-gnu
+2026-11-25T19:24:14.3052115Z release: 1.100.0
+2026-11-25T19:24:14.3053063Z LLVM version: 23.1.5
+2026-11-25T19:24:14.3075105Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=27]
+2026-11-25T19:24:14.3332443Z ##[group]Run Swatinem/rust-cache@v2
+2026-11-25T19:24:14.3333685Z with:
+2026-11-25T19:24:14.3334540Z   prefix-key: v0-rust
+2026-11-25T19:24:14.3335539Z   add-job-id-key: true
+2026-11-25T19:24:14.3336602Z   add-rust-environment-hash-key: true
+2026-11-25T19:24:14.3337749Z   cache-targets: true
+2026-11-25T19:24:14.3338733Z   cache-all-crates: false
+2026-11-25T19:24:14.3339768Z   cache-workspace-crates: false
+2026-11-25T19:24:14.3340819Z   save-if: true
+2026-11-25T19:24:14.3342162Z   cache-provider: github
+2026-11-25T19:24:14.3343289Z   cache-bin: true
+2026-11-25T19:24:14.3344224Z   lookup-only: false
+2026-11-25T19:24:14.3345148Z   cmd-format: {0}
+2026-11-25T19:24:14.3346042Z env:
+2026-11-25T19:24:14.3346930Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:14.3347975Z   CARGO_INCREMENTAL: 0
+2026-11-25T19:24:14.3348966Z   CARGO_TERM_COLOR: always
+2026-11-25T19:24:14.3349927Z ##[endgroup]
+2026-11-25T19:24:15.5665306Z ##[group]Cache Configuration
+2026-11-25T19:24:15.5667114Z Cache Provider:
+2026-11-25T19:24:15.5667752Z     github
+2026-11-25T19:24:15.5668500Z Workspaces:
+2026-11-25T19:24:15.5669166Z     /home/runner/work/MultiTunnel/MultiTunnel
+2026-11-25T19:24:15.5670026Z Cache Paths:
+2026-11-25T19:24:15.5670698Z     /home/runner/.cargo/bin
+2026-11-25T19:24:15.5671167Z     /home/runner/.cargo/.crates.toml
+2026-11-25T19:24:15.5671700Z     /home/runner/.cargo/.crates2.json
+2026-11-25T19:24:15.5672395Z     /home/runner/.cargo/registry
+2026-11-25T19:24:15.5672919Z     /home/runner/.cargo/git
+2026-11-25T19:24:15.5673871Z     /home/runner/work/MultiTunnel/MultiTunnel/target
+2026-11-25T19:24:15.5674704Z Restore Key:
+2026-11-25T19:24:15.5675194Z     v0-rust-test-Linux-x64-2fd77104
+2026-11-25T19:24:15.5675708Z Cache Key:
+2026-11-25T19:24:15.5676225Z     v0-rust-test-Linux-x64-2fd77104-95f3ec8d
+2026-11-25T19:24:15.5676985Z .. Prefix:
+2026-11-25T19:24:15.5677404Z   - v0-rust-test-Linux-x64
+2026-11-25T19:24:15.5677948Z .. Environment considered:
+2026-11-25T19:24:15.5678597Z   - Rust Versions:
+2026-11-25T19:24:15.5679286Z     - 1.100.0 x86_64-unknown-linux-gnu 0ef1bc386059596dada8fb65b50425aab2ea637a
+2026-11-25T19:24:15.5680120Z   - CARGO_HOME
+2026-11-25T19:24:15.5680672Z   - CARGO_INCREMENTAL
+2026-11-25T19:24:15.5681287Z   - CARGO_TERM_COLOR
+2026-11-25T19:24:15.5682020Z .. Lockfiles considered:
+2026-11-25T19:24:15.5682741Z   - /home/runner/work/MultiTunnel/MultiTunnel/Cargo.lock
+2026-11-25T19:24:15.5683781Z   - /home/runner/work/MultiTunnel/MultiTunnel/Cargo.toml
+2026-11-25T19:24:15.5684880Z   - /home/runner/work/MultiTunnel/MultiTunnel/crates/mt-app/Cargo.toml
+2026-11-25T19:24:15.5686281Z   - /home/runner/work/MultiTunnel/MultiTunnel/crates/mt-bond/Cargo.toml
+2026-11-25T19:24:15.5687548Z   - /home/runner/work/MultiTunnel/MultiTunnel/crates/mt-engine/Cargo.toml
+2026-11-25T19:24:15.5688519Z   - /home/runner/work/MultiTunnel/MultiTunnel/crates/mt-links/Cargo.toml
+2026-11-25T19:24:15.5689455Z   - /home/runner/work/MultiTunnel/MultiTunnel/crates/mt-m3/Cargo.toml
+2026-11-25T19:24:15.5690195Z   - /home/runner/work/MultiTunnel/MultiTunnel/crates/mt-net/Cargo.toml
+2026-11-25T19:24:15.5691070Z   - /home/runner/work/MultiTunnel/MultiTunnel/crates/mt-platform/Cargo.toml
+2026-11-25T19:24:15.5691890Z   - /home/runner/work/MultiTunnel/MultiTunnel/crates/mt-service/Cargo.toml
+2026-11-25T19:24:15.5692968Z ##[endgroup]
+2026-11-25T19:24:15.5693573Z 
+2026-11-25T19:24:15.5694033Z ... Restoring cache ...
+2026-11-25T19:24:15.7235791Z Cache hit for restore-key: v0-rust-test-Linux-x64-2fd77104-39107a77
+2026-11-25T19:24:16.9104498Z Received 83886080 of 490334055 (17.1%), 80.0 MBs/sec
+2026-11-25T19:24:17.9162944Z Received 260046848 of 490334055 (53.0%), 123.9 MBs/sec
+2026-11-25T19:24:18.9125367Z Received 402653184 of 490334055 (82.1%), 127.9 MBs/sec
+2026-11-25T19:24:19.2656402Z Received 490334055 of 490334055 (100.0%), 139.4 MBs/sec
+2026-11-25T19:24:19.2657324Z Cache Size: ~468 MB (490334055 B)
+2026-11-25T19:24:19.2776314Z [command]/usr/bin/tar -xf /home/runner/work/_temp/9f574106-7ad0-4f2c-8d7e-64543291bc81/cache.tzst -P -C /home/runner/work/MultiTunnel/MultiTunnel --use-compress-program unzstd
+2026-11-25T19:24:21.9208555Z Cache restored successfully
+2026-11-25T19:24:21.9378748Z Restored from cache key "v0-rust-test-Linux-x64-2fd77104-39107a77" full match: false.
+2026-11-25T19:24:22.0385568Z ##[group]Run cargo test --workspace
+2026-11-25T19:24:22.0386048Z [36;1mcargo test --workspace[0m
+2026-11-25T19:24:22.0409697Z shell: /usr/bin/bash -e {0}
+2026-11-25T19:24:22.0410120Z env:
+2026-11-25T19:24:22.0410420Z   CARGO_HOME: /home/runner/.cargo
+2026-11-25T19:24:22.0410811Z   CARGO_INCREMENTAL: 0
+2026-11-25T19:24:22.0411182Z   CARGO_TERM_COLOR: always
+2026-11-25T19:24:22.0411560Z   CACHE_ON_FAILURE: false
+2026-11-25T19:24:22.0411872Z ##[endgroup]
+2026-11-25T19:24:22.3939438Z [1m[92m    Updating[0m crates.io index
+2026-11-25T19:24:24.1152924Z [1m[92m   Compiling[0m tokio v1.54.1
+2026-11-25T19:24:24.1191005Z [1m[92m   Compiling[0m num-traits v0.2.19
+2026-11-25T19:24:24.1199235Z [1m[92m   Compiling[0m arrayvec v0.7.8
+2026-11-25T19:24:24.1283713Z [1m[92m   Compiling[0m winit v0.30.13
+2026-11-25T19:24:26.8328015Z [1m[92m   Compiling[0m tiny-skia v0.11.4
+2026-11-25T19:24:28.4285175Z [1m[92m   Compiling[0m kurbo v0.10.4
+2026-11-25T19:24:29.1711359Z [1m[92m   Compiling[0m approx v0.5.1
+2026-11-25T19:24:29.2465850Z [1m[92m   Compiling[0m palette v0.7.7
+2026-11-25T19:24:29.5464823Z [1m[92m   Compiling[0m euclid v0.22.14
+2026-11-25T19:24:29.7745007Z [1m[92m   Compiling[0m image v0.24.9
+2026-11-25T19:24:30.4162662Z [1m[92m   Compiling[0m lyon_geom v1.0.20
+2026-11-25T19:24:30.8374139Z [1m[92m   Compiling[0m mt-net v0.1.0 (/home/runner/work/MultiTunnel/MultiTunnel/crates/mt-net)
+2026-11-25T19:24:32.2997445Z [1m[92m   Compiling[0m lyon_path v1.0.19
+2026-11-25T19:24:32.5974846Z [1m[92m   Compiling[0m hyper v1.12.0
+2026-11-25T19:24:32.8162652Z [1m[92m   Compiling[0m tokio-rustls v0.26.6
+2026-11-25T19:24:33.0535466Z [1m[92m   Compiling[0m tower v0.5.3
+2026-11-25T19:24:33.2965932Z [1m[92m   Compiling[0m sctk-adwaita v0.10.1
+2026-11-25T19:24:33.5401750Z [1m[92m   Compiling[0m hyper-util v0.1.21
+2026-11-25T19:24:33.8484665Z [1m[92m   Compiling[0m tower-http v0.6.11
+2026-11-25T19:24:34.1945452Z [1m[92m   Compiling[0m mt-engine v0.1.0 (/home/runner/work/MultiTunnel/MultiTunnel/crates/mt-engine)
+2026-11-25T19:24:35.1865161Z [1m[92m   Compiling[0m iced_core v0.13.2
+2026-11-25T19:24:35.2588869Z [1m[92m   Compiling[0m hyper-rustls v0.27.10
+2026-11-25T19:24:35.3635275Z [1m[92m   Compiling[0m mt-service v0.1.0 (/home/runner/work/MultiTunnel/MultiTunnel/crates/mt-service)
+2026-11-25T19:24:35.4765472Z [1m[92m   Compiling[0m reqwest v0.12.28
+2026-11-25T19:24:35.9185325Z [1m[92m   Compiling[0m mt-bond v0.1.0 (/home/runner/work/MultiTunnel/MultiTunnel/crates/mt-bond)
+2026-11-25T19:24:36.6496793Z [1m[92m   Compiling[0m iced_futures v0.13.2
+2026-11-25T19:24:36.9542483Z [1m[92m   Compiling[0m iced_graphics v0.13.0 (/home/runner/work/MultiTunnel/MultiTunnel/vendor/iced_graphics)
+2026-11-25T19:24:38.4394022Z [1m[92m   Compiling[0m iced_tiny_skia v0.13.0 (/home/runner/work/MultiTunnel/MultiTunnel/vendor/iced_tiny_skia)
+2026-11-25T19:24:39.6525690Z [1m[92m   Compiling[0m iced_runtime v0.13.2
+2026-11-25T19:24:39.8805303Z [1m[92m   Compiling[0m iced_renderer v0.13.0
+2026-11-25T19:24:39.8981356Z [1m[92m   Compiling[0m mt-links v0.1.0 (/home/runner/work/MultiTunnel/MultiTunnel/crates/mt-links)
+2026-11-25T19:24:40.0165288Z [1m[92m   Compiling[0m iced_widget v0.13.4
+2026-11-25T19:24:40.4575105Z [1m[92m   Compiling[0m iced_winit v0.13.0
+2026-11-25T19:24:41.0385527Z [1m[92m   Compiling[0m mt-platform v0.1.0 (/home/runner/work/MultiTunnel/MultiTunnel/crates/mt-platform)
+2026-11-25T19:24:41.7519532Z [1m[92m   Compiling[0m iced v0.13.1
+2026-11-25T19:24:42.0555872Z [1m[92m   Compiling[0m mt-m3 v0.1.0 (/home/runner/work/MultiTunnel/MultiTunnel/crates/mt-m3)
+2026-11-25T19:24:42.4550288Z [1m[92m   Compiling[0m mt-app v0.15.0 (/home/runner/work/MultiTunnel/MultiTunnel/crates/mt-app)
+2026-11-25T19:24:45.3801602Z [1m[92m   Compiling[0m multitunnel v0.15.0 (/home/runner/work/MultiTunnel/MultiTunnel)
+2026-11-25T19:24:59.4684949Z [1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 37.40s
+2026-11-25T19:24:59.4967422Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/build/mt-app/f6713c862b4ed9fb/out/mt_app-f6713c862b4ed9fb)
+2026-11-25T19:24:59.4991656Z 
+2026-11-25T19:24:59.4991847Z running 66 tests
+2026-11-25T19:24:59.5009436Z test app::tests::app_version_is_release_triplet ... ok
+2026-11-25T19:24:59.5374981Z test app::tests::adapter_rate_sampling_deltas_and_resets ... ok
+2026-11-25T19:24:59.5404193Z test app::tests::close_action_decision ... ok
+2026-11-25T19:24:59.5405614Z test app::tests::close_to_tray_settings_roundtrip ... ok
+2026-11-25T19:24:59.5469601Z test app::tests::begin_exit_is_idempotent_without_tray ... ok
+2026-11-25T19:24:59.5470821Z test app::tests::always_on_top_menu_item_roundtrips ... ok
+2026-11-25T19:24:59.5471730Z test app::tests::fmt_helpers ... ok
+2026-11-25T19:24:59.5472583Z test app::tests::kill_switch_banner_gate ... ok
+2026-11-25T19:24:59.5473690Z test app::tests::link_matches_adapter_shapes ... ok
+2026-11-25T19:24:59.5474565Z test app::tests::log_filter_matches ... ok
+2026-11-25T19:24:59.5564437Z test app::tests::adapters_screen_toggle_move_apply_revert ... ok
+2026-11-25T19:24:59.5565340Z test app::tests::logs_autoscroll_default_and_toggle ... ok
+2026-11-25T19:24:59.5614151Z test app::tests::logs_scroll_id_stable ... ok
+2026-11-25T19:24:59.5644149Z test app::tests::open_folder_command_targets_the_os_file_manager ... ok
+2026-11-25T19:24:59.5645281Z test app::tests::rule_editor_add_edit_remove ... ok
+2026-11-25T19:24:59.5645928Z test app::tests::edit_dialog_open_type_save_close ... ok
+2026-11-25T19:24:59.5646723Z test app::tests::logs_autoscroll_gated_on_screen ... ok
+2026-11-25T19:24:59.5647386Z test app::tests::edit_save_failure_is_logged ... ok
+2026-11-25T19:24:59.5647993Z test app::tests::seed_parse ... ok
+2026-11-25T19:24:59.5665359Z test app::tests::smoke_flag_parse ... ok
+2026-11-25T19:24:59.5744708Z test app::tests::session_totals_accumulate_and_reset ... ok
+2026-11-25T19:24:59.5745726Z test app::tests::sort_adapter_rows_selected_first_in_saved_order ... ok
+2026-11-25T19:24:59.5784567Z test app::tests::s21_qos_toggle_updates_draft ... ok
+2026-11-25T19:24:59.5793978Z test app::tests::s19_settings_toggles_and_modal_gating ... ok
+2026-11-25T19:24:59.6157684Z test app::tests::theme_reroutes_on_settings_messages ... ok
+2026-11-25T19:24:59.6225631Z test app::tests::title_menu_anchor_clamps ... ok
+2026-11-25T19:24:59.6226327Z test app::tests::titlebar_double_click_window ... ok
+2026-11-25T19:24:59.6459037Z test app::tests::smoke_run_drives_app_with_mock ... ok
+2026-11-25T19:24:59.6674812Z test app::tests::wheel_drag_updates_seed_live_and_persists_on_release ... ok
+2026-11-25T19:24:59.6675963Z test graph::tests::local_bounds_strips_widget_offset_regression ... ok
+2026-11-25T19:24:59.6676658Z test graph::tests::nice_ceiling_covers_and_rounds ... ok
+2026-11-25T19:24:59.6677313Z test graph::tests::points_stay_inside_bounds_and_right_align ... ok
+2026-11-25T19:24:59.6678253Z test graph::tests::rates_format_human ... ok
+2026-11-25T19:24:59.6678718Z test mock::tests::fmt_utc_known_values ... ok
+2026-11-25T19:25:00.3920014Z test app::tests::speed_test_message_flow ... ok
+2026-11-25T19:25:00.3946948Z test app::tests::speed_upload_test_message_flow ... ok
+2026-11-25T19:25:00.3950092Z test mock::tests::mock_profiles_import_remove ... ok
+2026-11-25T19:25:00.3954524Z test mock::tests::mock_settings_and_rules ... ok
+2026-11-25T19:25:00.3998956Z test theme::tests::button_states_use_state_layers ... ok
+2026-11-25T19:25:00.3999944Z test theme::tests::hsv_conversions_roundtrip_primaries ... ok
+2026-11-25T19:25:00.4044994Z test theme::tests::switch_styles_differ_by_state ... ok
+2026-11-25T19:25:00.4045747Z test theme::tests::system_prefers_dark_env_override_wins ... ok
+2026-11-25T19:25:00.4090301Z test theme::tests::text_color_from_m3 ... ok
+2026-11-25T19:25:00.4264727Z test theme::tests::theme_derivation_seed_changes_scheme ... ok
+2026-11-25T19:25:00.4352846Z test theme::tests::theme_from_settings_and_rederive ... ok
+2026-11-25T19:25:00.4353684Z test theme::tests::wheel_asset_dimensions ... ok
+2026-11-25T19:25:00.4354854Z test theme::tests::wheel_marker_roundtrips_picked_points ... ok
+2026-11-25T19:25:00.4355766Z test theme::tests::wheel_seed_clamps_outside_points_to_the_rim ... ok
+2026-11-25T19:25:00.4356569Z test theme::tests::wheel_seed_matches_cardinal_hues ... ok
+2026-11-25T19:25:00.4357149Z test tray::tests::ico_embedded_asset_parses_with_32_entry ... ok
+2026-11-25T19:25:00.4358084Z test tray::tests::ico_embedded_mono_asset_parses_with_32_entry ... ok
+2026-11-25T19:25:00.4358736Z test tray::tests::ico_rejects_bad_directories ... ok
+2026-11-25T19:25:00.4359678Z test tray::tests::ids_roundtrip_and_skip_zero ... ok
+2026-11-25T19:25:00.4360611Z test tray::tests::menu_connected_shows_disconnect_and_servers ... ok
+2026-11-25T19:25:00.4361337Z test tray::tests::menu_disconnected_shows_connect ... ok
+2026-11-25T19:25:00.4362253Z test tray::tests::menu_failed_is_disconnected_shape_with_honest_header ... ok
+2026-11-25T19:25:00.4363218Z test tray::tests::menu_transition_disables_the_toggle ... ok
+2026-11-25T19:25:00.4364038Z test tray::tests::model_from_snapshot_states ... ok
+2026-11-25T19:25:00.4364951Z test tray::tests::tip_array_never_overruns_or_splits_surrogates ... ok
+2026-11-25T19:25:00.4365707Z test tray::tests::to_wide_is_nul_terminated ... ok
+2026-11-25T19:25:00.4366344Z test tray::tests::tooltip_live_formats_speeds_and_totals ... ok
+2026-11-25T19:25:00.4367435Z test tray::tests::tooltip_states ... ok
+2026-11-25T19:25:00.4368338Z test tray::tests::tray_icon_follows_connection_state ... ok
+2026-11-25T19:25:00.4535831Z test mock::tests::mock_latency_test ... ok
+2026-11-25T19:25:00.5365419Z test app::tests::update_loop_screens_and_rules ... ok
+2026-11-25T19:25:00.5700833Z test mock::tests::mock_connect_disconnect_lifecycle ... ok
+2026-11-25T19:25:00.5701305Z 
+2026-11-25T19:25:00.5701681Z test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.07s
+2026-11-25T19:25:00.5702321Z 
+2026-11-25T19:25:00.5706924Z [1m[92m     Running[0m unittests src/main.rs (target/debug/build/mt-app/340f1dcc4f8193e0/out/mt_app-340f1dcc4f8193e0)
+2026-11-25T19:25:00.5723368Z 
+2026-11-25T19:25:00.5724049Z running 0 tests
+2026-11-25T19:25:00.5724454Z 
+2026-11-25T19:25:00.5724830Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-11-25T19:25:00.5725519Z 
+2026-11-25T19:25:00.5726457Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/build/mt-bond/47daf16dc832a37b/out/mt_bond-47daf16dc832a37b)
+2026-11-25T19:25:00.5736676Z 
+2026-11-25T19:25:00.5736883Z running 33 tests
+2026-11-25T19:25:00.5740284Z test endpoint::scheduling_tests::balanced_blest_guard_never_bypasses_the_score_leader ... ok
+2026-11-25T19:25:00.5741593Z test endpoint::scheduling_tests::balanced_capacity_aware_bypasses_the_saturated_adapter ... ok
+2026-11-25T19:25:00.5742684Z test endpoint::scheduling_tests::balanced_blest_guard_skips_slow_draining_tied_carrier ... ok
+2026-11-25T19:25:00.5743845Z test endpoint::scheduling_tests::balanced_picks_the_least_backlogged_carrier ... ok
+2026-11-25T19:25:00.5744853Z test endpoint::scheduling_tests::balanced_spreads_proportionally_to_reported_capacity ... ok
+2026-11-25T19:25:00.5745725Z test endpoint::scheduling_tests::balanced_ties_rotate ... ok
+2026-11-25T19:25:00.5746540Z test endpoint::scheduling_tests::carrier_score_is_relative_load_with_probe_floor ... ok
+2026-11-25T19:25:00.5747985Z test endpoint::scheduling_tests::failover_takes_the_first_live_carrier ... ok
+2026-11-25T19:25:00.5748863Z test endpoint::scheduling_tests::ecf_completion_is_rtt_plus_drain_time ... ok
+2026-11-25T19:25:00.5749736Z test endpoint::scheduling_tests::lowest_latency_ecf_prefers_earliest_completion ... ok
+2026-11-25T19:25:00.5750844Z test endpoint::scheduling_tests::lowest_latency_prefers_sampled_rtt_then_known_over_unknown ... ok
+2026-11-25T19:25:00.5751841Z test endpoint::scheduling_tests::mixed_reports_probe_the_unreported_carrier ... ok
+2026-11-25T19:25:00.5752797Z test endpoint::scheduling_tests::priority_fills_in_order_until_the_queue_backs_up ... ok
+2026-11-25T19:25:00.5754573Z test endpoint::scheduling_tests::priority_spills_when_relative_load_exceeds_ratio ... ok
+2026-11-25T19:25:00.5755521Z test endpoint::scheduling_tests::round_robin_cycles_the_cursor ... ok
+2026-11-25T19:25:00.5756290Z test frame::tests::empty_and_max_payloads_roundtrip ... ok
+2026-11-25T19:25:00.5757008Z test frame::tests::encode_session_borrowed_is_wire_identical ... ok
+2026-11-25T19:25:00.5757773Z test frame::tests::header_rejects_bad_magic_version_kind_and_size ... ok
+2026-11-25T19:25:00.5758350Z test frame::tests::roundtrip_all_kinds ... ok
+2026-11-25T19:25:00.5758927Z test frame::tests::target_rejects_truncated_and_garbage ... ok
+2026-11-25T19:25:00.5759502Z test frame::tests::read_write_frame_over_duplex ... ok
+2026-11-25T19:25:00.5760083Z test frame::tests::target_roundtrip_domain_ipv4_ipv6 ... ok
+2026-11-25T19:25:00.5760784Z test outbound::tests::ensure_carriers_fails_cleanly_with_no_links ... ok
+2026-11-25T19:25:00.5761445Z test outbound::tests::ensure_carriers_reports_all_dead_links ... ok
+2026-11-25T19:25:00.5762421Z test reorder::tests::duplicates_and_replays_are_idempotent ... ok
+2026-11-25T19:25:00.5763325Z test reorder::tests::cap_zero_still_delivers_in_order ... ok
+2026-11-25T19:25:00.5763993Z test reorder::tests::gap_buffers_then_flushes ... ok
+2026-11-25T19:25:00.5764786Z test reorder::tests::long_out_of_order_run_reorders_completely ... ok
+2026-11-25T19:25:00.5765727Z test reorder::tests::in_order_delivery ... ok
+2026-11-25T19:25:00.5766393Z test reorder::tests::overflow_is_an_error ... ok
+2026-11-25T19:25:00.5766863Z test reorder::tests::would_overflow_mirrors_the_insert_boundary ... ok
+2026-11-25T19:25:00.5767332Z test tests::constants_are_coherent ... ok
+2026-11-25T19:25:00.7766898Z test daemon::tests::serve_binds_and_shuts_down ... ok
+2026-11-25T19:25:00.7767498Z 
+2026-11-25T19:25:00.7767927Z test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+2026-11-25T19:25:00.7768440Z 
+2026-11-25T19:25:00.7770026Z [1m[92m     Running[0m unittests src/bin/mt_merge_server.rs (target/debug/build/mt-bond/9c1ad43eeb883f2c/out/mt_merge_server-9c1ad43eeb883f2c)
+2026-11-25T19:25:00.7780283Z 
+2026-11-25T19:25:00.7780501Z running 0 tests
+2026-11-25T19:25:00.7780718Z 
+2026-11-25T19:25:00.7781780Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-11-25T19:25:00.7782449Z 
+2026-11-25T19:25:00.7783935Z [1m[92m     Running[0m tests/integration.rs (target/debug/build/mt-bond/1488f9338504bb39/out/integration-1488f9338504bb39)
+2026-11-25T19:25:00.7794979Z 
+2026-11-25T19:25:00.7795183Z running 6 tests
+2026-11-25T19:25:01.8425451Z test echo_roundtrip_1mib_across_two_carriers ... ok
+2026-11-25T19:25:03.8656070Z test concurrent_sessions_multiplex_over_the_same_carriers ... ok
+2026-11-25T19:25:03.9405989Z test refused_target_surfaces_as_connection_reset ... ok
+2026-11-25T19:25:04.1406733Z test carrier_death_mid_stream_fails_over_without_data_loss ... ok
+2026-11-25T19:25:04.9261588Z test one_dead_link_still_yields_a_working_bond ... ok
+2026-11-25T19:26:00.7797750Z test domain_targets_dial_through_the_daemon has been running for over 60 seconds
+2026-11-25T19:26:00.7847507Z test domain_targets_dial_through_the_daemon ... FAILED
+2026-11-25T19:26:00.7848345Z 
+2026-11-25T19:26:00.7848469Z failures:
+2026-11-25T19:26:00.7848658Z 
+2026-11-25T19:26:00.7848953Z ---- domain_targets_dial_through_the_daemon stdout ----
+2026-11-25T19:26:00.7850244Z [mt-merge-server] listening on 127.0.0.1:41533
+2026-11-25T19:26:00.7850624Z 
+2026-11-25T19:26:00.7851163Z thread 'domain_targets_dial_through_the_daemon' (3608) panicked at crates/mt-bond/tests/integration.rs:382:6:
+2026-11-25T19:26:00.7852485Z deadline: domain_targets wedged (documented runner flake — see LEDGER): Elapsed(())
+2026-11-25T19:26:00.7853551Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-11-25T19:26:00.7854085Z 
+2026-11-25T19:26:00.7854155Z 
+2026-11-25T19:26:00.7854311Z failures:
+2026-11-25T19:26:00.7855221Z     domain_targets_dial_through_the_daemon
+2026-11-25T19:26:00.7855584Z 
+2026-11-25T19:26:00.7856100Z test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 60.01s
+2026-11-25T19:26:00.7856479Z 
+2026-11-25T19:26:00.7857464Z [1m[91merror[0m: test failed, to rerun pass `-p mt-bond --test integration`
+2026-11-25T19:26:00.7922071Z ##[error]Process completed with exit code 101.
+2026-11-25T19:26:00.8092529Z Post job cleanup.
+2026-11-25T19:26:00.9033533Z [command]/usr/bin/git version
+2026-11-25T19:26:00.9075179Z git version 2.56.1
+2026-11-25T19:26:00.9112300Z Temporarily overriding HOME='/home/runner/work/_temp/fcdddce4-c7ef-43f6-a960-863a09dbd4f9' before making global git config changes
+2026-11-25T19:26:00.9114100Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-25T19:26:00.9117934Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/MultiTunnel/MultiTunnel
+2026-11-25T19:26:00.9159599Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-25T19:26:00.9194529Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-25T19:26:00.9452644Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-25T19:26:00.9476301Z http.https://github.com/.extraheader
+2026-11-25T19:26:00.9489044Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-25T19:26:00.9530202Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-25T19:26:00.9826036Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-25T19:26:00.9862189Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-25T19:26:01.0285319Z Cleaning up orphan processes
+2026-11-25T19:26:01.0576515Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

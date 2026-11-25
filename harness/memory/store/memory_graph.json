@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "033c009 2026-11-24T20:57:46Z",
+  "as_of": "21fd59f 2026-11-25T19:24:03Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 291,
-  "edge_count": 299,
+  "node_count": 300,
+  "edge_count": 308,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -216,6 +216,26 @@
       ]
     },
     {
+      "id": "commit:06c87de",
+      "type": "commit",
+      "title": "backup(s22-link-adapter): 2026-11-25T18:37:56Z",
+      "tags": [
+        "2026-11-25"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "06c87de"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s22-link-adapter): 2026-11-25T18:37:56Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:07ef5c5",
       "type": "commit",
       "title": "backup(s5-open): 2026-11-16T14:20:11Z",
@@ -356,6 +376,26 @@
       ]
     },
     {
+      "id": "commit:194eddc",
+      "type": "commit",
+      "title": "backup(s22-upload-test): 2026-11-25T18:34:16Z",
+      "tags": [
+        "2026-11-25"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "194eddc"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s22-upload-test): 2026-11-25T18:34:16Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:1a9849f",
       "type": "commit",
       "title": "backup(s21-release-prep): 2026-11-24T20:08:00Z",
@@ -411,6 +451,26 @@
       "passages": [
         {
           "text": "backup(s10-post-release): 2026-11-19T06:43:02Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:21fd59f",
+      "type": "commit",
+      "title": "backup(s22-release-prep): 2026-11-25T19:24:03Z",
+      "tags": [
+        "2026-11-25"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "21fd59f"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s22-release-prep): 2026-11-25T19:24:03Z",
           "kind": "title"
         }
       ]
@@ -791,6 +851,26 @@
       "passages": [
         {
           "text": "s20: Copilot code-review round (Lite) — 12 findings fixed, v0.13.1 — via POST /repos/.../pulls/1/copilot-code-review the cloud Copilot reviewer finally RAN from this sandbox (max + balanced effort were rejected by the account's remaining quota; Lite succeeded — the documented effort-ladder fallback). The standalone @github/copilot CLI path stays blocked: the fine-grained PAT lacks the \"Copilot Requests\" permission (api.individual.githubcopilot.com 401 \"Personal Access Token does not have Copilot Requests permission\" — authentic server response, network path fine; permission can only be granted by regenerating/editing the PAT in the web UI).",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:51e0144",
+      "type": "commit",
+      "title": "backup(s22-rig-verified): 2026-11-25T19:10:03Z",
+      "tags": [
+        "2026-11-25"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "51e0144"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s22-rig-verified): 2026-11-25T19:10:03Z",
           "kind": "title"
         }
       ]
@@ -1196,6 +1276,26 @@
       ]
     },
     {
+      "id": "commit:6fc0708",
+      "type": "commit",
+      "title": "backup(s22-log-folder-fix): 2026-11-25T18:43:12Z",
+      "tags": [
+        "2026-11-25"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "6fc0708"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s22-log-folder-fix): 2026-11-25T18:43:12Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:702293b",
       "type": "commit",
       "title": "s19: runner-flake hardening — mt-bond integration tests carrier_death_mid_stream + domain_targets_dial wrapped in hard deadlines (90 s / 60 s). Evidence: today's ubuntu CI leg failed on carrier_death (the same-commit PR + release runs green, local 466/0 repeatedly — the documented S17/S18 runner flake, third occurrence) and the rerun leg then WEDGED 54 minutes inside domain_targets_dial AFTER carrier_death passed (log captured: harness/memory/agent-reports/s19-ci-wedge-job-136868435499.log — 'running 6 tests', five ok, domain_targets 'over 60 seconds', cargo + integration orphan killed at cancel). A deadline converts the silent hourly hang into a loud one-minute failure with the LEDGER pointer in the message; zero behavior change to the code under test (bodies untouched inside the timeout wrapper). Local: mt-bond 32+6/0, clippy clean.",
@@ -1536,6 +1636,26 @@
       ]
     },
     {
+      "id": "commit:8fdf7d1",
+      "type": "commit",
+      "title": "backup(s22-log-folder): 2026-11-25T18:42:08Z",
+      "tags": [
+        "2026-11-25"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "8fdf7d1"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s22-log-folder): 2026-11-25T18:42:08Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:9d4111b",
       "type": "commit",
       "title": "backup(s18-tag-v0.12.0): 2026-11-21T07:17:18Z [no changes]",
@@ -1631,6 +1751,26 @@
       "passages": [
         {
           "text": "backup(s2-review-ready): 2026-11-13T05:58:37Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:a843d31",
+      "type": "commit",
+      "title": "backup(s22-panel-split): 2026-11-25T18:22:48Z",
+      "tags": [
+        "2026-11-25"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "a843d31"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s22-panel-split): 2026-11-25T18:22:48Z",
           "kind": "title"
         }
       ]
@@ -5003,6 +5143,27 @@
       ]
     },
     {
+      "id": "ledger:s22",
+      "type": "ledger",
+      "title": "Stage s22 ledger",
+      "tags": [
+        "s22",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s22"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-26T03:30Z | IMPLEMENTED (five user asks; v0.15.0). Sandbox recycled AGAIN (rustup 1.100.0 + ziglang 0.14.1 + cargo-zigbuild 0.24.1 + xkblibs + python-xlib rebuilt per the ritual; the pypkgs ziglang wheel was INCOMPLETE AGAIN mid-gates — ring stddef.h — reinstalled from PyPI, S20/S21 pattern). Local clone was stale at s13 with a dirty (stale script-generated) PROJECT_MEMORY.md — discarded, fast-forwarded to origin (S21 had already shipped v0.14.0 with the P0/P1/QoS/merged-panel brief; the FIVE asks below landed after that close, so they were all pending). (1) TWO-COLUMN Exit & speed split (user: \"exit ip outputs on the left side and the speed test outputs on the right side\"): screens.rs status() now builds exit_out/speed_out columns (headings \"Exit IP\"/\"Speed test\", quiet placeholders while idle) pushed as row![exit_out, speed_out] — verdict card + IP/chips rows stacked LEFT, Mbps + chips + note RIGHT; pure view change, D24-safe in the page scrollable.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "ledger:s3",
       "type": "ledger",
       "title": "Stage s3 ledger",
@@ -5682,6 +5843,10 @@
       ],
       "passages": [
         {
+          "text": "- **Stage**: S22 CLOSED — v0.15.0 released (tag on 21fd59f). The user's five asks shipped: (1) Exit & speed panel split into TWO columns — exit-IP outputs LEFT (heading, IP, location/ISP chips, verdict card), speed-test outputs RIGHT (heading, Mbps, volume chips, download note), quiet placeholders while idle; pure view change, D24-safe. (2) UPLOAD SPEED TEST: \"Test upload speed\" button appears ONLY after the download test concluded, result in the right column; speed_test_upload_url setting (serde default cloudflare __up, D8), RealService::speed_test_upload POSTs 25 MiB through the same tunnel selection (S20 profile_id rule; clock after connect; 30 s/5 s stall/ 64 MiB caps; partial stands; status guard only on clean completion); Settings → Advanced \"upload test URL\" field; diag header redacts it. (3) PER-LINK ADAPTER: `via <adapter>` dim line UNDER each link row — mt_service::adapter_of_link_name parses \"<tag> [adapter]\" (dedup \" #N\" stripped; \"Wi-Fi Direct\"/\"Ethernet 2\" verbatim), populated in link_status_of + carrier_snapshot map + mock; survives util::short truncation. (4) OPEN LOG FOLDER FIXED: root cause = the diag-file gate (diag_path None after restart → \"turn diagnostics on first\"); new MtService::log_dir() (always resolvable) + handler create_dir_all + opens the folder itself via open_folder_command (explorer/open/xdg-open; spawn-result reported; Settings status + Logs-tab WARN, never silent); fetched at boot in BOTH init paths; ADJACENT: diagnostics persisted ON re-enables the sink AT CONSTRUCTION (RealService::with) — the toggle no longer lies after a restart.",
+          "kind": "body"
+        },
+        {
           "text": "- **Stage**: S21 CLOSED — v0.14.0 released and verified (tag on e510e43, release run 45477702090 SUCCESS on attempt 3, same-commit ci green on both OS legs, assets download-verified). The user's four asks shipped: (1) P0 SECOND-CONNECTION BUG — mid-traffic reconnect re-binds the fixed listener ports while untracked in-flight connection tasks pin their sockets (no SO_REUSEADDR); on Windows the re-bind lands WSAEADDRINUSE → connect Failed → dead tunnel until restart. Linux tolerates the re-bind (std rebind probe), so the regression test asserts the platform-independent observable: the lingering client connection sees EOF after the picker switch (pre-fix FAILS, post-fix passes). Fix: Shared.conns tracks every connection task's AbortHandle; run() force-closes whatever the 3 s drain could not reap; AbortPumpsOnDrop aborts the DETACHED pump children (dropping JoinHandles leaves them running — found when the first EOF assertion failed); bind_with_retry 5 s (BIND_WAIT 2→8 s). H2: engine config/log stems carry a deterministic FNV-1a hash of the full endpoint identity (engine_file_stem) — same-tag different-endpoint profiles can no longer overwrite each other's Xray config (temp probe tunnels corrupting the LIVE engine → phantom respawn → DEGRADED while GUI showed Connected). H3: Core.store_mtx serializes profiles.json read-modify-write.",
           "kind": "body"
         },
@@ -5919,6 +6084,26 @@
       "passages": [
         {
           "text": "Release v0.14.0: tag points at commit e510e43.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "release:v0.15.0",
+      "type": "release",
+      "title": "Release v0.15.0 (tagged 21fd59f)",
+      "tags": [
+        "v0.15.0"
+      ],
+      "sources": [
+        {
+          "file": "git:tags/v0.15.0",
+          "anchor": "21fd59f"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Release v0.15.0: tag points at commit 21fd59f.",
           "kind": "body"
         }
       ]
@@ -8346,6 +8531,12 @@
       "evidence": "subject stage label (s3-close)"
     },
     {
+      "src": "commit:06c87de",
+      "dst": "ledger:s22",
+      "rel": "part_of",
+      "evidence": "subject stage label (s22)"
+    },
+    {
       "src": "commit:07ef5c5",
       "dst": "ledger:s5",
       "rel": "part_of",
@@ -8364,6 +8555,12 @@
       "evidence": "subject stage label (v0.3.1)"
     },
     {
+      "src": "commit:194eddc",
+      "dst": "ledger:s22",
+      "rel": "part_of",
+      "evidence": "subject stage label (s22)"
+    },
+    {
       "src": "commit:1a9849f",
       "dst": "ledger:s21",
       "rel": "part_of",
@@ -8380,6 +8577,12 @@
       "dst": "ledger:s10",
       "rel": "part_of",
       "evidence": "subject stage label (s10)"
+    },
+    {
+      "src": "commit:21fd59f",
+      "dst": "ledger:s22",
+      "rel": "part_of",
+      "evidence": "subject stage label (s22)"
     },
     {
       "src": "commit:231f453",
@@ -8478,6 +8681,12 @@
       "evidence": "subject stage label (s15)"
     },
     {
+      "src": "commit:51e0144",
+      "dst": "ledger:s22",
+      "rel": "part_of",
+      "evidence": "subject stage label (s22)"
+    },
+    {
       "src": "commit:52f1d3c",
       "dst": "ledger:s19",
       "rel": "part_of",
@@ -8568,6 +8777,12 @@
       "evidence": "subject stage label (s11)"
     },
     {
+      "src": "commit:6fc0708",
+      "dst": "ledger:s22",
+      "rel": "part_of",
+      "evidence": "subject stage label (s22)"
+    },
+    {
       "src": "commit:7073762",
       "dst": "ledger:s11",
       "rel": "part_of",
@@ -8652,6 +8867,12 @@
       "evidence": "subject stage label (s6-close)"
     },
     {
+      "src": "commit:8fdf7d1",
+      "dst": "ledger:s22",
+      "rel": "part_of",
+      "evidence": "subject stage label (s22)"
+    },
+    {
       "src": "commit:9d4111b",
       "dst": "ledger:s18",
       "rel": "part_of",
@@ -8674,6 +8895,12 @@
       "dst": "ledger:s2-review",
       "rel": "part_of",
       "evidence": "subject stage label (s2-review)"
+    },
+    {
+      "src": "commit:a843d31",
+      "dst": "ledger:s22",
+      "rel": "part_of",
+      "evidence": "subject stage label (s22)"
     },
     {
       "src": "commit:a9f7aae",
@@ -9504,6 +9731,12 @@
       "evidence": "project ledger"
     },
     {
+      "src": "ledger:s22",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
       "src": "ledger:s3",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -9718,6 +9951,12 @@
       "dst": "commit:e510e43",
       "rel": "built_from",
       "evidence": "git tag v0.14.0"
+    },
+    {
+      "src": "release:v0.15.0",
+      "dst": "commit:21fd59f",
+      "rel": "built_from",
+      "evidence": "git tag v0.15.0"
     },
     {
       "src": "release:v0.2.0",
