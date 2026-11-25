@@ -3388,7 +3388,7 @@ mod tests {
                                     }
                                 })
                                 .unwrap_or(0);
-                            drained = head.len() - split as usize;
+                            drained = head.len() - split;
                             break;
                         }
                     }
