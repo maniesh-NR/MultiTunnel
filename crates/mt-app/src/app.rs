@@ -815,6 +815,7 @@ impl App {
             app.load_settings(),
             app.load_adapters(),
             app.fetch_diag_path(),
+            app.fetch_log_dir(),
         ];
         (app, iced::Task::batch(tasks))
     }
@@ -906,6 +907,13 @@ impl App {
             async move { svc.diagnostics_path().await },
             Message::DiagPath,
         )
+    }
+
+    /// S22: the log directory for the "Open log folder" button (fetched
+    /// once at boot; the button opens it in every state).
+    fn fetch_log_dir(&self) -> iced::Task<Message> {
+        let svc = Arc::clone(&self.service);
+        iced::Task::perform(async move { svc.log_dir().await }, Message::LogDirLoaded)
     }
 
     fn load_adapters(&self) -> iced::Task<Message> {
