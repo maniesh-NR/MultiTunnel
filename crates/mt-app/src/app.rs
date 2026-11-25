@@ -2572,6 +2572,7 @@ mod tests {
         };
         fn mk_link(name: &str, bytes: (u64, u64)) -> mt_service::LinkStatus {
             mt_service::LinkStatus {
+                adapter_name: mt_service::adapter_of_link_name(name),
                 name: name.into(),
                 ok: true,
                 latency_ms: None,
@@ -3133,6 +3134,7 @@ mod tests {
             up_since: None,
             restarts: 0,
             links: vec![mt_service::LinkStatus {
+                adapter_name: mt_service::adapter_of_link_name("gcp-vm [Ethernet]"),
                 name: "gcp-vm [Ethernet]".into(),
                 ok: true,
                 latency_ms: None,

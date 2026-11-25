@@ -124,8 +124,8 @@ use mt_net::{
 };
 use mt_platform::NetAdapter;
 use mt_service::{
-    AdapterView, ExitInfo, LinkStatus, MtService, ProfileDetails, ProfileView, RuleView,
-    ServiceEvent, ServiceState, SettingsView, SpeedTestInfo, StatusSnapshot,
+    adapter_of_link_name, AdapterView, ExitInfo, LinkStatus, MtService, ProfileDetails,
+    ProfileView, RuleView, ServiceEvent, ServiceState, SettingsView, SpeedTestInfo, StatusSnapshot,
 };
 use tokio::sync::broadcast;
 
@@ -1574,6 +1574,7 @@ fn link_status_of(core: &Core, link: &str, health: Option<&mt_net::LinkHealth>) 
     };
     LinkStatus {
         name: link.to_string(),
+        adapter_name: adapter_of_link_name(link),
         ok,
         latency_ms,
         ewma_ms,
@@ -1713,6 +1714,7 @@ impl MtService for RealService {
             bond.carrier_snapshot()
                 .into_iter()
                 .map(|c| LinkStatus {
+                    adapter_name: adapter_of_link_name(&c.name),
                     name: c.name,
                     ok: c.alive,
                     latency_ms: c.rtt_ms,

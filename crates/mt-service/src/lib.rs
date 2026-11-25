@@ -40,12 +40,42 @@ pub struct StatusSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkStatus {
     pub name: String,
+    /// S22: the local adapter this link rides — parsed from the engine
+    /// link name's `"<tag> [<adapter>]"` suffix (the same grammar the
+    /// GUI's per-adapter rate sampler has always matched; the dedup
+    /// form `"[Ethernet #2]"` keeps the adapter name without the
+    /// ordinal). None when the name carries no adapter suffix (e.g. a
+    /// single unbonded link).
+    #[serde(default)]
+    pub adapter_name: Option<String>,
     pub ok: bool,
     pub latency_ms: Option<u32>,
     pub ewma_ms: Option<f32>,
     pub quarantined: bool,
     pub bytes_up: u64,
     pub bytes_down: u64,
+}
+
+/// S22: the adapter a link rides, from the `"<tag> [<adapter>]"` link
+/// name grammar (shared by the core's status builder, the mock seeds
+/// and the GUI's rate sampler).
+pub fn adapter_of_link_name(link_name: &str) -> Option<String> {
+    let (_, rest) = link_name.rsplit_once(" [")?;
+    let bracketed = rest.strip_suffix(']')?;
+    let bracketed = bracketed.trim();
+    if bracketed.is_empty() {
+        return None;
+    }
+    // The dedup ordinal ("Wi-Fi #2") belongs to the matcher, not to the
+    // displayed adapter — strip " #<n>" for display.
+    match bracketed.rsplit_once(" #") {
+        Some((base, ordinal))
+            if ordinal.chars().all(|c| c.is_ascii_digit()) && !base.is_empty() =>
+        {
+            Some(base.to_string())
+        }
+        _ => Some(bracketed.to_string()),
+    }
 }
 
 /// A profile as the GUI sees it.
@@ -1008,6 +1038,35 @@ mod theme_mode_migration_tests {
         assert_eq!(ThemeMode::parse("neon", true), ThemeMode::Dark);
         assert_eq!(ThemeMode::parse("neon", false), ThemeMode::Light);
         assert_eq!(ThemeMode::parse("", true), ThemeMode::Dark);
+    }
+
+    /// S22: the per-link adapter grammar — the same `"<tag> [<adapter>]"`
+    /// shapes the GUI's rate sampler matches, including the dedup
+    /// ordinal (display keeps the adapter, drops " #<n>"); names
+    /// without a suffix parse to None.
+    #[test]
+    fn adapter_of_link_name_parses_the_engine_grammar() {
+        assert_eq!(
+            adapter_of_link_name("gcp-vm [Wi-Fi]"),
+            Some("Wi-Fi".to_string())
+        );
+        assert_eq!(
+            adapter_of_link_name("gcp-vm [Ethernet #2]"),
+            Some("Ethernet".to_string())
+        );
+        // No prefix smuggling / no suffix → None.
+        assert_eq!(adapter_of_link_name("gcp-vm"), None);
+        assert_eq!(adapter_of_link_name("gcp-vm ["), None);
+        assert_eq!(adapter_of_link_name("gcp-vm []"), None);
+        // The rate sampler's tricky cases round-trip verbatim.
+        assert_eq!(
+            adapter_of_link_name("gcp-vm [Wi-Fi Direct]"),
+            Some("Wi-Fi Direct".to_string())
+        );
+        assert_eq!(
+            adapter_of_link_name("gcp-vm [Ethernet 2]"),
+            Some("Ethernet 2".to_string())
+        );
     }
 }
 

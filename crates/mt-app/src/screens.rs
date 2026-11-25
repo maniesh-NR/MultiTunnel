@@ -854,12 +854,30 @@ pub fn status(app: &App) -> Element<'_> {
                         s.on_error_container,
                     ));
                 }
-                links_col = links_col.push(
-                    container(line)
-                        .padding(14)
-                        .style(t3::card(s, s.surface_container_low))
-                        .width(Length::Fill),
-                );
+                // S22: show which adapter each link goes through — its
+                // own dim line UNDER the link (user wording, verbatim);
+                // the parsed field survives `util::short`'s truncation
+                // that previously hid the "[adapter]" name suffix.
+                let mut link_view = column![container(line)
+                    .padding(14)
+                    .style(t3::card(s, s.surface_container_low))
+                    .width(Length::Fill)]
+                .spacing(4);
+                if let Some(adapter) = &l.adapter_name {
+                    link_view = link_view.push(
+                        row![
+                            text("via")
+                                .size(ts.label_m.size)
+                                .color(s.on_surface_variant),
+                            text(adapter.clone())
+                                .size(ts.label_m.size)
+                                .color(s.on_surface),
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center),
+                    );
+                }
+                links_col = links_col.push(link_view);
             }
         }
         None => {

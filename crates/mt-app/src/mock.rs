@@ -26,8 +26,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use mt_service::{
-    ExitInfo, LinkStatus, MtService, ProfileView, RuleView, ServiceEvent, ServiceState,
-    SettingsView, StatusSnapshot,
+    adapter_of_link_name, ExitInfo, LinkStatus, MtService, ProfileView, RuleView, ServiceEvent,
+    ServiceState, SettingsView, StatusSnapshot,
 };
 use tokio::sync::{broadcast, Mutex};
 
@@ -244,6 +244,7 @@ fn seed_links(rng0: u64) -> Vec<LinkStatus> {
     // Three carriers: the demo of a 3-NIC bond.
     vec![
         LinkStatus {
+            adapter_name: adapter_of_link_name("synthetic-reality [Wi-Fi]"),
             name: "synthetic-reality [Wi-Fi]".to_string(),
             ok: true,
             latency_ms: Some(jitter(rng0 % 97, 38)),
@@ -253,6 +254,7 @@ fn seed_links(rng0: u64) -> Vec<LinkStatus> {
             bytes_down: 0,
         },
         LinkStatus {
+            adapter_name: adapter_of_link_name("synthetic-reality [Ethernet]"),
             name: "synthetic-reality [Ethernet]".to_string(),
             ok: true,
             latency_ms: Some(jitter(rng0 % 89, 92)),
@@ -262,6 +264,7 @@ fn seed_links(rng0: u64) -> Vec<LinkStatus> {
             bytes_down: 0,
         },
         LinkStatus {
+            adapter_name: adapter_of_link_name("synthetic-reality [Cellular]"),
             name: "synthetic-reality [Cellular]".to_string(),
             ok: true,
             latency_ms: Some(jitter(rng0 % 83, 121)),
