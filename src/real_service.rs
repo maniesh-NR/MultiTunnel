@@ -170,6 +170,9 @@ const SPEED_TEST_STALL: Duration = Duration::from_secs(5);
 /// header-less byte flood would otherwise grow the buffer for the whole
 /// 30 s budget. A legitimate HTTP head never approaches 64 KiB.
 const SPEED_TEST_MAX_HEAD: usize = 64 * 1024;
+/// S22: the upload payload size — one fixed POST body pushed through
+/// the tunnel (mirrors the download default's 25 MB).
+const SPEED_TEST_UPLOAD_BYTES: u64 = 25 * 1024 * 1024;
 /// S19: the kill switch's black-hole proxy target — a loopback port
 /// nothing legitimately listens on (discard). With the system proxy
 /// pointed here, WinINET consumers get instant connection-refused
@@ -609,6 +612,7 @@ impl Default for SettingsFile {
                 kill_switch: false,
                 diagnostics: false,
                 speed_test_url: default_speed_test_url(),
+                speed_test_upload_url: default_speed_test_upload_url(),
                 qos_fair: false,
             },
             // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
@@ -632,6 +636,12 @@ const SETTINGS_VERSION: u32 = 2;
 /// so a fresh SettingsFile and a freshly-parsed one agree).
 fn default_speed_test_url() -> String {
     "http://speed.cloudflare.com/__down?bytes=25000000".to_string()
+}
+
+/// S22: the default upload-test URL (mirrors the mt-service serde
+/// default, same reason).
+fn default_speed_test_upload_url() -> String {
+    "http://speed.cloudflare.com/__up".to_string()
 }
 
 impl SettingsFile {
@@ -2424,6 +2434,155 @@ impl MtService for RealService {
         })
     }
 
+    /// S22: the UPLOAD half of the speed test — POST a fixed-size payload
+    /// through the tunnel and report the send rate. Same profile/tunnel
+    /// selection and caps as `speed_test`; the clock starts AFTER the
+    /// connect (tunnel setup must not pollute the rate), the request head
+    /// is outside the measurement window, and a budget/stall-truncated
+    /// run stands as a partial measurement exactly like the download side.
+    async fn speed_test_upload(&self, id: Option<String>) -> Result<SpeedTestInfo, String> {
+        // 1. Resolve the target profile: explicit id (or tag), else the
+        //    active one.
+        let store = self.core.load_store().map_err(|e| e.to_string())?;
+        let profile = match id {
+            Some(id) => find_profile(&store, &id)
+                .cloned()
+                .ok_or_else(|| format!("no profile matches {id:?}"))?,
+            None => store
+                .active
+                .as_deref()
+                .and_then(|a| store.profiles.iter().find(|p| p.id == a))
+                .cloned()
+                .ok_or_else(|| "no active profile — pick a server first".to_string())?,
+        };
+        let settings = SettingsFile::load(&self.core.paths.settings_file());
+        let url = settings.settings.speed_test_upload_url;
+        let (host, port, path) =
+            parse_http_url(&url).ok_or_else(|| format!("invalid upload test URL {url:?}"))?;
+        let target = TargetAddr {
+            host: if let Ok(ip) = host.parse() {
+                Host::Ip(ip)
+            } else {
+                Host::Domain(host.clone())
+            },
+            port,
+        };
+        // 2. Live session only when BUILT from the target profile (the
+        //    S20 rule the download side carries); otherwise a temporary
+        //    tunnel through the target profile.
+        let live_socks = lock(&self.core.session)
+            .as_ref()
+            .filter(|s| s.profile_id == profile.id)
+            .and_then(|s| s.server.socks_local_addr());
+        let via_temp = live_socks.is_none();
+        let connect = async {
+            Ok::<_, anyhow::Error>(if let Some(socks) = live_socks {
+                let outbound = mt_net::Socks5Outbound::new(socks);
+                outbound.connect(&target).await?
+            } else {
+                let link = temp_link_for(&self.core, &profile)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                link.connect(&target).await?
+            })
+        };
+        let connect = tokio::time::timeout(SPEED_TEST_BUDGET, connect)
+            .await
+            .map_err(|_| "upload speed test: tunnel setup timed out".to_string())?
+            .map_err(|e| format!("upload speed test: connect failed: {e}"))?;
+        let mut stream = connect;
+        // The request head (with the announced Content-Length) is outside
+        // the measurement window too.
+        {
+            use tokio::io::AsyncWriteExt as _;
+            let req = format!(
+                "POST {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: MultiTunnel/{}\r\nAccept: */*\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                env!("CARGO_PKG_VERSION"),
+                SPEED_TEST_UPLOAD_BYTES
+            );
+            stream
+                .write_all(req.as_bytes())
+                .await
+                .map_err(|e| format!("upload speed test: request failed: {e}"))?;
+        }
+        use tokio::io::AsyncWriteExt as _;
+        let started = Instant::now();
+        let chunk = vec![b'x'; 64 * 1024];
+        let mut total: u64 = 0;
+        let mut budget_hit = false;
+        while total < SPEED_TEST_UPLOAD_BYTES {
+            if started.elapsed() >= SPEED_TEST_BUDGET {
+                budget_hit = true;
+                break;
+            }
+            let left = (SPEED_TEST_UPLOAD_BYTES - total) as usize;
+            let n = left.min(chunk.len());
+            let write = tokio::time::timeout(SPEED_TEST_STALL, stream.write_all(&chunk[..n])).await;
+            match write {
+                Ok(Ok(())) => total += n as u64,
+                Ok(Err(e)) => {
+                    if total > 0 {
+                        break; // partial measurement stands
+                    }
+                    return Err(format!("upload speed test: write failed: {e}"));
+                }
+                Err(_) => break, // stall: keep what we have
+            }
+        }
+        if total == 0 {
+            return Err("upload speed test: no data sent".into());
+        }
+        // When the payload completed cleanly we can afford the status
+        // guard (a captive portal answering 302/407 must not measure as
+        // "throughput"). A budget/stall-truncated run stands as a partial
+        // measurement — the server may never answer a truncated body.
+        if !budget_hit && total >= SPEED_TEST_UPLOAD_BYTES {
+            use tokio::io::AsyncReadExt as _;
+            let mut head = Vec::new();
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match tokio::time::timeout(SPEED_TEST_STALL, stream.read(&mut buf)).await {
+                    Ok(Ok(0)) | Err(_) => break,
+                    Ok(Ok(n)) => {
+                        head.extend_from_slice(&buf[..n]);
+                        if find_head_end(&head).is_some() {
+                            break;
+                        }
+                        if head.len() > SPEED_TEST_MAX_HEAD {
+                            return Err(format!(
+                                "upload speed test: malformed response (no header end within {} KiB)",
+                                SPEED_TEST_MAX_HEAD / 1024
+                            ));
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        return Err(format!("upload speed test: read failed: {e}"));
+                    }
+                }
+            }
+            let head_text = String::from_utf8_lossy(&head);
+            if let Some(status) = head_text.lines().next() {
+                let code = status.split_whitespace().nth(1).unwrap_or("");
+                if let Ok(code) = code.parse::<u16>() {
+                    if code >= 400 {
+                        return Err(format!(
+                            "upload speed test: server answered {code} ({status})"
+                        ));
+                    }
+                }
+            }
+        }
+        let seconds = started.elapsed().as_secs_f64().max(0.001);
+        let mbps = total as f64 * 8.0 / seconds / 1_000_000.0;
+        Ok(SpeedTestInfo {
+            mbps,
+            mbytes: total as f64 / (1024.0 * 1024.0),
+            seconds,
+            profile_tag: profile.tag.clone(),
+            via_temp_tunnel: via_temp,
+        })
+    }
+
     async fn profile_details(&self, id: &str) -> Result<ProfileDetails, String> {
         let store = self.core.load_store().map_err(|e| e.to_string())?;
         let p = find_profile(&store, id).ok_or_else(|| format!("no profile matches {id:?}"))?;
@@ -2743,10 +2902,11 @@ impl RealService {
             settings.log_level
         ));
         out.push_str(&format!(
-            "probe_target={} exit_probe_url={} speed_test_url={}\n",
+            "probe_target={} exit_probe_url={} speed_test_url={} speed_test_upload_url={}\n",
             settings.probe_target,
             redact_url(&settings.exit_probe_url),
-            redact_url(&settings.speed_test_url)
+            redact_url(&settings.speed_test_url),
+            redact_url(&settings.speed_test_upload_url)
         ));
         let store = self.core.load_store_lossy();
         out.push_str("=== profiles (endpoints only — ids/secrets redacted) ===\n");
@@ -2941,6 +3101,7 @@ mod tests {
                 kill_switch: false,
                 diagnostics: false,
                 speed_test_url: default_speed_test_url(),
+                speed_test_upload_url: default_speed_test_upload_url(),
                 qos_fair: false,
             },
             rules: Vec::new(),
@@ -3154,6 +3315,65 @@ mod tests {
         addr
     }
 
+    /// S22: an HTTP server that DRAINS an upload body and answers with a
+    /// fixed status (200 = happy path, 403 = the rejection path).
+    async fn spawn_upload_server(status: u16) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upload server");
+        let addr = listener.local_addr().expect("upload addr");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                    // Peel the request head, learn the body length, drain
+                    // the announced body, then answer.
+                    let mut head = Vec::new();
+                    let mut buf = vec![0u8; 8192];
+                    let body_len;
+                    let mut drained;
+                    loop {
+                        let n = match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => n,
+                        };
+                        head.extend_from_slice(&buf[..n]);
+                        if let Some(split) = find_head_end(&head) {
+                            let text = String::from_utf8_lossy(&head[..split]);
+                            body_len = text
+                                .lines()
+                                .find_map(|l| {
+                                    let (k, v) = l.split_once(':')?;
+                                    if k.trim().eq_ignore_ascii_case("content-length") {
+                                        v.trim().parse().ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(0);
+                            drained = head.len() - split as usize;
+                            break;
+                        }
+                    }
+                    while drained < body_len {
+                        match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => drained += n,
+                        }
+                    }
+                    let head = format!(
+                        "HTTP/1.1 {status} S22\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(head.as_bytes()).await;
+                });
+            }
+        });
+        addr
+    }
+
     #[tokio::test]
     async fn speed_test_measures_through_temp_tunnel_when_disconnected() {
         let server = spawn_speed_server(2).await; // 2 MiB on loopback
@@ -3196,6 +3416,61 @@ mod tests {
         svc.set_active_profile(&view2.tag).await.expect("active");
         let err = svc.speed_test(None).await.unwrap_err();
         assert!(err.contains("invalid speed test URL"), "{err}");
+    }
+
+    /// S22: the upload test mirrors the download's offline path — a
+    /// temporary probe tunnel, clock after the connect, the full payload
+    /// pushed through.
+    #[tokio::test]
+    async fn speed_test_upload_measures_through_temp_tunnel_when_disconnected() {
+        let server = spawn_upload_server(200).await;
+        let paths = scratch("uploadtest");
+        write_settings(&paths, server.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.speed_test_upload_url = format!("http://127.0.0.1:{}/up", server.port());
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: server,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+
+        let info = svc.speed_test_upload(None).await.expect("upload test");
+        assert!(info.via_temp_tunnel);
+        assert_eq!(info.profile_tag, view.tag);
+        assert!(info.seconds > 0.0);
+        assert!(
+            (info.mbytes - 25.0).abs() < 2.0,
+            "payload ~25 MiB: {info:?}"
+        );
+        assert!(info.mbps > 10.0, "loopback must beat 10 Mbps: {info:?}");
+    }
+
+    /// S22: a 4xx answer must fail the test, never measure as throughput.
+    #[tokio::test]
+    async fn speed_test_upload_rejects_server_errors() {
+        let server = spawn_upload_server(403).await;
+        let paths = scratch("upload403");
+        write_settings(&paths, server.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.speed_test_upload_url = format!("http://127.0.0.1:{}/up", server.port());
+        file.save(&paths.settings_file()).expect("save settings");
+        let svc = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: server,
+                fail: false,
+            }),
+        );
+        let view = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&view.tag).await.expect("set active");
+
+        let err = svc.speed_test_upload(None).await.unwrap_err();
+        assert!(err.contains("403"), "{err}");
     }
 
     #[tokio::test]
@@ -4171,6 +4446,7 @@ mod tests {
             kill_switch: false,
             diagnostics: false, // never true here: the sink is process-global
             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
+            speed_test_upload_url: "http://speed.cloudflare.com/__up".to_string(),
             qos_fair: true, // round-trips a non-default value
         };
         svc.set_settings(view.clone()).await.expect("save settings");

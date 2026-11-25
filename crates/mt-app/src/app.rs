@@ -385,6 +385,11 @@ pub enum Message {
     SpeedTest,
     /// The speed test finished.
     SpeedTested(Result<mt_service::SpeedTestInfo, String>),
+    /// S22: push the upload payload through the tunnel (the button
+    /// appears only after the download test has concluded).
+    SpeedTestUpload,
+    /// S22: the upload test finished.
+    SpeedUploadTested(Result<mt_service::SpeedTestInfo, String>),
     /// Kill switch toggled (Settings → Network).
     KillSwitchToggled(bool),
     /// S21 (feature o): the fair-share bandwidth scheduler toggle.
@@ -395,6 +400,8 @@ pub enum Message {
     DiagPath(Option<String>),
     /// Speed-test URL changed (Settings → Advanced).
     SpeedUrlChanged(String),
+    /// S22: upload-test URL changed (Settings → Advanced).
+    SpeedUploadUrlChanged(String),
     /// Open the log folder in the OS file manager.
     OpenLogsFolder,
 }
@@ -633,6 +640,11 @@ pub struct App {
     pub speed: Option<Result<mt_service::SpeedTestInfo, String>>,
     /// S19: a speed test is in flight (drives the card's button state).
     pub speed_testing: bool,
+    /// S22: the upload-test result (right column of the merged panel;
+    /// the button appears after the download test concluded).
+    pub speed_up: Option<Result<mt_service::SpeedTestInfo, String>>,
+    /// S22: an upload test is in flight.
+    pub speed_up_testing: bool,
     /// S19: the diagnostics log file currently being written (Settings
     /// screen; None when the mode is off).
     pub diag_path: Option<String>,
@@ -678,6 +690,7 @@ impl App {
             kill_switch: false,
             diagnostics: false,
             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
+            speed_test_upload_url: "http://speed.cloudflare.com/__up".to_string(),
             qos_fair: false,
         };
         // S18: detect the OS appearance once so the System mode (the
@@ -736,6 +749,9 @@ impl App {
             edit: None,
             speed: None,
             speed_testing: false,
+            // S22
+            speed_up: None,
+            speed_up_testing: false,
             diag_path: None,
         }
     }
@@ -1627,6 +1643,10 @@ impl App {
                 self.settings.speed_test_url = t;
                 return self.save_settings(self.settings.clone());
             }
+            Message::SpeedUploadUrlChanged(t) => {
+                self.settings.speed_test_upload_url = t;
+                return self.save_settings(self.settings.clone());
+            }
             // --- S19: server editing, speed test, kill switch, diagnostics ---
             Message::EditServer(id) => {
                 let svc = Arc::clone(&self.service);
@@ -1719,6 +1739,24 @@ impl App {
                     util::push_log(&mut self.logs, format!("WARN  speed test: {e}"));
                 }
                 self.speed = Some(res);
+            }
+            Message::SpeedTestUpload => {
+                if self.speed_up_testing || self.speed_testing {
+                    return iced::Task::none();
+                }
+                self.speed_up_testing = true;
+                let svc = Arc::clone(&self.service);
+                return iced::Task::perform(
+                    async move { svc.speed_test_upload(None).await },
+                    Message::SpeedUploadTested,
+                );
+            }
+            Message::SpeedUploadTested(res) => {
+                self.speed_up_testing = false;
+                if let Err(e) = &res {
+                    util::push_log(&mut self.logs, format!("WARN  upload speed test: {e}"));
+                }
+                self.speed_up = Some(res);
             }
             Message::KillSwitchToggled(v) => {
                 self.settings.kill_switch = v;
@@ -3262,6 +3300,39 @@ mod tests {
         drop(app.update(Message::SpeedTested(Err("no data received".into()))));
         assert!(app.speed.as_ref().expect("error result present").is_err());
         assert!(app.logs.iter().any(|l| l.contains("speed test")));
+    }
+
+    /// S22: the upload-test state machine — the in-flight guard, the
+    /// result landing, and errors landing in the log buffer too.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn speed_upload_test_message_flow() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        assert!(app.speed_up.is_none());
+        drop(app.update(Message::SpeedTestUpload));
+        assert!(app.speed_up_testing);
+        // The in-flight guard: a second trigger while testing is a no-op.
+        drop(app.update(Message::SpeedTestUpload));
+        let res = app.service.speed_test_upload(None).await;
+        drop(app.update(Message::SpeedUploadTested(res)));
+        assert!(!app.speed_up_testing);
+        let info = app
+            .speed_up
+            .as_ref()
+            .expect("result present")
+            .as_ref()
+            .expect("ok");
+        assert!(info.mbps > 0.0);
+        // Errors surface in the result and the log buffer.
+        drop(app.update(Message::SpeedTestUpload));
+        drop(app.update(Message::SpeedUploadTested(Err("no data sent".into()))));
+        assert!(app
+            .speed_up
+            .as_ref()
+            .expect("error result present")
+            .is_err());
+        assert!(app.logs.iter().any(|l| l.contains("upload speed test")));
     }
 
     /// S21 (feature o): the QoS toggle updates the draft settings exactly

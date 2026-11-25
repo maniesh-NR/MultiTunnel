@@ -172,6 +172,14 @@ pub struct SettingsView {
     /// payload needs no TLS of its own (D18's zero-TLS rule).
     #[serde(default = "default_speed_test_url")]
     pub speed_test_url: String,
+    /// S22: speed-test UPLOAD URL (the "Test upload speed" button that
+    /// appears after the download test concludes). Plain `http://` by
+    /// design — same zero-TLS rule as `speed_test_url` (the payload
+    /// rides the REALITY tunnel). Absent in older files → the stock
+    /// Cloudflare `__up` endpoint (D8 version-free migration by serde
+    /// default).
+    #[serde(default = "default_speed_test_upload_url")]
+    pub speed_test_upload_url: String,
     /// S21 (feature o): fair-share bandwidth scheduler ("QoS") — when ON,
     /// the proxy groups flows by TARGET and, under contention (≥2 groups
     /// racing for an aggregate above the floor), caps each group at its
@@ -269,6 +277,9 @@ fn default_exit_probe_url() -> String {
 fn default_speed_test_url() -> String {
     "http://speed.cloudflare.com/__down?bytes=25000000".to_string()
 }
+fn default_speed_test_upload_url() -> String {
+    "http://speed.cloudflare.com/__up".to_string()
+}
 
 /// Live events pushed to the GUI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,6 +322,13 @@ pub trait MtService: Send + Sync {
     /// active profile, through a temporary probe tunnel otherwise.
     /// `None` targets the active profile.
     async fn speed_test(&self, id: Option<String>) -> Result<SpeedTestInfo, String>;
+
+    /// S22: push a fixed-size payload UP through the tunnel and report
+    /// the send rate — same profile/tunnel selection and caps as
+    /// [`Self::speed_test`] (live session for the active profile, a
+    /// temporary probe tunnel otherwise). `None` targets the active
+    /// profile.
+    async fn speed_test_upload(&self, id: Option<String>) -> Result<SpeedTestInfo, String>;
 
     async fn routing_rules(&self) -> Vec<RuleView>;
     async fn set_routing_rules(&self, rules: Vec<RuleView>) -> Result<(), String>;
@@ -893,6 +911,7 @@ mod close_to_tray_migration_tests {
                 kill_switch: false,
                 diagnostics: false,
                 speed_test_url: default_speed_test_url(),
+                speed_test_upload_url: default_speed_test_upload_url(),
                 qos_fair: false,
             }
         }
@@ -1018,6 +1037,7 @@ mod s19_migration_tests {
         assert!(!v.kill_switch);
         assert!(!v.diagnostics);
         assert_eq!(v.speed_test_url, default_speed_test_url());
+        assert_eq!(v.speed_test_upload_url, default_speed_test_upload_url());
         assert!(v.close_to_tray, "S15 field intact");
         assert!(!v.always_on_top, "S16 field intact");
     }
@@ -1030,6 +1050,7 @@ mod s19_migration_tests {
         v.kill_switch = true;
         v.diagnostics = true;
         v.speed_test_url = "http://127.0.0.1:9/down".to_string();
+        v.speed_test_upload_url = "http://127.0.0.1:9/up".to_string();
         let json = serde_json::to_string(&v).expect("serialize");
         assert!(json.contains("\"kill_switch\":true"));
         assert!(json.contains("\"diagnostics\":true"));
@@ -1037,6 +1058,7 @@ mod s19_migration_tests {
         assert!(back.kill_switch);
         assert!(back.diagnostics);
         assert_eq!(back.speed_test_url, "http://127.0.0.1:9/down");
+        assert_eq!(back.speed_test_upload_url, "http://127.0.0.1:9/up");
     }
 
     /// S21 (feature o): settings.json written by v0.13 and older (no

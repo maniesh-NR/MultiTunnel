@@ -491,7 +491,7 @@ pub fn status(app: &App) -> Element<'_> {
     } else {
         container(m3_button(
             "Check exit IP",
-            has_active && !app.speed_testing,
+            has_active && !app.speed_testing && !app.speed_up_testing,
             ButtonKind::Tonal,
             Message::ExitProbe,
             app,
@@ -510,7 +510,7 @@ pub fn status(app: &App) -> Element<'_> {
     } else {
         container(m3_button(
             "Run speed test",
-            has_active && !app.exit_probing,
+            has_active && !app.exit_probing && !app.speed_up_testing,
             ButtonKind::Tonal,
             Message::SpeedTest,
             app,
@@ -523,12 +523,12 @@ pub fn status(app: &App) -> Element<'_> {
             .size(ts.title_m.size)
             .color(s.on_surface),
         text(if has_active {
-            "check which IP the internet sees and measure the download rate — the live \
-             tunnel when connected, a temporary probe tunnel otherwise (setup is \
-             excluded from the rate)"
+            "check which IP the internet sees and measure the download and upload rates — \
+             the live tunnel when connected, a temporary probe tunnel otherwise (setup \
+             is excluded from the rates)"
         } else {
-            "check which IP the internet sees and measure the download rate — pick an \
-             active server first"
+            "check which IP the internet sees and measure the download and upload rates — \
+             pick an active server first"
         })
         .size(ts.body_s.size)
         .color(s.on_surface_variant),
@@ -710,9 +710,85 @@ pub fn status(app: &App) -> Element<'_> {
                 .color(s.on_surface_variant),
         );
     }
-    diag_col = diag_col.push(
-        row![exit_out.width(Length::Fill), speed_out.width(Length::Fill)].spacing(16),
-    );
+    // S22: the upload button appears ONLY after the download test has
+    // concluded (user wording, verbatim) and lives in the RIGHT column
+    // under the download result.
+    if app.speed.is_some() && !app.speed_testing {
+        let upload_ctl: Element = if app.speed_up_testing {
+            text("testing upload… (up to 30 s)")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant)
+                .into()
+        } else {
+            m3_button(
+                "Test upload speed",
+                has_active && !app.exit_probing && !app.speed_testing,
+                ButtonKind::Tonal,
+                Message::SpeedTestUpload,
+                app,
+            )
+        };
+        speed_out = speed_out.push(upload_ctl);
+        if let Some(res) = &app.speed_up {
+            match res {
+                Ok(info) => {
+                    speed_out = speed_out
+                        .push(
+                            row![
+                                text(format!("↑ {:.1} Mbps", info.mbps))
+                                    .size(ts.headline_s.size)
+                                    .color(s.on_surface),
+                                horizontal_space().width(Length::Fill),
+                                if info.via_temp_tunnel {
+                                    chip(
+                                        "temporary probe tunnel",
+                                        app,
+                                        s.surface_container_high,
+                                        s.on_surface_variant,
+                                    )
+                                } else {
+                                    chip(
+                                        "live tunnel",
+                                        app,
+                                        s.tertiary_container,
+                                        s.on_tertiary_container,
+                                    )
+                                },
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center),
+                        )
+                        .push(
+                            row![
+                                chip(
+                                    format!("{:.1} MB sent in {:.1} s", info.mbytes, info.seconds),
+                                    app,
+                                    s.secondary_container,
+                                    s.on_secondary_container
+                                ),
+                                chip(
+                                    util::short(&info.profile_tag, 24),
+                                    app,
+                                    s.surface_container_high,
+                                    s.on_surface_variant
+                                ),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center),
+                        );
+                }
+                Err(e) => {
+                    speed_out = speed_out.push(
+                        text(format!("upload test failed: {e}"))
+                            .size(ts.body_s.size)
+                            .color(s.error),
+                    );
+                }
+            }
+        }
+    }
+    diag_col = diag_col
+        .push(row![exit_out.width(Length::Fill), speed_out.width(Length::Fill)].spacing(16));
     let diag_card = container(diag_col.spacing(8).padding(16))
         .style(t3::card(s, s.surface_container_low))
         .width(Length::Fill);
@@ -2238,6 +2314,19 @@ pub fn settings(app: &App) -> Element<'_> {
                 .width(Length::Fixed(210.0)),
             text_input("http://host/path", &app.settings.speed_test_url)
                 .on_input(Message::SpeedUrlChanged)
+                .padding(6)
+                .width(Length::Fixed(240.0))
+                .style(t3::text_field(s)),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center),
+        row![
+            text("upload test URL")
+                .size(ts.body_m.size)
+                .color(s.on_surface_variant)
+                .width(Length::Fixed(210.0)),
+            text_input("http://host/path", &app.settings.speed_test_upload_url)
+                .on_input(Message::SpeedUploadUrlChanged)
                 .padding(6)
                 .width(Length::Fixed(240.0))
                 .style(t3::text_field(s)),

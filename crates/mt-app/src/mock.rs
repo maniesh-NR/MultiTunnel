@@ -110,6 +110,7 @@ impl MockService {
             kill_switch: false,
             diagnostics: false,
             speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
+            speed_test_upload_url: "http://speed.cloudflare.com/__up".to_string(),
             qos_fair: false,
         };
         let inner = Inner {
@@ -823,6 +824,37 @@ impl MtService for MockService {
         self.log(
             "INFO",
             &format!("speed test finished ({mbps:.0} Mbps simulated)"),
+        );
+        Ok(mt_service::SpeedTestInfo {
+            mbps,
+            mbytes: mbps * secs / 8.0,
+            seconds: secs,
+            profile_tag: tag,
+            via_temp_tunnel: !live,
+        })
+    }
+
+    async fn speed_test_upload(
+        &self,
+        _id: Option<String>,
+    ) -> Result<mt_service::SpeedTestInfo, String> {
+        // Simulated upload throughput (no real network in mock builds).
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let (mbps, secs, tag, live) = {
+            let mut g = self.inner.lock().await;
+            let mbps = 15.0 + MockService::rng_below(&mut g, 50) as f64;
+            let live = matches!(g.state, ServiceState::Connected);
+            let tag = g
+                .active
+                .as_deref()
+                .and_then(|a| g.profiles.iter().find(|p| p.id == a))
+                .map(|p| p.tag.clone())
+                .unwrap_or_else(|| "mock".to_string());
+            (mbps, 0.8, tag, live)
+        };
+        self.log(
+            "INFO",
+            &format!("upload speed test finished ({mbps:.0} Mbps simulated)"),
         );
         Ok(mt_service::SpeedTestInfo {
             mbps,
