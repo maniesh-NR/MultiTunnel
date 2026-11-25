@@ -898,6 +898,15 @@ impl MtService for MockService {
         // The mock keeps no files; the Settings screen shows its caption.
         None
     }
+
+    async fn log_dir(&self) -> String {
+        // A real, creatable folder so "Open log folder" behaves in mock
+        // builds exactly like production (the handler create_dir_all's it).
+        std::env::temp_dir()
+            .join("MultiTunnel-mock-logs")
+            .display()
+            .to_string()
+    }
 }
 
 #[cfg(test)]

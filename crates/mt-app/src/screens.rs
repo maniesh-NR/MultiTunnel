@@ -2402,7 +2402,8 @@ pub fn settings(app: &App) -> Element<'_> {
     ]
     .spacing(10);
 
-    // Diagnostics card (S19) ------------------------------------------------
+    // Diagnostics card (S19; S22: the folder button works in every state)
+    // ----------------------------------------------------------
     let diag_caption = match &app.diag_path {
         Some(p) => format!("currently writing: {p}"),
         None => "the file is created when the mode turns on (its path also lands \
@@ -2437,6 +2438,9 @@ pub fn settings(app: &App) -> Element<'_> {
             Message::OpenLogsFolder,
             app
         ),
+        text("opens the log folder itself — works whether the mode is on or off")
+            .size(ts.label_m.size)
+            .color(s.on_surface_variant),
     ]
     .spacing(10);
 

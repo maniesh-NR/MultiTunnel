@@ -398,6 +398,8 @@ pub enum Message {
     DiagnosticsToggled(bool),
     /// The diagnostics file path arrived (init / after a toggle).
     DiagPath(Option<String>),
+    /// S22: the log directory path arrived (init).
+    LogDirLoaded(String),
     /// Speed-test URL changed (Settings → Advanced).
     SpeedUrlChanged(String),
     /// S22: upload-test URL changed (Settings → Advanced).
@@ -648,12 +650,41 @@ pub struct App {
     /// S19: the diagnostics log file currently being written (Settings
     /// screen; None when the mode is off).
     pub diag_path: Option<String>,
+    /// S22: the service's log directory (fetched once at init; the
+    /// "Open log folder" button opens it in EVERY state).
+    pub log_dir: Option<String>,
 }
 
 /// S17: the release version shown next to the app name in the titlebar.
 /// Inherited from the workspace package version (one-line release bumps).
 pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// S22: the per-platform "open this folder in the OS file manager"
+/// command — explorer.exe on Windows, open(1) on macOS, xdg-open(1)
+/// elsewhere. Spawned fire-and-forget: the SPAWN result is what the
+/// handler reports (explorer exits non-zero even on success, so the
+/// exit status is never consulted).
+pub fn open_folder_command(dir: &std::path::Path) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        let mut c = std::process::Command::new("explorer");
+        c.arg(dir);
+        c
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = std::process::Command::new("open");
+        c.arg(dir);
+        c
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(dir);
+        c
+    }
 }
 
 /// S19 (review fix): should the Status screen show the KILL SWITCH banner?
@@ -753,6 +784,7 @@ impl App {
             speed_up: None,
             speed_up_testing: false,
             diag_path: None,
+            log_dir: None,
         }
     }
 
@@ -808,6 +840,7 @@ impl App {
         app.settings = app.service.settings().await;
         app.seed_text = app.settings.theme_seed.to_string();
         app.diag_path = app.service.diagnostics_path().await;
+        app.log_dir = Some(app.service.log_dir().await);
         // S18: resolve light/dark through the picked mode + OS preference.
         app.sys_dark = crate::theme::system_prefers_dark();
         app.theme.rederive(
@@ -1783,42 +1816,42 @@ impl App {
             }
             Message::DiagPath(p) => self.diag_path = p,
             Message::OpenLogsFolder => {
-                // The diagnostics file's folder — the button lives on the
-                // Diagnostics card and is only meaningful while the file
-                // exists (diagnostics ON).
-                let Some(diag) = self.diag_path.clone() else {
+                // S22: the button opens the LOG FOLDER in every state —
+                // no more diagnostics-mode gate (the old gate reported
+                // "turn diagnostics on first" after every restart, since
+                // the sink only started on an off→on transition). The
+                // dir is created on demand, the shell-open is the
+                // platform file manager, and failures land in BOTH the
+                // Settings status line and the Logs tab (never silent).
+                let Some(dir) = self.log_dir.clone() else {
                     self.settings_status = Some(
-                        "turn diagnostics on first — the log file is created when it starts"
+                        "the log folder path is not available yet — try again in a moment"
                             .to_string(),
                     );
                     return iced::Task::none();
                 };
-                let path = std::path::Path::new(&diag)
-                    .parent()
-                    .map(std::path::Path::to_path_buf)
-                    .unwrap_or_else(|| std::path::PathBuf::from(&diag));
-                let opened = if path.exists() {
-                    #[cfg(windows)]
-                    {
-                        std::process::Command::new("explorer")
-                            .arg(&path)
-                            .spawn()
-                            .is_ok()
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        std::process::Command::new("xdg-open")
-                            .arg(&path)
-                            .spawn()
-                            .is_ok()
-                    }
-                } else {
-                    false
-                };
-                if !opened {
-                    self.settings_status =
-                        Some(format!("could not open the log folder: {}", path.display()));
+                let path = std::path::PathBuf::from(&dir);
+                if let Err(e) = std::fs::create_dir_all(&path) {
+                    util::push_log(
+                        &mut self.logs,
+                        format!("WARN  open log folder: {}: {e}", path.display()),
+                    );
+                    self.settings_status = Some(format!("could not create the log folder: {e}"));
+                    return iced::Task::none();
                 }
+                let opened = open_folder_command(&path).spawn();
+                match opened {
+                    Ok(_) => {
+                        self.settings_status = Some(format!("log folder: {}", path.display()));
+                    }
+                    Err(e) => {
+                        util::push_log(&mut self.logs, format!("WARN  open log folder: {e}"));
+                        self.settings_status = Some(format!("could not open the log folder: {e}"));
+                    }
+                }
+            }
+            Message::LogDirLoaded(dir) => {
+                self.log_dir = Some(dir);
             }
             // --- S15: title bar / tray / close-to-tray (D25) ---
             Message::WindowEvent(id, event) => {
@@ -3335,6 +3368,25 @@ mod tests {
             .expect("error result present")
             .is_err());
         assert!(app.logs.iter().any(|l| l.contains("upload speed test")));
+    }
+
+    /// S22: the platform file-manager command targets explorer / open /
+    /// xdg-open with the folder as its single argument.
+    #[test]
+    fn open_folder_command_targets_the_os_file_manager() {
+        let c = open_folder_command(std::path::Path::new("/tmp/logs"));
+        let prog = c.get_program().to_string_lossy().to_string();
+        let expected = if cfg!(windows) {
+            "explorer"
+        } else if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        assert!(prog.ends_with(expected), "program {prog:?}");
+        let args: Vec<_> = c.get_args().collect();
+        assert_eq!(args.len(), 1, "exactly the folder argument");
+        assert_eq!(args[0].to_string_lossy(), "/tmp/logs");
     }
 
     /// S21 (feature o): the QoS toggle updates the draft settings exactly

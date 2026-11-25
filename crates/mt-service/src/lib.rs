@@ -389,6 +389,11 @@ pub trait MtService: Send + Sync {
     /// screen), if diagnostics mode is on. The file stays on disk after
     /// the mode is turned off.
     async fn diagnostics_path(&self) -> Option<String>;
+
+    /// S22: the log directory — ALWAYS resolvable (not gated on
+    /// diagnostics mode), so the Settings "Open log folder" button works
+    /// in every state (mode off, after a restart, mock builds).
+    async fn log_dir(&self) -> String;
 }
 
 /// Result of the Status-screen exit probe (D18): which IP the tunnel

@@ -897,7 +897,7 @@ impl RealService {
     /// Injected paths + link factory (tests, embedders).
     pub fn with(paths: ServicePaths, factory: Arc<dyn LinkFactory>) -> Self {
         let (events, _) = broadcast::channel(EVENT_BUFFER);
-        Self {
+        let svc = Self {
             core: Arc::new(Core {
                 paths,
                 factory,
@@ -913,7 +913,35 @@ impl RealService {
                 disconnect_requested: AtomicBool::new(false),
                 restarts: AtomicU32::new(0),
             }),
+        };
+        // S22: a diagnostics toggle persisted ON must actually write —
+        // re-enable the sink AT CONSTRUCTION. Previously the sink only
+        // ever started on an off→on transition inside one process
+        // lifetime, so after a restart the Settings toggle showed ON
+        // while no file was written and "Open log folder" reported the
+        // mode off. A failed enable keeps the persisted flag (the next
+        // settings save retries through the off→on diff) and logs loudly.
+        {
+            let settings = SettingsFile::load(&svc.core.paths.settings_file());
+            if settings.settings.diagnostics {
+                let header = svc.build_diag_header(&settings.settings);
+                match crate::diagnostics::enable(&svc.core.paths.log_dir, &header) {
+                    Ok(p) => {
+                        svc.core.emit(ServiceEvent::LogLine(format!(
+                            "INFO  diagnostics mode ON (restored) — writing {}",
+                            p.display()
+                        )));
+                    }
+                    Err(e) => {
+                        tracing::warn!("restoring diagnostics mode failed: {e}");
+                        svc.core.emit(ServiceEvent::LogLine(format!(
+                            "ERROR diagnostics mode could not start (persisted on): {e}"
+                        )));
+                    }
+                }
+            }
         }
+        svc
     }
 
     /// The bound local listeners of the live session, `(socks, http)`.
@@ -2707,6 +2735,10 @@ impl MtService for RealService {
         crate::diagnostics::path().map(|p| p.display().to_string())
     }
 
+    async fn log_dir(&self) -> String {
+        self.core.paths.log_dir.display().to_string()
+    }
+
     fn events(&self) -> broadcast::Receiver<ServiceEvent> {
         self.core.events.subscribe()
     }
@@ -3473,6 +3505,39 @@ mod tests {
 
         let err = svc.speed_test_upload(None).await.unwrap_err();
         assert!(err.contains("403"), "{err}");
+    }
+
+    /// S22: the log dir is always resolvable (not diagnostics-gated) and
+    /// IS the `logs` dir under the config dir.
+    #[tokio::test]
+    async fn log_dir_is_always_resolvable() {
+        let echo = spawn_echo().await;
+        let paths = scratch("logdir");
+        let svc = RealService::with(paths.clone(), Arc::new(FakeFactory { echo, fail: false }));
+        let dir = svc.log_dir().await;
+        assert_eq!(dir, paths.log_dir.display().to_string());
+        assert!(paths.log_dir.ends_with("logs"), "{dir}");
+    }
+
+    /// S22: a diagnostics toggle persisted ON writes again after a
+    /// restart — the sink starts AT CONSTRUCTION, not only on an off→on
+    /// transition (the old gap made the Settings toggle lie and the
+    /// "Open log folder" button refuse after every restart).
+    #[tokio::test]
+    async fn diagnostics_persisted_on_starts_at_construction() {
+        let echo = spawn_echo().await;
+        let paths = scratch("diagrestart");
+        write_settings(&paths, echo.port(), false);
+        let mut file = SettingsFile::load(&paths.settings_file());
+        file.settings.diagnostics = true;
+        file.save(&paths.settings_file()).expect("save");
+        let svc = RealService::with(paths, Arc::new(FakeFactory { echo, fail: false }));
+        let p = svc
+            .diagnostics_path()
+            .await
+            .expect("sink restored at startup");
+        assert!(std::path::Path::new(&p).exists(), "{p:?}");
+        let _ = crate::diagnostics::disable();
     }
 
     #[tokio::test]
