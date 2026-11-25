@@ -109,6 +109,15 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > (flips live, no reconnect); the Status tab's exit-IP and speed-test
 > cards merged into one compact **Exit & speed** panel.
 >
+> v0.15: the Exit & speed panel splits into two columns — exit-IP
+> outputs on the LEFT, speed-test outputs on the RIGHT; after a download
+> test concludes a **Test upload speed** button appears (result in the
+> right column); every link shows **which adapter it goes through**
+> (`via <adapter>`); Settings → Diagnostics' **Open log folder** works
+> whether the mode is on or off (and a diagnostics toggle persisted ON
+> writes again after a restart); the app icon fills its tile — the
+> glyph grew ~24% in the tray.
+>
 > v0.13.1 (Copilot code-review round): kill-switch hardening — the
 > black-hole port is owned BEFORE the proxy points at it, the proxy
 > hand-off is serialized with disconnect, a failed restore keeps the

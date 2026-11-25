@@ -442,6 +442,28 @@ GUI, no new dependencies):
   response head independently of the payload limit, and the Edit dialog
   rejects port 0 and structurally invalid REALITY fields (empty SNI,
   malformed public key / short ID).
+- **v0.15.0 — the Exit & speed panel reads like a form**: the panel's
+  two halves are now two COLUMNS — every exit-IP output (address,
+  location/ISP chips, single-hop verdict) sits on the LEFT and every
+  speed-test output (download rate, volume/duration chips, per-adapter
+  spread note) sits on the RIGHT, each under its own small heading.
+  After a download test concludes, a **Test upload speed** button
+  appears in the right column: it POSTs a 25 MB payload through the
+  tunnel (URL configurable in Advanced settings) and reports the send
+  rate, volume and duration beside the download result. Every link in
+  the Links card now shows **which adapter it goes through** — a
+  `via <adapter>` line under the link (parsed from the engine's
+  `"profile [adapter]"` link names, dedup ordinals stripped, so the
+  adapter survives even when a long profile tag truncates the name).
+  Settings → Diagnostics' **Open log folder** works in every state: it
+  opens the log folder itself (created on demand) instead of the
+  diagnostics file's parent, so it no longer reports "turn diagnostics
+  on first" — and a diagnostics toggle persisted ON now starts writing
+  again after an app restart (the sink used to start only on an
+  off→on transition). The app icon (window, taskbar, tray, every ICO
+  size) was regenerated so the glyph fills the tile — the mark grew
+  ~24% in the tray after a dead gradient band was cropped out of the
+  source and the margins tightened (93–97% width, 75–77% height fill).
 - **Quick Settings on right-click**: the tray menu is built fresh from
   live state — Connect/Disconnect (state-reflecting), the server list
   (radio-checked on the active profile), Open MultiTunnel and Exit.
