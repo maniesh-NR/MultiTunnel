@@ -149,6 +149,12 @@ const BIND_WAIT: Duration = Duration::from_secs(8);
 const BIND_POLL: Duration = Duration::from_millis(10);
 /// `ServiceEvent` broadcast buffer (slow GUI receivers lag, never block).
 const EVENT_BUFFER: usize = 256;
+/// S23 (v2rayN 7.25.6 parity): stale-log retention — files in the log
+/// dir older than this are pruned at service construction.
+const LOG_RETENTION_SECS: u64 = 7 * 24 * 3600;
+/// S23: the newest N log files always survive the sweep (an active
+/// diagnostics burst never loses its newest material).
+const LOG_SWEEP_KEEP_NEWEST: usize = 40;
 /// The flow the engine pins (mt-engine hardcodes vision in its config).
 const ENGINE_FLOW: &str = "xtls-rprx-vision";
 /// S19: overall budget for one exit-IP probe (unchanged; the temp-tunnel
@@ -908,6 +914,27 @@ impl RealService {
                         )));
                     }
                 }
+            }
+        }
+        // S23 (v2rayN 7.25.6 parity): stale-log hygiene at every service
+        // construction — files older than 7 days are pruned, the newest
+        // 40 always survive, and the file the (possibly just restored)
+        // diagnostics sink is writing is never touched. Best-effort: a
+        // failed sweep is logged and forgotten (never fatal).
+        {
+            let pruned = crate::diagnostics::sweep_old_logs(
+                &svc.core.paths.log_dir,
+                SystemTime::now(),
+                std::time::Duration::from_secs(LOG_RETENTION_SECS),
+                LOG_SWEEP_KEEP_NEWEST,
+                crate::diagnostics::path().as_deref(),
+            );
+            if !pruned.is_empty() {
+                svc.core.emit(ServiceEvent::LogLine(format!(
+                    "INFO  log cleanup: removed {} stale file(s) older than {} days",
+                    pruned.len(),
+                    LOG_RETENTION_SECS / (24 * 3600)
+                )));
             }
         }
         svc
@@ -3470,6 +3497,55 @@ mod tests {
         let dir = svc.log_dir().await;
         assert_eq!(dir, paths.log_dir.display().to_string());
         assert!(paths.log_dir.ends_with("logs"), "{dir}");
+    }
+
+    /// S23 (v2rayN 7.25.6 parity): service construction prunes stale
+    /// log files (7-day retention) while fresh ones survive. The sweep
+    /// keeps the newest 40 files unconditionally, so the fixture needs
+    /// MORE than 40 files for anything to become eligible.
+    #[tokio::test]
+    async fn s23_construction_sweeps_stale_logs() {
+        use std::fs::FileTimes;
+        let echo = spawn_echo().await;
+        let paths = scratch("sweep");
+        std::fs::create_dir_all(&paths.log_dir).expect("log dir");
+        let stale_mtime = std::time::SystemTime::now()
+            - std::time::Duration::from_secs(9 * 24 * 3600);
+        let pin = |p: &std::path::Path| {
+            std::fs::File::options()
+                .write(true)
+                .open(p)
+                .expect("open")
+                .set_times(FileTimes::new().set_modified(stale_mtime))
+                .expect("mtime");
+        };
+        // 46 nine-day-old files (all eligible, only the oldest 6 exceed
+        // the newest-40 cap) + 2 fresh files.
+        for i in 0..46 {
+            let p = paths.log_dir.join(format!("engine-stale-{i:03}.log"));
+            std::fs::write(&p, b"x").expect("write");
+            pin(&p);
+        }
+        for i in 0..2 {
+            std::fs::write(paths.log_dir.join(format!("fresh-{i}.log")), b"x")
+                .expect("write");
+        }
+
+        let _svc = RealService::with(paths, Arc::new(FakeFactory { echo, fail: false }));
+        // Count what survived directly from the log dir.
+        let log_dir = std::path::PathBuf::from(_svc.log_dir().await);
+        let survived: Vec<String> = std::fs::read_dir(&log_dir)
+            .expect("log dir readable")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(survived.len(), 40, "48 files − 8 beyond the newest-40 cap");
+        assert!(survived.iter().any(|n| n.starts_with("fresh-")), "fresh kept");
+        // All 46 stale files share ONE pinned mtime (9 days old); the
+        // newest-40 cap counts the 2 fresh files too, so 38 stale files
+        // survive and 8 are swept.
+        let stale_left = survived.iter().filter(|n| n.contains("stale")).count();
+        assert_eq!(stale_left, 38, "38 stale + 2 fresh = the kept 40");
     }
 
     /// S22: a diagnostics toggle persisted ON writes again after a
