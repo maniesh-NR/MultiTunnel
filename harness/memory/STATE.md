@@ -1,48 +1,35 @@
-# STATE — rewritten at the end of every stage. Last update: S19 (server editing + offline probes + speed test + diagnostics + kill switch, v0.13.0)
+# STATE — rewritten at the end of every stage. Last update: S23 (open-log-folder os-error-50 fix + reset-to-defaults + changelog-research pass; PR flow)
 
 ## Current position
-- Stage: S19 IMPLEMENTED, all local gates green, review fixes in,
-  releasing v0.13.0.
-- The user's six asks shipped: (1) SERVER EDITING — Servers tab per-card
-  Edit button → full-window modal (name/remark/address/port/UUID +
-  REALITY fields for reality profiles); mt-service ProfileDetails
-  round-trip (profile_details → update_profile); ProfileStore::update
-  replaces BY ID in place (id/position/active preserved, no dedupe on
-  explicit edit); RealService validates primitives + a
-  capability-regression check (an edit that would break a convertible
-  profile is rejected with the reason). (2) EXIT IP WHILE OFFLINE —
-  exit_probe prefers the live session, falls back to
-  temp_link_for() (the same factory path test_latency uses);
-  ExitInfo.via_temp_tunnel drives a "temporary probe tunnel" chip.
-  (3) SPEED TEST — Status card; speed_test(None) rides the live session
-  for the active profile (else the temp tunnel); downloads
-  settings.speed_test_url (default
-  http://speed.cloudflare.com/__down?bytes=25000000, plain-HTTP verified);
-  clock starts after connect (engine spawn excluded); 5 s stall / 30 s
-  budget / 64 MiB caps; ≥400 rejected. (4) DIAGNOSTICS MODE —
-  src/diagnostics.rs: one redacted paste-ready
-  <log_dir>/diagnostics-YYYYMMDD-HHMMSS.log (header + GUI LogLine tee +
-  ALL tracing events via a hand-rolled global subscriber; engine level
-  forced debug; UUID/pbk never written — test-pinned); Settings card
-  with the path + "Open log folder". (5) KILL SWITCH — give_up()
-  fail-CLOSED: system proxy re-pointed at 127.0.0.1:9 (review fix: the
-  app BINDS the port itself while engaged — spawn_blackhole accept loop
-  swallows connections — so a local process cannot pre-bind it); every
-  restore path releases it; explicit disconnect restores even with no
-  session; Status banner "KILL SWITCH ACTIVE" when Failed + armed.
-  (6) CODE REVIEW — Copilot channels unavailable from the sandbox (no
-  account entitlement → reviewer requests silently dropped;
-  models.github.ai proxy-intercepted): a 3-round discussion-based review
-  ran on the strongest reachable model instead (z-ai chat), 4 findings
-  fixed (above), the rest assessed + documented in the transcript;
-  review PR #1 left open (base v0.12-line) for a Copilot pass from an
-  entitled machine.
-- 466/0 workspace tests (+19 vs v0.12); fmt/clippy host+windows-gnu;
-  vendored iced 6/0; smoke 0; rig sf=1.0+1.5 VLM-verified (52.0 Mbps
-  chip row, offline exit-IP chip, modal fields + rename→save→card
-  updated, Cancel + backdrop dismissal, kill switch + diagnostics
-  toggles); PE32+ ×4 + ELF ×2; version 0.13.0.
+- Stage: S23 IMPLEMENTED, all local gates green, delivered as the PR
+  `s23-open-folder-reset-perf` requesting @copilot review (the user's
+  explicit delivery instruction this session — NO tag/release until the
+  review lands).
+- The user's three asks shipped on the branch: (1) OPEN LOG FOLDER
+  FIXED FOR REAL — the v0.15.0 explorer.exe spawn hit
+  ERROR_NOT_SUPPORTED (os error 50) because a GUI-subsystem binary
+  passes NULL stdio handles into CreateProcessW; the fix is
+  crates/mt-app/src/shell_open.rs: ShellExecuteW (shell's open-verb
+  path, no handle inheritance) with an explorer.exe fallback that now
+  uses Stdio::null() on all three streams; failures name every
+  mechanism tried + the folder. (2) RESET ALL SETTINGS — a Settings
+  "Reset" card (ErrorText, two-click confirm, scope caption: servers
+  and routing rules untouched; bonded_adapters cleared through
+  set_bonded_adapters([]); mt_service::SettingsView::default() is the
+  single stock source — five diverging literals collapsed; reset note
+  in SettingsSaved). (3) CHANGELOG RESEARCH APPLIED —
+  docs/research/2026-11-27-stability-changelog-survey.md: adopted the
+  v2rayN 7.25.6 7-day stale-log sweep (diagnostics::sweep_old_logs at
+  every RealService::with), the desktop-client remembered window size
+  (window_w/h serde-default, debounced save, restored on load), and
+  1 MiB SO_SNDBUF/SO_RCVBUF on the merge daemon's WAN streams via
+  socket2 (transitive dep, zero new lockfile entries).
+- Gates: fmt; clippy host + windows-gnu -D warnings; workspace tests
+  520/0 (+10 new); vendored iced 6/0; mt-app --smoke 0; zigbuild
+  PE32+ ×3 + ELF ×2; rig sf=1.0 + 1.5 (reset two-click flow verified
+  end-to-end, seed reverted, log-folder honest failure, 0 panics).
 
+## Prior stages (compressed)
 ## Next actions
 1. Tag v0.13.0 → release.yml; watch the run; verify assets by
    download+unzip (PE32+ in zip, ELFs, README/QUICKSTART carried).
