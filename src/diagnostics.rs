@@ -138,7 +138,7 @@ pub(crate) fn sweep_old_logs(
             Some((e.path(), mtime))
         })
         .collect();
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|(_, mtime)| std::cmp::Reverse(*mtime));
     let mut pruned = Vec::new();
     for (i, (path, mtime)) in files.into_iter().enumerate() {
         if i < keep_newest {

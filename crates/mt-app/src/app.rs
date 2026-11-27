@@ -1504,9 +1504,9 @@ impl App {
                 let apply = self.apply_settings_view(stock.clone());
                 // Reset restores the stock window size too (a live
                 // resize to 1080×720 — the next launch reads it back).
-                let resize = if self.window_id.is_some() {
+                let resize = if let Some(id) = self.window_id {
                     iced::window::resize(
-                        self.window_id.expect("checked above"),
+                        id,
                         iced::Size::new(stock.window_w as f32, stock.window_h as f32),
                     )
                 } else {

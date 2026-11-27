@@ -672,15 +672,16 @@ mod tests {
     /// `from_settings` / `rederive` honor the settings view (live re-theme).
     #[test]
     fn theme_from_settings_and_rederive() {
-        let mut t = MtTheme::from_settings(&{
+        let mut t = MtTheme::from_settings(&SettingsView {
             // S23: one base-line diff off the stock view (the fields
-            // from_settings actually reads: seed + mode).
-            let mut s = SettingsView::default();
-            s.theme_seed = 0x4285F4;
-            s.theme_mode = "light".into();
-            s.system_proxy = true;
-            s.merge_policy = "failover".into();
-            s
+            // from_settings actually reads: seed + mode; the system_proxy
+            // / merge_policy values keep the original test's "unrelated
+            // fields are ignored" coverage).
+            theme_seed: 0x4285F4,
+            theme_mode: "light".into(),
+            system_proxy: true,
+            merge_policy: "failover".into(),
+            ..SettingsView::default()
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);

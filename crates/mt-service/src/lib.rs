@@ -992,13 +992,14 @@ mod close_to_tray_migration_tests {
             // S23: build off the stock view, preserving this fixture's
             // historical deviations (seed 0, blank mode, info logs,
             // blank probe/exit URLs).
-            let mut v = SettingsView::default();
-            v.theme_seed = 0;
-            v.theme_mode = String::new();
-            v.log_level = "info".into();
-            v.probe_target = String::new();
-            v.exit_probe_url = String::new();
-            v
+            SettingsView {
+                theme_seed: 0,
+                theme_mode: String::new(),
+                log_level: "info".into(),
+                probe_target: String::new(),
+                exit_probe_url: String::new(),
+                ..SettingsView::default()
+            }
         }
     }
 }

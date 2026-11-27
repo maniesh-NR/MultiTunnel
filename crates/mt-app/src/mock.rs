@@ -77,18 +77,20 @@ impl MockService {
         let active = profiles.first().map(|p| p.id.clone());
         // S23: stock base (theme/system/balanced/…) with ONE demo
         // deviation — the bonded adapters below.
-        let mut settings = SettingsView::default();
         // D22/D23: ALL THREE wired adapters bonded — mirrors the demo
         // setup (balanced needs ≥2 ticked adapters to show its point)
         // and gives every Status-tab adapter graph traffic. The mock's
         // byte split is deliberately UNEVEN (Wi-Fi ≫ Ethernet ≫
         // Cellular) — the "one adapter hogs everything" shape the
         // balanced policy exists to fix.
-        settings.bonded_adapters = vec![
-            "mock-wifi".to_string(),
-            "mock-ethernet".to_string(),
-            "mock-cellular".to_string(),
-        ];
+        let settings = SettingsView {
+            bonded_adapters: vec![
+                "mock-wifi".to_string(),
+                "mock-ethernet".to_string(),
+                "mock-cellular".to_string(),
+            ],
+            ..SettingsView::default()
+        };
         let inner = Inner {
             state: ServiceState::Disconnected,
             active,

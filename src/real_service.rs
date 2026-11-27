@@ -607,18 +607,6 @@ impl Default for SettingsFile {
 /// round-robin; D23 = 2: stock round-robin → balanced).
 const SETTINGS_VERSION: u32 = 2;
 
-/// S19: the default speed-test URL (mirrors the mt-service serde default
-/// so a fresh SettingsFile and a freshly-parsed one agree).
-fn default_speed_test_url() -> String {
-    "http://speed.cloudflare.com/__down?bytes=25000000".to_string()
-}
-
-/// S22: the default upload-test URL (mirrors the mt-service serde
-/// default, same reason).
-fn default_speed_test_upload_url() -> String {
-    "http://speed.cloudflare.com/__up".to_string()
-}
-
 impl SettingsFile {
     fn load(path: &Path) -> Self {
         let mut file = match std::fs::read_to_string(path) {
@@ -3110,13 +3098,14 @@ mod tests {
         let file = SettingsFile {
             settings: {
                 // v0.5-era file shape: NO theme_mode key (the S18 legacy
-                // migration tests build on files like this one) — build
-                // off the stock view and blank exactly that field.
-                let mut s = SettingsView::default();
-                s.theme_mode = String::new();
-                s.system_proxy = system_proxy;
-                s.merge_policy = "failover".to_string();
-                s
+                // migration tests build on files like this one) — the
+                // stock view with exactly that field blanked.
+                SettingsView {
+                    theme_mode: String::new(),
+                    system_proxy,
+                    merge_policy: "failover".to_string(),
+                    ..SettingsView::default()
+                }
             },
             rules: Vec::new(),
             socks_port: 0,
@@ -4523,16 +4512,15 @@ mod tests {
         let paths = scratch("settings");
         let svc = RealService::with(paths.clone(), Arc::new(FakeFactory { echo, fail: false }));
 
-        let view = {
-            let mut v = SettingsView::default();
-            v.theme_seed = 0xEA4335;
-            v.dark_mode = true;
-            v.theme_mode = "dark".to_string();
-            v.merge_policy = "lowestlatency".to_string();
-            v.socks_port = 0; // ephemeral — tests never bind fixed ports
-            v.http_port = 0;
-            v.qos_fair = true; // round-trips a non-default value
-            v
+        let view = SettingsView {
+            theme_seed: 0xEA4335,
+            dark_mode: true,
+            theme_mode: "dark".to_string(),
+            merge_policy: "lowestlatency".to_string(),
+            socks_port: 0, // ephemeral — tests never bind fixed ports
+            http_port: 0,
+            qos_fair: true, // round-trips a non-default value
+            ..SettingsView::default()
         };
         svc.set_settings(view.clone()).await.expect("save settings");
         assert_eq!(svc.settings().await, view);
@@ -4580,13 +4568,15 @@ mod tests {
         // Dirty: non-default settings + rules + a profile. The bonded
         // selection needs a REAL adapter id when the host has one (the
         // machine-independent parts run either way).
-        let mut dirty = SettingsView::default();
-        dirty.theme_seed = 0xEA4335;
-        dirty.merge_policy = "priority".to_string();
-        dirty.bond_mode = "stream".to_string();
-        dirty.kill_switch = true;
-        dirty.window_w = 1400;
-        dirty.window_h = 900;
+        let dirty = SettingsView {
+            theme_seed: 0xEA4335,
+            merge_policy: "priority".to_string(),
+            bond_mode: "stream".to_string(),
+            kill_switch: true,
+            window_w: 1400,
+            window_h: 900,
+            ..SettingsView::default()
+        };
         svc.set_settings(dirty.clone()).await.expect("dirty save");
         let host_adapter = svc
             .adapters()
@@ -4654,9 +4644,11 @@ mod tests {
         let paths = scratch("winsize");
         let svc = RealService::with(paths.clone(), Arc::new(FakeFactory { echo, fail: false }));
 
-        let mut custom = SettingsView::default();
-        custom.window_w = 1400;
-        custom.window_h = 900;
+        let custom = SettingsView {
+            window_w: 1400,
+            window_h: 900,
+            ..SettingsView::default()
+        };
         svc.set_settings(custom.clone()).await.expect("save");
         assert_eq!(svc.settings().await, custom);
         assert!(!svc.settings().await.window_size_is_default());
