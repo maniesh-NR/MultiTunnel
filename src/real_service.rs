@@ -3509,8 +3509,8 @@ mod tests {
         let echo = spawn_echo().await;
         let paths = scratch("sweep");
         std::fs::create_dir_all(&paths.log_dir).expect("log dir");
-        let stale_mtime = std::time::SystemTime::now()
-            - std::time::Duration::from_secs(9 * 24 * 3600);
+        let stale_mtime =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(9 * 24 * 3600);
         let pin = |p: &std::path::Path| {
             std::fs::File::options()
                 .write(true)
@@ -3527,8 +3527,7 @@ mod tests {
             pin(&p);
         }
         for i in 0..2 {
-            std::fs::write(paths.log_dir.join(format!("fresh-{i}.log")), b"x")
-                .expect("write");
+            std::fs::write(paths.log_dir.join(format!("fresh-{i}.log")), b"x").expect("write");
         }
 
         let _svc = RealService::with(paths, Arc::new(FakeFactory { echo, fail: false }));
@@ -3540,7 +3539,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(survived.len(), 40, "48 files − 8 beyond the newest-40 cap");
-        assert!(survived.iter().any(|n| n.starts_with("fresh-")), "fresh kept");
+        assert!(
+            survived.iter().any(|n| n.starts_with("fresh-")),
+            "fresh kept"
+        );
         // All 46 stale files share ONE pinned mtime (9 days old); the
         // newest-40 cap counts the 2 fresh files too, so 38 stale files
         // survive and 8 are swept.

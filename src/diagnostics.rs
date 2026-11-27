@@ -394,12 +394,17 @@ mod sweep_tests {
     #[test]
     fn missing_dir_and_subdirs_are_not_errors() {
         let dir = scratch("missing").join("nope");
-        assert!(sweep_old_logs(&dir, SystemTime::now(), std::time::Duration::ZERO, 0, None)
-            .is_empty());
+        assert!(
+            sweep_old_logs(&dir, SystemTime::now(), std::time::Duration::ZERO, 0, None).is_empty()
+        );
         // A subdirectory is never touched.
         let real = scratch("subdir");
         std::fs::create_dir_all(real.join("nested")).expect("subdir");
-        let _ = touch(&real, "old.log", Some(std::time::Duration::from_secs(10_000_000)));
+        let _ = touch(
+            &real,
+            "old.log",
+            Some(std::time::Duration::from_secs(10_000_000)),
+        );
         let pruned = sweep_old_logs(
             &real,
             SystemTime::now(),
