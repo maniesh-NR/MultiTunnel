@@ -661,32 +661,6 @@ pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// S22: the per-platform "open this folder in the OS file manager"
-/// command — explorer.exe on Windows, open(1) on macOS, xdg-open(1)
-/// elsewhere. Spawned fire-and-forget: the SPAWN result is what the
-/// handler reports (explorer exits non-zero even on success, so the
-/// exit status is never consulted).
-pub fn open_folder_command(dir: &std::path::Path) -> std::process::Command {
-    #[cfg(windows)]
-    {
-        let mut c = std::process::Command::new("explorer");
-        c.arg(dir);
-        c
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut c = std::process::Command::new("open");
-        c.arg(dir);
-        c
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(dir);
-        c
-    }
-}
-
 /// S19 (review fix): should the Status screen show the KILL SWITCH banner?
 /// Pure gate (unit-tested): the switch is armed AND the tunnel FAILED —
 /// the give_up path engages the black hole exactly in that state.
@@ -1831,6 +1805,12 @@ impl App {
                 // dir is created on demand, the shell-open is the
                 // platform file manager, and failures land in BOTH the
                 // Settings status line and the Logs tab (never silent).
+                //
+                // S23: shell_open::open_folder — on Windows this is
+                // ShellExecuteW first (the v0.15.0 explorer spawn hit
+                // ERROR_NOT_SUPPORTED / "os error 50" in GUI-subsystem
+                // builds: inherited null stdio handles), with an
+                // explorer.exe fallback that now uses NUL stdio.
                 let Some(dir) = self.log_dir.clone() else {
                     self.settings_status = Some(
                         "the log folder path is not available yet — try again in a moment"
@@ -1847,14 +1827,13 @@ impl App {
                     self.settings_status = Some(format!("could not create the log folder: {e}"));
                     return iced::Task::none();
                 }
-                let opened = open_folder_command(&path).spawn();
-                match opened {
-                    Ok(_) => {
+                match crate::shell_open::open_folder(&path) {
+                    Ok(()) => {
                         self.settings_status = Some(format!("log folder: {}", path.display()));
                     }
                     Err(e) => {
-                        util::push_log(&mut self.logs, format!("WARN  open log folder: {e}"));
-                        self.settings_status = Some(format!("could not open the log folder: {e}"));
+                        util::push_log(&mut self.logs, format!("WARN  {e}"));
+                        self.settings_status = Some(e);
                     }
                 }
             }
@@ -3378,23 +3357,16 @@ mod tests {
         assert!(app.logs.iter().any(|l| l.contains("upload speed test")));
     }
 
-    /// S22: the platform file-manager command targets explorer / open /
-    /// xdg-open with the folder as its single argument.
+    /// S23: the shell-open module carries the file-manager command test
+    /// (crate::shell_open::tests::file_manager_command_targets_the_os_file_manager)
+    /// plus the spawn-failure and ShellExecuteW-code-table tests.
     #[test]
-    fn open_folder_command_targets_the_os_file_manager() {
-        let c = open_folder_command(std::path::Path::new("/tmp/logs"));
-        let prog = c.get_program().to_string_lossy().to_string();
-        let expected = if cfg!(windows) {
-            "explorer"
-        } else if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        assert!(prog.ends_with(expected), "program {prog:?}");
-        let args: Vec<_> = c.get_args().collect();
-        assert_eq!(args.len(), 1, "exactly the folder argument");
-        assert_eq!(args[0].to_string_lossy(), "/tmp/logs");
+    fn shell_open_module_is_wired() {
+        // The handler path goes through crate::shell_open::open_folder;
+        // smoke-cover the re-export direction on every platform.
+        let dir = std::env::temp_dir().join("mt-shell-open-wired");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = crate::shell_open::open_folder(&dir);
     }
 
     /// S21 (feature o): the QoS toggle updates the draft settings exactly

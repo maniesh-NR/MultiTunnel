@@ -55,6 +55,7 @@
 pub mod app;
 pub mod graph;
 pub mod screens;
+pub mod shell_open;
 pub mod theme;
 pub mod tray;
 pub mod tray_win;
