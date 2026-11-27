@@ -672,29 +672,15 @@ mod tests {
     /// `from_settings` / `rederive` honor the settings view (live re-theme).
     #[test]
     fn theme_from_settings_and_rederive() {
-        let mut t = MtTheme::from_settings(&SettingsView {
-            theme_seed: 0x4285F4,
-            dark_mode: false,
-            theme_mode: "light".into(),
-            system_proxy: true,
-            merge_policy: "failover".into(),
-            autostart: false,
-            bonded_adapters: Vec::new(),
-            bond_mode: "per-connection".into(),
-            merge_port: 7443,
-            socks_port: 10808,
-            http_port: 10809,
-            allow_lan: false,
-            log_level: "warning".into(),
-            probe_target: String::new(),
-            exit_probe_url: String::new(),
-            close_to_tray: false,
-            always_on_top: false,
-            kill_switch: false,
-            diagnostics: false,
-            speed_test_url: String::new(),
-            speed_test_upload_url: String::new(),
-            qos_fair: false,
+        let mut t = MtTheme::from_settings(&{
+            // S23: one base-line diff off the stock view (the fields
+            // from_settings actually reads: seed + mode).
+            let mut s = SettingsView::default();
+            s.theme_seed = 0x4285F4;
+            s.theme_mode = "light".into();
+            s.system_proxy = true;
+            s.merge_policy = "failover".into();
+            s
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);

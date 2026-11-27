@@ -218,6 +218,17 @@ pub struct SettingsView {
     /// older files → false (D8 version-free migration by serde default).
     #[serde(default)]
     pub qos_fair: bool,
+    /// S23: the remembered main-window WIDTH (restored at startup; saved
+    /// debounced after a resize — see the app's Resized handler). Absent
+    /// in older files → the stock 1080 (D8 version-free migration by
+    /// serde default; the GUI clamps to the window's 880 minimum).
+    #[serde(default = "default_window_w")]
+    pub window_w: u32,
+    /// S23: the remembered main-window HEIGHT. Absent in older files →
+    /// the stock 720 (same rules as [`SettingsView::window_w`]; clamped
+    /// to the 580 minimum).
+    #[serde(default = "default_window_h")]
+    pub window_h: u32,
 }
 
 /// S18: how the app resolves light vs dark appearance. Serialized as
@@ -281,6 +292,13 @@ impl SettingsView {
     pub fn effective_dark(&self, system_prefers_dark: bool) -> bool {
         self.theme_mode().resolves_dark(system_prefers_dark)
     }
+
+    /// S23: is the remembered window size the stock 1080×720? (Loads
+    /// skip the resize task when nothing was ever customized.)
+    #[must_use]
+    pub fn window_size_is_default(&self) -> bool {
+        self.window_w == default_window_w() && self.window_h == default_window_h()
+    }
 }
 
 fn default_bond_mode() -> String {
@@ -309,6 +327,52 @@ fn default_speed_test_url() -> String {
 }
 fn default_speed_test_upload_url() -> String {
     "http://speed.cloudflare.com/__up".to_string()
+}
+fn default_window_w() -> u32 {
+    1080
+}
+fn default_window_h() -> u32 {
+    720
+}
+
+impl Default for SettingsView {
+    /// S23: the STOCK settings — the single source of truth the
+    /// "Reset all settings to defaults" button restores, and what a
+    /// fresh settings.json carries. Every optional field must equal its
+    /// serde default (a file written with the optional keys ABSENT
+    /// parses to exactly this view — asserted by
+    /// `settings_defaults_match_serde_defaults`).
+    fn default() -> Self {
+        Self {
+            // Material baseline primary #6750A4 (the S9 stock seed).
+            theme_seed: 0x6750A4,
+            dark_mode: false,
+            // S18: fresh installs follow the OS appearance.
+            theme_mode: "system".to_string(),
+            system_proxy: false,
+            // D23: "balanced" is the v0.7.0+ stock policy.
+            merge_policy: "balanced".to_string(),
+            autostart: false,
+            bonded_adapters: Vec::new(),
+            bond_mode: default_bond_mode(),
+            merge_port: default_merge_port(),
+            socks_port: default_socks_port(),
+            http_port: default_http_port(),
+            allow_lan: false,
+            log_level: default_log_level(),
+            probe_target: default_probe_target(),
+            exit_probe_url: default_exit_probe_url(),
+            close_to_tray: false,
+            always_on_top: false,
+            kill_switch: false,
+            diagnostics: false,
+            speed_test_url: default_speed_test_url(),
+            speed_test_upload_url: default_speed_test_upload_url(),
+            qos_fair: false,
+            window_w: default_window_w(),
+            window_h: default_window_h(),
+        }
+    }
 }
 
 /// Live events pushed to the GUI.
@@ -925,30 +989,16 @@ mod close_to_tray_migration_tests {
 
     impl SettingsView {
         pub(crate) fn default_settings_for_tests() -> Self {
-            Self {
-                theme_seed: 0,
-                dark_mode: false,
-                theme_mode: String::new(),
-                system_proxy: false,
-                merge_policy: "balanced".into(),
-                autostart: false,
-                bonded_adapters: vec![],
-                bond_mode: "per-connection".into(),
-                merge_port: 7443,
-                socks_port: 10808,
-                http_port: 10809,
-                allow_lan: false,
-                log_level: "info".into(),
-                probe_target: String::new(),
-                exit_probe_url: String::new(),
-                close_to_tray: false,
-                always_on_top: false,
-                kill_switch: false,
-                diagnostics: false,
-                speed_test_url: default_speed_test_url(),
-                speed_test_upload_url: default_speed_test_upload_url(),
-                qos_fair: false,
-            }
+            // S23: build off the stock view, preserving this fixture's
+            // historical deviations (seed 0, blank mode, info logs,
+            // blank probe/exit URLs).
+            let mut v = SettingsView::default();
+            v.theme_seed = 0;
+            v.theme_mode = String::new();
+            v.log_level = "info".into();
+            v.probe_target = String::new();
+            v.exit_probe_url = String::new();
+            v
         }
     }
 }
@@ -1146,5 +1196,46 @@ mod s19_migration_tests {
         assert!(json.contains("\"qos_fair\":true"));
         let back: SettingsView = serde_json::from_str(&json).expect("reload");
         assert!(back.qos_fair);
+    }
+}
+
+/// S23: the stock-settings single source of truth (`Default for
+/// SettingsView`) — the material the "Reset all settings to defaults"
+/// button restores.
+#[cfg(test)]
+mod stock_defaults_tests {
+    use super::*;
+
+    /// A file carrying ONLY the five required v1 fields parses to the
+    /// DEFAULT view — every optional field's serde default must equal
+    /// the `Default` impl (the version-free D8 migration and the reset
+    /// button agree by construction).
+    #[test]
+    fn settings_defaults_match_serde_defaults() {
+        // 0x6750A4 = 6,770,852 (the Material baseline primary seed).
+        // NOTE `theme_mode` is listed explicitly: an ABSENT key means the
+        // legacy migration ("" → dark_mode decides), not the stock
+        // "system" — fresh installs write it out, the reset restores it.
+        let minimal = r#"{
+            "theme_seed": 6770852,
+            "dark_mode": false,
+            "theme_mode": "system",
+            "system_proxy": false,
+            "merge_policy": "balanced",
+            "autostart": false
+        }"#;
+        let v: SettingsView = serde_json::from_str(minimal).expect("minimal file parses");
+        assert_eq!(v, SettingsView::default(), "serde defaults == Default impl");
+    }
+
+    /// Round-trip: serializing the stock view and re-parsing yields the
+    /// stock view (schema stability for the reset path).
+    #[test]
+    fn stock_settings_roundtrip() {
+        let json = serde_json::to_string(&SettingsView::default()).expect("serialize");
+        let back: SettingsView = serde_json::from_str(&json).expect("parse");
+        assert_eq!(back, SettingsView::default());
+        // The remembered window size is stock 1080x720.
+        assert_eq!((back.window_w, back.window_h), (1080, 720));
     }
 }

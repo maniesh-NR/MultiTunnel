@@ -14,7 +14,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use iced::widget::scrollable;
 
-use crate::theme::{MtTheme, SEED_SWATCHES};
+use crate::theme::MtTheme;
 use crate::{screens, util, Element};
 
 /// The six top-level screens (left navigation rail order).
@@ -293,6 +293,11 @@ pub enum Message {
     MergePolicyPicked(String),
     /// Autostart toggled.
     AutostartToggled(bool),
+    /// S23: "Reset all settings to defaults" pressed — the FIRST press
+    /// arms the button (label + status line tell the user what a reset
+    /// does), a SECOND press executes it. Any other setting change
+    /// disarms.
+    ResetSettingsPressed,
     /// set_settings finished.
     SettingsSaved(Result<(), String>),
     /// Logs level filter picked.
@@ -523,6 +528,13 @@ pub const MERGE_POLICIES: [&str; 5] = [
 pub const BOND_MODES: [&str; 2] = ["per-connection", "stream"];
 /// Valid log levels (engine + service).
 pub const LOG_LEVELS: [&str; 4] = ["error", "warning", "info", "debug"];
+/// S23: quiet ticks before a debounced window-size save (1 tick ≈ 1 s;
+/// 2 keeps a drag's writes to one at the end).
+pub const WINDOW_SAVE_DEBOUNCE_TICKS: u32 = 2;
+/// S23: the persisted window size is clamped to the window's own
+/// min_size (run_app) before it ever reaches settings.json.
+pub const WINDOW_MIN_W: u32 = 880;
+pub const WINDOW_MIN_H: u32 = 580;
 /// Bandwidth graph window, one sample per Throughput event (1 s ticks).
 pub const RATE_HISTORY_LEN: usize = 120;
 
@@ -569,6 +581,20 @@ pub struct App {
     pub seed_text: String,
     /// Settings status line.
     pub settings_status: Option<String>,
+    /// S23: the reset-to-defaults button is ARMED (one click warns, the
+    /// second executes; any other settings change disarms).
+    pub reset_armed: bool,
+    /// S23: a reset is being persisted — when the save finishes, the
+    /// status line says "reset to defaults" instead of plain "saved".
+    pub settings_reset_pending: bool,
+    /// S23: the persisted window size changed and is waiting for the
+    /// debounce to settle (resize events stream continuously during a
+    /// drag; writes happen only after WINDOW_SAVE_DEBOUNCE_TICKS quiet
+    /// ticks).
+    pub window_save_pending: bool,
+    /// S23: how many quiet ticks since the last Resized event (only
+    /// meaningful while [`Self::window_save_pending`] is set).
+    pub window_quiet_ticks: u32,
     /// Latency test states per profile id.
     pub latency: HashMap<String, LatencyState>,
     /// Log buffer (ring, capped).
@@ -673,31 +699,10 @@ impl App {
     pub fn new(service: Arc<dyn MtService>, flags: Flags) -> Self {
         let events_rx = Arc::new(AsyncMutex::new(service.events()));
         let seed_text = String::new();
-        let settings = SettingsView {
-            theme_seed: SEED_SWATCHES[0],
-            dark_mode: false,
-            // S18: follow the OS until the user picks otherwise.
-            theme_mode: "system".to_string(),
-            system_proxy: false,
-            merge_policy: MERGE_POLICIES[0].to_string(),
-            autostart: false,
-            bonded_adapters: Vec::new(),
-            bond_mode: BOND_MODES[0].to_string(),
-            merge_port: 7443,
-            socks_port: 10808,
-            http_port: 10809,
-            allow_lan: false,
-            log_level: LOG_LEVELS[1].to_string(),
-            probe_target: "connectivitycheck.gstatic.com:80".to_string(),
-            exit_probe_url: "http://ip-api.com/json".to_string(),
-            close_to_tray: false,
-            always_on_top: false,
-            kill_switch: false,
-            diagnostics: false,
-            speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
-            speed_test_upload_url: "http://speed.cloudflare.com/__up".to_string(),
-            qos_fair: false,
-        };
+        // S23: the pre-load placeholder IS the stock view (seed
+        // 0x6750A4 = SEED_SWATCHES[0], balanced, per-connection,
+        // warning — the same values the literals used to spell out).
+        let settings = SettingsView::default();
         // S18: detect the OS appearance once so the System mode (the
         // stock default) starts honest.
         let sys_dark = crate::theme::system_prefers_dark();
@@ -722,6 +727,11 @@ impl App {
             settings,
             seed_text,
             settings_status: None,
+            // S23
+            reset_armed: false,
+            settings_reset_pending: false,
+            window_save_pending: false,
+            window_quiet_ticks: 0,
             latency: HashMap::new(),
             logs: VecDeque::new(),
             log_filter: LogFilter::All,
@@ -990,7 +1000,10 @@ impl App {
         }
     }
 
-    fn save_settings(&self, s: SettingsView) -> iced::Task<Message> {
+    fn save_settings(&mut self, s: SettingsView) -> iced::Task<Message> {
+        // S23: any settings mutation disarms the pending reset (the
+        // two-click guard only survives its own confirm click).
+        self.reset_armed = false;
         // S18: keep the legacy `dark_mode` bool at the EFFECTIVE state so a
         // v0.11-or-older binary reading this file lands on the appearance
         // the user currently sees (forward-compat shadow; D8).
@@ -1062,6 +1075,17 @@ impl App {
                 }
                 let t = self.refresh_status();
                 self.sync_tray();
+                // S23: debounced window-size persistence — the size
+                // settles for WINDOW_SAVE_DEBOUNCE_TICKS quiet ticks,
+                // then one save lands (a drag never writes per event).
+                if self.window_save_pending {
+                    self.window_quiet_ticks = self.window_quiet_ticks.saturating_add(1);
+                    if self.window_quiet_ticks >= WINDOW_SAVE_DEBOUNCE_TICKS {
+                        self.window_save_pending = false;
+                        self.window_quiet_ticks = 0;
+                        return self.save_settings(self.settings.clone());
+                    }
+                }
                 return t;
             }
             Message::Event(ev) => match ev {
@@ -1355,24 +1379,29 @@ impl App {
                 }
             },
             Message::SettingsLoaded(s) => {
-                self.settings = s.clone();
-                self.seed_text = s.theme_seed.to_string();
-                // S18: light/dark resolves through the picked mode + the
-                // CURRENT OS preference (not the legacy bool).
-                self.sys_dark = crate::theme::system_prefers_dark();
-                self.apply_theme();
-                // S16: honor a persisted always-on-top now that settings
-                // exist (the Opened path covers the reverse order).
-                let top = s.always_on_top;
-                if top && self.window_id.is_some() {
-                    return self.apply_window_level(true);
+                // S23: the shared "a fresh canonical settings view just
+                // arrived" path (also used by the reset button): apply
+                // theme/seed/adapters/window state from it.
+                //
+                // A fresh load also cancels any armed reset (the state it
+                // was about to clear is now current).
+                self.reset_armed = false;
+                // S23: restore the remembered window size once the
+                // window exists (a load that races the first Opened
+                // event simply keeps the stock size — the Resized event
+                // will correct it).
+                if self.window_id.is_some() && !s.window_size_is_default() {
+                    let id = self.window_id.expect("checked above");
+                    let apply = self.apply_settings_view(s.clone());
+                    return iced::Task::batch([
+                        apply,
+                        iced::window::resize(
+                            id,
+                            iced::Size::new(s.window_w as f32, s.window_h as f32),
+                        ),
+                    ]);
                 }
-                // S11: the saved bonded order may have arrived after the
-                // adapter rows (the init batch is concurrent) — re-sort
-                // UNLESS a draft is in progress (never reshuffle edits).
-                if !self.adapters_dirty() && !self.adapters.is_empty() {
-                    sort_adapter_rows(&mut self.adapters, &s.bonded_adapters);
-                }
+                return self.apply_settings_view(s);
             }
             Message::SeedSwatch(seed) => {
                 self.settings.theme_seed = seed;
@@ -1446,9 +1475,86 @@ impl App {
                 self.settings.autostart = v;
                 return self.save_settings(self.settings.clone());
             }
+            // S23: "Reset all settings to defaults" — two-click confirm.
+            // The FIRST press arms (the button relabels, the status line
+            // explains the scope); the SECOND executes: the stock view
+            // is applied locally (theme/seed/adapters/window level —
+            // the same apply_settings_view path a fresh load takes)
+            // and persisted through the NORMAL validated save (stock
+            // values pass every check by construction). Profiles and
+            // routing rules are NOT part of the reset — they live in
+            // their own screens and files.
+            Message::ResetSettingsPressed => {
+                if !self.reset_armed {
+                    self.reset_armed = true;
+                    self.settings_status = Some(
+                        "click the button again to reset every setting to \
+                         defaults — servers and routing rules are kept"
+                            .to_string(),
+                    );
+                    util::push_log(
+                        &mut self.logs,
+                        "INFO  gui: settings reset armed — click again to confirm".to_string(),
+                    );
+                    return iced::Task::none();
+                }
+                self.reset_armed = false;
+                self.settings_reset_pending = true;
+                let stock = SettingsView::default();
+                let apply = self.apply_settings_view(stock.clone());
+                // Reset restores the stock window size too (a live
+                // resize to 1080×720 — the next launch reads it back).
+                let resize = if self.window_id.is_some() {
+                    iced::window::resize(
+                        self.window_id.expect("checked above"),
+                        iced::Size::new(stock.window_w as f32, stock.window_h as f32),
+                    )
+                } else {
+                    iced::Task::none()
+                };
+                let save = self.save_settings(stock);
+                // bonded_adapters is owned by the ADAPTERS path on the
+                // real service (set_settings deliberately never clobbers
+                // it — a stale GUI copy must not undo a fresh selection),
+                // so the reset clears it through its own API: the
+                // service persists the empty (single-link, unpinned)
+                // selection and restarts a live session if one is up.
+                let svc = Arc::clone(&self.service);
+                let clear_adapters = iced::Task::perform(
+                    async move { svc.set_bonded_adapters(Vec::new()).await },
+                    Message::AdaptersSaved,
+                );
+                // Mirror the service-side clear in the rows immediately
+                // (AdaptersSaved's status counts them BEFORE its reload).
+                for row in &mut self.adapters {
+                    row.selected = false;
+                }
+                util::push_log(
+                    &mut self.logs,
+                    "INFO  gui: settings reset to defaults (servers and rules kept)".to_string(),
+                );
+                return iced::Task::batch([apply, resize, save, clear_adapters]);
+            }
             Message::SettingsSaved(res) => match res {
-                Ok(()) => self.settings_status = Some("settings saved".to_string()),
-                Err(e) => self.settings_status = Some(format!("save failed: {e}")),
+                Ok(()) => {
+                    // S23: the reset's completion note beats the generic
+                    // "saved" (the user just clicked a destructive
+                    // button — say what it did).
+                    if self.settings_reset_pending {
+                        self.settings_reset_pending = false;
+                        self.settings_status = Some(
+                            "settings reset to defaults — servers and routing rules \
+                             untouched"
+                                .to_string(),
+                        );
+                    } else {
+                        self.settings_status = Some("settings saved".to_string());
+                    }
+                }
+                Err(e) => {
+                    self.settings_reset_pending = false;
+                    self.settings_status = Some(format!("save failed: {e}"));
+                }
             },
             Message::LogFilterPicked(l) => self.log_filter = LogFilter::from_label(&l),
             Message::LogsCleared => self.logs.clear(),
@@ -1860,6 +1966,22 @@ impl App {
                     iced::window::Event::Resized(size) => {
                         // S16: remember the size (context-menu clamping).
                         self.window_size = Some(size);
+                        // S23: persist the size (debounced on Tick — a
+                        // drag streams Resized events; only the settled
+                        // size is ever written). Clamped to the window
+                        // minimum so a stored value can never wedge the
+                        // layout; sub-minimal events (restored bounds
+                        // before the WM clamps them) are ignored.
+                        let w = size.width.max(WINDOW_MIN_W as f32);
+                        let h = size.height.max(WINDOW_MIN_H as f32);
+                        if (w as u32) != self.settings.window_w
+                            || (h as u32) != self.settings.window_h
+                        {
+                            self.settings.window_w = w as u32;
+                            self.settings.window_h = h as u32;
+                            self.window_save_pending = true;
+                            self.window_quiet_ticks = 0;
+                        }
                         // Maximize state may have changed (OS restore,
                         // snap, our own toggle): re-query for the glyph.
                         if let Some(id) = self.window_id {
@@ -2238,6 +2360,35 @@ impl App {
     pub fn apply_theme(&mut self) {
         self.theme
             .rederive(self.settings.theme_seed, self.theme_dark());
+    }
+
+    /// S23: apply a freshly loaded (or freshly RESET) canonical settings
+    /// view to the GUI state: seed field, OS-preference re-read, theme
+    /// re-derivation, always-on-top window level, adapter re-sort. The
+    /// one place that knows how a settings view becomes visible state
+    /// (previously inline in SettingsLoaded).
+    fn apply_settings_view(&mut self, s: SettingsView) -> iced::Task<Message> {
+        self.settings = s.clone();
+        self.seed_text = s.theme_seed.to_string();
+        // S18: light/dark resolves through the picked mode + the CURRENT
+        // OS preference (not the legacy bool).
+        self.sys_dark = crate::theme::system_prefers_dark();
+        self.apply_theme();
+        // S16: honor (or CLEAR) always-on-top — `false` lowers the
+        // window back to Normal, which a reset requires.
+        let top = s.always_on_top;
+        let level_task = if self.window_id.is_some() {
+            self.apply_window_level(top)
+        } else {
+            iced::Task::none()
+        };
+        // S11: the saved bonded order may have arrived after the adapter
+        // rows (the init batch is concurrent) — re-sort UNLESS a draft is
+        // in progress (never reshuffle edits).
+        if !self.adapters_dirty() && !self.adapters.is_empty() {
+            sort_adapter_rows(&mut self.adapters, &s.bonded_adapters);
+        }
+        level_task
     }
 
     /// S18: live-update the accent seed during a wheel drag/pick (no disk
@@ -3382,6 +3533,109 @@ mod tests {
         assert!(app.settings.qos_fair);
         drop(app.update(Message::QosToggled(false)));
         assert!(!app.settings.qos_fair);
+    }
+
+    /// S23: the reset-to-defaults button — one click arms (status line
+    /// explains the scope, nothing changes), a second click applies the
+    /// stock view locally, persists it through the service AND clears
+    /// the bonded-adapter selection, and any other settings mutation
+    /// disarms an armed reset.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn s23_reset_settings_two_click_flow() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service.clone(), Flags::default()).await;
+        // Dirty several settings (seed, policy, qos, bond mode) so the
+        // reset has something to actually revert.
+        app.settings.theme_seed = 0xEA4335;
+        app.settings.merge_policy = "failover".to_string();
+        app.settings.qos_fair = true;
+        app.settings.kill_switch = true;
+        app.settings.window_w = 1280;
+        app.settings.window_h = 900;
+        drop(app.update(Message::SettingsSaved(Ok(())))); // clear status noise
+
+        // FIRST click: armed, nothing applied yet.
+        drop(app.update(Message::ResetSettingsPressed));
+        assert!(app.reset_armed);
+        assert!(app
+            .settings_status
+            .as_deref()
+            .unwrap_or_default()
+            .contains("servers and routing rules are kept"));
+        assert_eq!(app.settings.theme_seed, 0xEA4335, "first click is inert");
+
+        // SECOND click: stock view applied locally, the persistence tasks
+        // are dispatched (the iced runtime awaits them; this test drops
+        // them — the service-side round-trip is proven in real_service's
+        // s23_reset_round_trip_persists test).
+        drop(app.update(Message::ResetSettingsPressed));
+        assert!(!app.reset_armed);
+        assert!(app.settings_reset_pending);
+        assert_eq!(
+            app.settings,
+            SettingsView::default(),
+            "GUI draft is the stock view"
+        );
+        assert_eq!(app.seed_text, "6770852", "seed field follows the reset");
+        // The completion note (the SettingsSaved arrival follows the
+        // persisted save in the runtime; here it is driven directly).
+        drop(app.update(Message::SettingsSaved(Ok(()))));
+        assert_eq!(
+            app.settings_status.as_deref(),
+            Some("settings reset to defaults — servers and routing rules untouched")
+        );
+        assert!(!app.settings_reset_pending);
+
+        // An armed reset disarms on any other settings mutation.
+        drop(app.update(Message::ResetSettingsPressed));
+        assert!(app.reset_armed);
+        drop(app.update(Message::QosToggled(true)));
+        assert!(!app.reset_armed, "a settings mutation disarms the reset");
+    }
+
+    /// S23: window-size persistence — Resized updates the draft (clamped
+    /// to the minimum), the debounce holds writes until quiet ticks, and
+    /// the save round-trip lands exactly the settled size.
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn s23_window_size_persistence() {
+        let service = Arc::new(crate::mock::MockService::new());
+        let mut app = App::init_async(service, Flags::default()).await;
+        assert_eq!((app.settings.window_w, app.settings.window_h), (1080, 720));
+
+        // A stream of Resized events: only the LAST one matters.
+        let id = iced::window::Id::unique();
+        for (w, h) in [(1200.0, 800.0), (1280.0, 850.0), (1400.0, 900.0)] {
+            drop(app.update(Message::WindowEvent(
+                id,
+                iced::window::Event::Resized(iced::Size::new(w, h)),
+            )));
+        }
+        assert_eq!((app.settings.window_w, app.settings.window_h), (1400, 900));
+        assert!(app.window_save_pending, "waiting for the debounce");
+
+        // Debounce: quiet ticks below the threshold do not save yet.
+        for _ in 0..(WINDOW_SAVE_DEBOUNCE_TICKS - 1) {
+            drop(app.update(Message::Tick));
+        }
+        assert!(app.window_save_pending);
+        drop(app.update(Message::Tick)); // the Nth quiet tick flushes
+        assert!(!app.window_save_pending);
+        // The flush dispatches the (dropped here) save task; the
+        // service-side round-trip is proven in real_service's
+        // s23_window_size_round_trip test.
+
+        // Sub-minimal events are clamped, never wedging the layout.
+        drop(app.update(Message::WindowEvent(
+            id,
+            iced::window::Event::Resized(iced::Size::new(400.0, 300.0)),
+        )));
+        assert_eq!(
+            (app.settings.window_w, app.settings.window_h),
+            (WINDOW_MIN_W, WINDOW_MIN_H),
+            "clamped to the window minimum"
+        );
     }
 
     /// S19: kill switch + diagnostics + speed-URL toggles update the draft

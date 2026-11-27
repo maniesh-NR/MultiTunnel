@@ -2444,6 +2444,36 @@ pub fn settings(app: &App) -> Element<'_> {
     ]
     .spacing(10);
 
+    // S23: reset-to-defaults card (two-click confirm; destructive, so
+    // ErrorText styling + an explicit scope caption).
+    // --------------------------------------------------------------
+    let (reset_label, reset_enabled) = if app.reset_armed {
+        ("click again to confirm the reset", true)
+    } else {
+        ("Reset all settings to defaults", true)
+    };
+    let reset_card = column![
+        text("Reset").size(ts.title_m.size).color(s.on_surface),
+        m3_button(
+            reset_label,
+            reset_enabled,
+            ButtonKind::ErrorText,
+            Message::ResetSettingsPressed,
+            app
+        ),
+        text(
+            "restores every setting on this screen (theme, network, \
+             advanced, window behavior) to its stock value — ports back to \
+             10808/10809, policy back to balanced, adapters back to the \
+             single unpinned link. Your SERVERS and ROUTING RULES are not \
+             part of the reset. The button asks for a second click before \
+             it does anything.",
+        )
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant),
+    ]
+    .spacing(10);
+
     let mut col = column![
         container(appearance)
             .padding(16)
@@ -2466,6 +2496,10 @@ pub fn settings(app: &App) -> Element<'_> {
             .style(t3::card(s, s.surface_container_low))
             .width(Length::Fill),
         container(diagnostics_card)
+            .padding(16)
+            .style(t3::card(s, s.surface_container_low))
+            .width(Length::Fill),
+        container(reset_card)
             .padding(16)
             .style(t3::card(s, s.surface_container_low))
             .width(Length::Fill),
