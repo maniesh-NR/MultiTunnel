@@ -400,6 +400,11 @@ pub fn status(app: &App) -> Element<'_> {
     // layout parked the toggle and the picker at opposite ends of a
     // Fill row — a wide dead gap between them — and kept the graph in
     // its own card below; the graph now takes that free space instead.
+    let connect_label = match app.status.as_ref().map(|snapshot| snapshot.state) {
+        Some(ServiceState::Connected) => "disconnect",
+        Some(ServiceState::Connecting) => "cancel connection",
+        _ => "connect",
+    };
     let mut left_col = column![
         text("Tunnel state")
             .size(ts.label_m.size)
@@ -410,7 +415,7 @@ pub fn status(app: &App) -> Element<'_> {
         vertical_space().height(Length::Fixed(8.0)),
         toggler(app.is_connected())
             .size(36.0)
-            .label("connect")
+            .label(connect_label)
             .on_toggle(Message::ConnectToggle)
             .style(t3::switch(s)),
     ]
