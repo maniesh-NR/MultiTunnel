@@ -1284,11 +1284,14 @@ fn profile_card<'a>(app: &'a App, p: &'a ProfileView) -> Element<'a> {
     .spacing(8)
     .align_y(iced::Alignment::Center);
 
-    let row2 = row![
-        text(format!("{}  ·  {}", p.protocol, p.endpoint))
-            .size(ts.body_s.size)
-            .color(s.on_surface_variant),
-        horizontal_space().width(Length::Fill),
+    // Keep server details on their own full-width line so long endpoints
+    // wrap without squeezing the action buttons off the card.
+    let endpoint = text(format!("{}  ·  {}", p.protocol, p.endpoint))
+        .size(ts.body_s.size)
+        .color(s.on_surface_variant)
+        .width(Length::Fill);
+
+    let actions = row![
         m3_button(
             "Use",
             !p.active,
@@ -1327,8 +1330,10 @@ fn profile_card<'a>(app: &'a App, p: &'a ProfileView) -> Element<'a> {
                 row1,
                 text(p.remark.clone())
                     .size(ts.body_s.size)
-                    .color(s.on_surface_variant),
-                row2,
+                    .color(s.on_surface_variant)
+                    .width(Length::Fill),
+                endpoint,
+                actions,
             ]
             .spacing(6),
         )
@@ -1337,7 +1342,7 @@ fn profile_card<'a>(app: &'a App, p: &'a ProfileView) -> Element<'a> {
         .width(Length::Fill)
         .into();
     }
-    container(column![row1, row2].spacing(6))
+    container(column![row1, endpoint, actions].spacing(6))
         .padding(14)
         .style(t3::card(s, s.surface_container_low))
         .width(Length::Fill)
