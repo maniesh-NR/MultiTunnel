@@ -367,7 +367,10 @@ pub fn status(app: &App) -> Element<'_> {
     let profile_line = snap
         .as_ref()
         .and_then(|x| x.active_profile.clone())
-        .map_or_else(|| "no active server".to_string(), |p| format!("via {p}"));
+        .map_or_else(
+            || "no active server".to_string(),
+            |p| format!("via {}", util::short(&p, 32)),
+        );
     let meta_line = snap.as_ref().map_or_else(String::new, |x| {
         let since = x.up_since.clone().unwrap_or_else(|| "—".into());
         format!("up since {since}   ·   restarts: {}", x.restarts)
@@ -383,7 +386,7 @@ pub fn status(app: &App) -> Element<'_> {
     let picker = pick_list(tags.clone(), selected, |t: String| {
         Message::StatusServerPicked(t)
     })
-    .width(Length::Fixed(260.0))
+    .width(Length::Fill)
     .padding(6)
     .style(t3::pick_list_style(s))
     .menu_style(t3::menu_style(s));
@@ -405,8 +408,14 @@ pub fn status(app: &App) -> Element<'_> {
             .size(ts.label_m.size)
             .color(s.on_surface_variant),
         text(state).size(ts.headline_m.size).color(state_fg),
-        text(profile_line).size(ts.body_m.size).color(state_fg),
-        text(meta_line).size(ts.body_s.size).color(state_fg),
+        text(profile_line)
+            .size(ts.body_m.size)
+            .color(state_fg)
+            .width(Length::Fill),
+        text(meta_line)
+            .size(ts.body_s.size)
+            .color(state_fg)
+            .width(Length::Fill),
         vertical_space().height(Length::Fixed(8.0)),
         toggler(app.is_connected())
             .size(36.0)
@@ -531,7 +540,8 @@ pub fn status(app: &App) -> Element<'_> {
              pick an active server first"
         })
         .size(ts.body_s.size)
-        .color(s.on_surface_variant),
+        .color(s.on_surface_variant)
+        .width(Length::Fill),
     ]
     .spacing(6)
     .push(
@@ -554,7 +564,7 @@ pub fn status(app: &App) -> Element<'_> {
                     (
                         format!(
                             "single hop — the exit IS your server ({})",
-                            info.server_endpoint
+                            util::short(&info.server_endpoint, 36)
                         ),
                         s.tertiary_container,
                         s.on_tertiary_container,
@@ -563,68 +573,59 @@ pub fn status(app: &App) -> Element<'_> {
                     (
                         format!(
                             "extra egress hop — the exit differs from your server ({}); the server's own outbound (e.g. a VPN on the VM) is the exit",
-                            info.server_endpoint
+                            util::short(&info.server_endpoint, 36)
                         ),
                         s.error_container,
                         s.on_error_container,
                     )
                 };
+                let route = if info.via_temp_tunnel {
+                    chip(
+                        "temporary probe tunnel",
+                        app,
+                        s.surface_container_high,
+                        s.on_surface_variant,
+                    )
+                } else {
+                    chip(
+                        "live tunnel",
+                        app,
+                        s.tertiary_container,
+                        s.on_tertiary_container,
+                    )
+                };
                 exit_out = exit_out
                     .push(
-                        row![
-                            text(info.exit_ip.clone())
-                                .size(ts.headline_s.size)
-                                .color(s.on_surface),
-                            horizontal_space().width(Length::Fill),
-                            if info.via_temp_tunnel {
-                                chip(
-                                    "temporary probe tunnel",
-                                    app,
-                                    s.surface_container_high,
-                                    s.on_surface_variant,
-                                )
-                            } else {
-                                chip(
-                                    "live tunnel",
-                                    app,
-                                    s.tertiary_container,
-                                    s.on_tertiary_container,
-                                )
-                            },
-                        ]
-                        .spacing(8)
-                        .align_y(iced::Alignment::Center),
-                    )
-                    .push(
-                        row![
-                            chip(
-                                format!("{} {}", info.country, info.city),
-                                app,
-                                s.secondary_container,
-                                s.on_secondary_container
-                            ),
-                            chip(
-                                info.isp.clone(),
-                                app,
-                                s.secondary_container,
-                                s.on_secondary_container
-                            ),
-                        ]
-                        .spacing(8)
-                        .align_y(iced::Alignment::Center),
-                    )
-                    .push(
-                        container(text(verdict).size(ts.body_s.size).color(vfg))
-                            .padding(10)
-                            .style(t3::card(s, vbg))
+                        text(info.exit_ip.clone())
+                            .size(ts.body_m.size)
+                            .color(s.on_surface)
                             .width(Length::Fill),
+                    )
+                    .push(route)
+                    .push(
+                        text(format!("{} · {} · {}", info.country, info.city, info.isp))
+                            .size(ts.body_s.size)
+                            .color(s.on_surface_variant)
+                            .width(Length::Fill),
+                    )
+                    .push(
+                        container(
+                            text(verdict)
+                                .size(ts.body_s.size)
+                                .color(vfg)
+                                .width(Length::Fill),
+                        )
+                        .padding(10)
+                        .style(t3::card(s, vbg))
+                        .width(Length::Fill),
                     );
             }
             Err(e) => {
                 exit_out = exit_out.push(
                     text(format!("exit probe failed: {e}"))
                         .size(ts.body_s.size)
-                        .color(s.error),
+                        .color(s.error)
+                        .width(Length::Fill),
                 );
             }
         }
@@ -632,7 +633,8 @@ pub fn status(app: &App) -> Element<'_> {
         exit_out = exit_out.push(
             text("no result yet — check the exit IP")
                 .size(ts.body_s.size)
-                .color(s.on_surface_variant),
+                .color(s.on_surface_variant)
+                .width(Length::Fill),
         );
     }
     let mut speed_out = column![text("Speed test")
@@ -642,6 +644,21 @@ pub fn status(app: &App) -> Element<'_> {
     if let Some(res) = &app.speed {
         match res {
             Ok(info) => {
+                let route = if info.via_temp_tunnel {
+                    chip(
+                        "temporary probe tunnel",
+                        app,
+                        s.surface_container_high,
+                        s.on_surface_variant,
+                    )
+                } else {
+                    chip(
+                        "live tunnel",
+                        app,
+                        s.tertiary_container,
+                        s.on_tertiary_container,
+                    )
+                };
                 speed_out = speed_out
                     .push(
                         row![
@@ -649,57 +666,35 @@ pub fn status(app: &App) -> Element<'_> {
                                 .size(ts.headline_s.size)
                                 .color(s.on_surface),
                             horizontal_space().width(Length::Fill),
-                            if info.via_temp_tunnel {
-                                chip(
-                                    "temporary probe tunnel",
-                                    app,
-                                    s.surface_container_high,
-                                    s.on_surface_variant,
-                                )
-                            } else {
-                                chip(
-                                    "live tunnel",
-                                    app,
-                                    s.tertiary_container,
-                                    s.on_tertiary_container,
-                                )
-                            },
+                            route,
                         ]
                         .spacing(8)
                         .align_y(iced::Alignment::Center),
                     )
                     .push(
-                        row![
-                            chip(
-                                format!("{:.1} MB in {:.1} s", info.mbytes, info.seconds),
-                                app,
-                                s.secondary_container,
-                                s.on_secondary_container
-                            ),
-                            chip(
-                                util::short(&info.profile_tag, 24),
-                                app,
-                                s.surface_container_high,
-                                s.on_surface_variant
-                            ),
-                        ]
-                        .spacing(8)
-                        .align_y(iced::Alignment::Center),
-                    )
-                    .push(
-                        text(
-                            "measures the DOWNLOAD path through this server; the engine's \
-                             per-adapter graphs show the live spread while connected",
-                        )
+                        text(format!(
+                            "{:.1} MB in {:.1} s · {}",
+                            info.mbytes,
+                            info.seconds,
+                            util::short(&info.profile_tag, 24)
+                        ))
                         .size(ts.label_m.size)
-                        .color(s.on_surface_variant),
+                        .color(s.on_surface_variant)
+                        .width(Length::Fill),
+                    )
+                    .push(
+                        text("measures the download path through this server; the engine's per-adapter graphs show the live spread while connected")
+                            .size(ts.label_m.size)
+                            .color(s.on_surface_variant)
+                            .width(Length::Fill),
                     );
             }
             Err(e) => {
                 speed_out = speed_out.push(
                     text(format!("speed test failed: {e}"))
                         .size(ts.body_s.size)
-                        .color(s.error),
+                        .color(s.error)
+                        .width(Length::Fill),
                 );
             }
         }
@@ -707,7 +702,8 @@ pub fn status(app: &App) -> Element<'_> {
         speed_out = speed_out.push(
             text("no result yet — run the speed test")
                 .size(ts.body_s.size)
-                .color(s.on_surface_variant),
+                .color(s.on_surface_variant)
+                .width(Length::Fill),
         );
     }
     // S22: the upload button appears ONLY after the download test has
@@ -732,6 +728,21 @@ pub fn status(app: &App) -> Element<'_> {
         if let Some(res) = &app.speed_up {
             match res {
                 Ok(info) => {
+                    let route = if info.via_temp_tunnel {
+                        chip(
+                            "temporary probe tunnel",
+                            app,
+                            s.surface_container_high,
+                            s.on_surface_variant,
+                        )
+                    } else {
+                        chip(
+                            "live tunnel",
+                            app,
+                            s.tertiary_container,
+                            s.on_tertiary_container,
+                        )
+                    };
                     speed_out = speed_out
                         .push(
                             row![
@@ -739,49 +750,29 @@ pub fn status(app: &App) -> Element<'_> {
                                     .size(ts.headline_s.size)
                                     .color(s.on_surface),
                                 horizontal_space().width(Length::Fill),
-                                if info.via_temp_tunnel {
-                                    chip(
-                                        "temporary probe tunnel",
-                                        app,
-                                        s.surface_container_high,
-                                        s.on_surface_variant,
-                                    )
-                                } else {
-                                    chip(
-                                        "live tunnel",
-                                        app,
-                                        s.tertiary_container,
-                                        s.on_tertiary_container,
-                                    )
-                                },
+                                route,
                             ]
                             .spacing(8)
                             .align_y(iced::Alignment::Center),
                         )
                         .push(
-                            row![
-                                chip(
-                                    format!("{:.1} MB sent in {:.1} s", info.mbytes, info.seconds),
-                                    app,
-                                    s.secondary_container,
-                                    s.on_secondary_container
-                                ),
-                                chip(
-                                    util::short(&info.profile_tag, 24),
-                                    app,
-                                    s.surface_container_high,
-                                    s.on_surface_variant
-                                ),
-                            ]
-                            .spacing(8)
-                            .align_y(iced::Alignment::Center),
+                            text(format!(
+                                "{:.1} MB sent in {:.1} s · {}",
+                                info.mbytes,
+                                info.seconds,
+                                util::short(&info.profile_tag, 24)
+                            ))
+                            .size(ts.label_m.size)
+                            .color(s.on_surface_variant)
+                            .width(Length::Fill),
                         );
                 }
                 Err(e) => {
                     speed_out = speed_out.push(
                         text(format!("upload test failed: {e}"))
                             .size(ts.body_s.size)
-                            .color(s.error),
+                            .color(s.error)
+                            .width(Length::Fill),
                     );
                 }
             }
@@ -813,12 +804,16 @@ pub fn status(app: &App) -> Element<'_> {
                 let ewma = l
                     .ewma_ms
                     .map_or_else(|| "—".to_string(), |v| format!("{v:.0} ms"));
-                let mut line = row![
+                let identity = row![
                     text(dot.to_string()).size(ts.title_m.size).color(dot_color),
                     text(util::short(&l.name, 32))
                         .size(ts.body_m.size)
                         .color(s.on_surface),
                     horizontal_space().width(Length::Fill),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center);
+                let measurements = row![
                     chip(
                         &latency,
                         app,
@@ -831,6 +826,10 @@ pub fn status(app: &App) -> Element<'_> {
                         s.surface_container_high,
                         s.on_surface_variant
                     ),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center);
+                let traffic = row![
                     chip(
                         format!("up {}", util::fmt_bytes(l.bytes_up)),
                         app,
@@ -846,23 +845,21 @@ pub fn status(app: &App) -> Element<'_> {
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center);
+                let mut link_details = column![identity].spacing(6);
                 if l.quarantined {
-                    line = line.push(chip(
+                    link_details = link_details.push(chip(
                         "quarantined",
                         app,
                         s.error_container,
                         s.on_error_container,
                     ));
                 }
-                // S22: show which adapter each link goes through — its
-                // own dim line UNDER the link (user wording, verbatim);
-                // the parsed field survives `util::short`'s truncation
-                // that previously hid the "[adapter]" name suffix.
-                let mut link_view = column![container(line)
+                link_details = link_details.push(measurements).push(traffic);
+                let link_card = container(link_details)
                     .padding(14)
                     .style(t3::card(s, s.surface_container_low))
-                    .width(Length::Fill)]
-                .spacing(4);
+                    .width(Length::Fill);
+                let mut link_view = column![link_card].spacing(4);
                 if let Some(adapter) = &l.adapter_name {
                     link_view = link_view.push(
                         row![
@@ -871,7 +868,8 @@ pub fn status(app: &App) -> Element<'_> {
                                 .color(s.on_surface_variant),
                             text(adapter.clone())
                                 .size(ts.label_m.size)
-                                .color(s.on_surface),
+                                .color(s.on_surface)
+                                .width(Length::Fill),
                         ]
                         .spacing(6)
                         .align_y(iced::Alignment::Center),
@@ -1004,7 +1002,9 @@ fn status_adapter_row<'a>(app: &'a App, i: usize, r: &'a crate::app::AdapterRow)
             text(arrow.to_string())
                 .size(ts.body_m.size)
                 .color(s.primary),
-            text(v.name.clone()).size(ts.body_m.size).color(s.primary),
+            text(util::short(&v.name, 32))
+                .size(ts.body_m.size)
+                .color(s.primary),
         ]
         .spacing(6)
         .align_y(iced::Alignment::Center),
@@ -1020,7 +1020,6 @@ fn status_adapter_row<'a>(app: &'a App, i: usize, r: &'a crate::app::AdapterRow)
     } else {
         chip("down", app, s.error_container, s.on_error_container)
     });
-    // S11: the adapter's saved priority position (bonded adapters only).
     if let Some(p) = app.priority_position_of(&v.id) {
         line = line.push(chip(
             format!("#{p}"),
@@ -1037,29 +1036,33 @@ fn status_adapter_row<'a>(app: &'a App, i: usize, r: &'a crate::app::AdapterRow)
             s.on_surface_variant,
         ));
     }
-    line = line.push(horizontal_space().width(Length::Fill));
-    // Live per-adapter rates: the newest 1 s sample, same formatting as
-    // the graph's own readout.
+
+    let mut card_col = column![line].spacing(8);
     let last = app
         .adapter_rates
         .get(&v.id)
         .and_then(|series| series.back());
     if let Some(&(u, d)) = last {
-        line = line.push(chip(
-            format!("↑ {}", crate::graph::format_rate(u as f64)),
-            app,
-            s.surface_container_high,
-            s.on_surface_variant,
-        ));
-        line = line.push(chip(
-            format!("↓ {}", crate::graph::format_rate(d as f64)),
-            app,
-            s.surface_container_high,
-            s.on_surface_variant,
-        ));
+        card_col = card_col.push(
+            row![
+                chip(
+                    format!("↑ {}", crate::graph::format_rate(u as f64)),
+                    app,
+                    s.surface_container_high,
+                    s.on_surface_variant,
+                ),
+                chip(
+                    format!("↓ {}", crate::graph::format_rate(d as f64)),
+                    app,
+                    s.surface_container_high,
+                    s.on_surface_variant,
+                ),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+        );
     }
 
-    let mut card_col = column![line].spacing(8);
     if r.expanded {
         let samples: Vec<crate::graph::Sample> = app
             .adapter_rates
@@ -1096,7 +1099,12 @@ fn status_adapter_row<'a>(app: &'a App, i: usize, r: &'a crate::app::AdapterRow)
                 .padding(Padding::new(4.0).left(28.0).right(4.0).bottom(4.0))
                 .style(t3::card(s, s.surface_container)),
         );
-        card_col = card_col.push(text(hint).size(ts.label_s.size).color(s.on_surface_variant));
+        card_col = card_col.push(
+            text(hint)
+                .size(ts.label_s.size)
+                .color(s.on_surface_variant)
+                .width(Length::Fill),
+        );
     }
     container(card_col)
         .padding(10)
@@ -1136,10 +1144,12 @@ pub fn servers(app: &App) -> Element<'_> {
                             .color(s.on_primary_container),
                         text(p.endpoint.clone())
                             .size(ts.body_m.size)
-                            .color(s.on_primary_container),
+                            .color(s.on_primary_container)
+                            .width(Length::Fill),
                         text(p.security.clone())
                             .size(ts.body_s.size)
-                            .color(s.on_primary_container),
+                            .color(s.on_primary_container)
+                            .width(Length::Fill),
                     ]
                     .spacing(4),
                 )
@@ -1153,7 +1163,8 @@ pub fn servers(app: &App) -> Element<'_> {
                 container(
                     text(format!("parse error: {e}"))
                         .size(ts.body_m.size)
-                        .color(s.on_error_container),
+                        .color(s.on_error_container)
+                        .width(Length::Fill),
                 )
                 .padding(12)
                 .style(t3::card(s, s.error_container))
@@ -1193,7 +1204,8 @@ pub fn servers(app: &App) -> Element<'_> {
         col = col.push(
             text(n.clone())
                 .size(ts.body_s.size)
-                .color(s.on_surface_variant),
+                .color(s.on_surface_variant)
+                .width(Length::Fill),
         );
     }
 
@@ -1222,7 +1234,8 @@ pub fn servers(app: &App) -> Element<'_> {
             m3_button("Export link", false, ButtonKind::Outlined, Message::PasteClear, app),
             text("disabled: MtService has no export_link (ProfileView carries no link material) — wave 3")
                 .size(ts.label_m.size)
-                .color(s.on_surface_variant),
+                .color(s.on_surface_variant)
+                .width(Length::Fill),
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center),
@@ -1274,10 +1287,10 @@ fn profile_card<'a>(app: &'a App, p: &'a ProfileView) -> Element<'a> {
     };
 
     let row1 = row![
-        text(p.tag.clone())
+        text(util::short(&p.tag, 36))
             .size(ts.title_s.size)
-            .color(s.on_surface),
-        horizontal_space().width(Length::Fill),
+            .color(s.on_surface)
+            .width(Length::Fill),
         active_badge,
         latency_chip,
     ]
@@ -1399,7 +1412,8 @@ pub fn edit_overlay(app: &App) -> Element<'_> {
     let mut form = column![
         text(format!("Edit server — {} · {}", d.protocol, d.security))
             .size(ts.title_m.size)
-            .color(s.on_surface),
+            .color(s.on_surface)
+            .width(Length::Fill),
         edit_field_row(app, "name", &d.tag, EditField::Tag, "server name", false),
         edit_field_row(
             app,
@@ -1488,7 +1502,8 @@ pub fn edit_overlay(app: &App) -> Element<'_> {
             container(
                 text(format!("save failed: {err}"))
                     .size(ts.body_s.size)
-                    .color(s.on_error_container),
+                    .color(s.on_error_container)
+                    .width(Length::Fill),
             )
             .padding(10)
             .style(t3::card(s, s.error_container))
@@ -1506,12 +1521,15 @@ pub fn edit_overlay(app: &App) -> Element<'_> {
                 app
             ),
             m3_button("Cancel", true, ButtonKind::Text, Message::EditCancel, app),
-            text("editing the ACTIVE server applies on the next reconnect")
-                .size(ts.label_m.size)
-                .color(s.on_surface_variant),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center),
+    );
+    form = form.push(
+        text("editing the ACTIVE server applies on the next reconnect")
+            .size(ts.label_m.size)
+            .color(s.on_surface_variant)
+            .width(Length::Fill),
     );
 
     // Scrollable so the form never overflows short windows.
@@ -1711,6 +1729,16 @@ pub fn adapters(app: &App) -> Element<'_> {
     let selected = app.adapters.iter().filter(|r| r.selected).count();
     let priority_mode = app.settings.merge_policy == "priority";
 
+    let adapter_status = app.adapters_status.clone().unwrap_or_else(|| {
+        format!(
+            "{selected} bonded — order below = adapter priority{}",
+            if priority_mode {
+                " (priority policy: fills #1 until saturated, then #2…)"
+            } else {
+                " (used by the 'priority' policy)"
+            }
+        )
+    });
     let toolbar = row![
         m3_button(
             "Apply",
@@ -1733,22 +1761,6 @@ pub fn adapters(app: &App) -> Element<'_> {
             Message::AdaptersRefresh,
             app
         ),
-        horizontal_space().width(Length::Fill),
-        match &app.adapters_status {
-            Some(t) => text(t.clone())
-                .size(ts.body_s.size)
-                .color(s.on_surface_variant),
-            None => text(format!(
-                "{selected} bonded — order below = adapter priority{}",
-                if priority_mode {
-                    " (priority policy: fills #1 until saturated, then #2…)"
-                } else {
-                    " (used by the 'priority' policy)"
-                }
-            ))
-            .size(ts.body_s.size)
-            .color(s.on_surface_variant),
-        },
     ]
     .spacing(8)
     .align_y(iced::Alignment::Center);
@@ -1773,11 +1785,20 @@ pub fn adapters(app: &App) -> Element<'_> {
              picks the route.",
         )
         .size(ts.body_s.size)
-        .color(s.on_surface_variant),
+        .color(s.on_surface_variant)
+        .width(Length::Fill),
     ]
     .spacing(6);
 
-    let mut rows = column![toolbar, explainer].spacing(10);
+    let mut rows = column![
+        toolbar,
+        text(adapter_status)
+            .size(ts.body_s.size)
+            .color(s.on_surface_variant)
+            .width(Length::Fill),
+        explainer,
+    ]
+    .spacing(10);
     if app.adapters.is_empty() {
         rows = rows.push(
             text("no adapters found — plug one in or press Refresh")
@@ -1798,8 +1819,7 @@ pub fn adapters(app: &App) -> Element<'_> {
             None
         };
         let mut line = row![
-            // D20: expand/collapse the per-interface graph (a plain text
-            // button — no icon font in the zero-dep build).
+            // D20: expand/collapse the per-interface graph.
             button(text(arrow.to_string()).size(ts.body_m.size))
                 .padding(Padding::new(2.0).left(6.0).right(6.0))
                 .style(t3::text_button(s))
@@ -1808,7 +1828,8 @@ pub fn adapters(app: &App) -> Element<'_> {
                 .size(ts.body_m.size)
                 .spacing(8)
                 .on_toggle(move |_| Message::AdapterToggled(i))
-                .style(t3::checkbox(s)),
+                .style(t3::checkbox(s))
+                .width(Length::Fill),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center);
@@ -1822,39 +1843,12 @@ pub fn adapters(app: &App) -> Element<'_> {
                 s.on_primary_container,
             ));
         }
-
-        if !v.description.is_empty() {
-            line = line.push(
-                text(util::short(&v.description, 40))
-                    .size(ts.body_s.size)
-                    .color(s.on_surface_variant),
-            );
-        }
-        line = line.push(horizontal_space().width(Length::Fill));
-        if v.ipv4.is_empty() {
-            line = line.push(chip(
-                "no IPv4",
-                app,
-                s.error_container,
-                s.on_error_container,
-            ));
-        } else {
-            for ip in &v.ipv4 {
-                line = line.push(chip(
-                    ip.clone(),
-                    app,
-                    s.surface_container_high,
-                    s.on_surface_variant,
-                ));
-            }
-        }
         line = line.push(if v.up {
             chip("up", app, s.secondary_container, s.on_secondary_container)
         } else {
             chip("down", app, s.error_container, s.on_error_container)
         });
-        // S11: reorder buttons — swap with the previous/next SELECTED row
-        // (disabled at the block edges; unselected rows carry no order).
+        // Variable-length details use a full-width area beneath the controls.
         let can_up = pos.is_some_and(|p| p > 1);
         let can_down = pos.is_some() && app.adapters[i + 1..].iter().any(|r| r.selected);
         line = line.push(
@@ -1870,9 +1864,33 @@ pub fn adapters(app: &App) -> Element<'_> {
                 .on_press_maybe(can_down.then_some(Message::AdapterMoved(i, 1))),
         );
 
-        // D20: the adapter row + its expandable per-interface graph live in
-        // ONE card so the graph reads as part of the row.
-        let mut card_col = column![line].spacing(8);
+        let mut details = column![].spacing(4);
+        if !v.description.is_empty() {
+            details = details.push(
+                text(util::short(&v.description, 40))
+                    .size(ts.body_s.size)
+                    .color(s.on_surface_variant)
+                    .width(Length::Fill),
+            );
+        }
+        if v.ipv4.is_empty() {
+            details = details.push(chip(
+                "no IPv4",
+                app,
+                s.error_container,
+                s.on_error_container,
+            ));
+        } else {
+            details = details.push(
+                text(format!("IPv4: {}", v.ipv4.join(" · ")))
+                    .size(ts.label_m.size)
+                    .color(s.on_surface_variant)
+                    .width(Length::Fill),
+            );
+        }
+
+        // Keep the expandable graph in the same adapter card.
+        let mut card_col = column![line, details].spacing(8);
         if r.expanded {
             let samples: Vec<crate::graph::Sample> = app
                 .adapter_rates
