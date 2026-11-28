@@ -391,11 +391,16 @@ fn install_stage(staging: &Path, zip_bytes: &[u8]) -> Result<Vec<String>, Platfo
         if entry.is_dir() {
             continue;
         }
-        let Some(name) = installable_name(entry.name()) else {
-            tracing::debug!(
-                entry = entry.name(),
-                "skipping non-installable archive entry"
-            );
+        // zip 9: `ZipFile::name()` now validates the entry name (UTF-8) and
+        // returns a Result. An undecodable name is the same failure class as
+        // an unreadable zip (`PlatformError::BadZip`): nothing is extracted
+        // and the caller sweeps the staging dir.
+        let entry_name = entry
+            .name()
+            .map_err(|_| PlatformError::BadZip)?
+            .into_owned();
+        let Some(name) = installable_name(&entry_name) else {
+            tracing::debug!(entry = %entry_name, "skipping non-installable archive entry");
             continue;
         };
         let dest = staging.join(name);
