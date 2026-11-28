@@ -104,6 +104,59 @@ pub(crate) fn is_on() -> bool {
     ENABLED.load(Ordering::Acquire)
 }
 
+/// S23 (v2rayN 7.25.6 parity — "log and temp-file auto cleanup, 7 days
+/// by default"): prune stale files from the log dir.
+///
+/// Policy (all best-effort — cleanup must never break construction):
+/// - regular FILES only (subdirectories are left alone);
+/// - the newest `keep_newest` files are ALWAYS kept (an active burst of
+///   diagnostics sessions never loses its newest material);
+/// - beyond that, files whose mtime is older than `retention` measured
+///   at `now` are deleted;
+/// - the `protected` path (the file the diagnostics sink is writing
+///   right now) is never touched even if it somehow looks stale.
+///
+/// Returns the paths that were deleted (the caller reports the count);
+/// unreadable metadata and failed deletes are silently skipped and
+/// simply do not appear in the list.
+pub(crate) fn sweep_old_logs(
+    dir: &Path,
+    now: SystemTime,
+    retention: std::time::Duration,
+    keep_newest: usize,
+    protected: Option<&Path>,
+) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new(); // no dir yet — nothing to sweep (not an error)
+    };
+    // (path, mtime) for the regular files; newest first.
+    let mut files: Vec<(PathBuf, SystemTime)> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter_map(|e| {
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            Some((e.path(), mtime))
+        })
+        .collect();
+    files.sort_by_key(|(_, mtime)| std::cmp::Reverse(*mtime));
+    let mut pruned = Vec::new();
+    for (i, (path, mtime)) in files.into_iter().enumerate() {
+        if i < keep_newest {
+            continue; // the newest N always survive
+        }
+        if Some(path.as_path()) == protected {
+            continue; // the live diagnostics file is never swept
+        }
+        let Ok(age) = now.duration_since(mtime) else {
+            continue; // clock skew (mtime in the future): keep
+        };
+        if age > retention && std::fs::remove_file(&path).is_ok() {
+            pruned.push(path);
+        }
+    }
+    pruned
+}
+
 /// Append one service-side line (the GUI `LogLine` tee; `kind` tags the
 /// source, e.g. "GUI"). Best-effort — a write failure just disables the
 /// sink (a broken log file must never break the app).
@@ -266,5 +319,101 @@ mod tests {
         assert_eq!(stamp.len(), 15, "YYYYMMDD-HHMMSS: {stamp}");
         assert_eq!(stamp.as_bytes()[8], b'-');
         assert!(stamp.chars().all(|c| c.is_ascii_digit() || c == '-'));
+    }
+}
+
+/// S23: the stale-log sweep (v2rayN 7.25.6 parity).
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+    use std::fs::FileTimes;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "mt-sweep-{}-{}-{}",
+            tag,
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&d).expect("scratch dir");
+        d
+    }
+
+    /// A file with a pinned mtime (std FileTimes, stable since 1.75).
+    fn touch(dir: &Path, name: &str, age: Option<std::time::Duration>) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, b"log line\n").expect("write file");
+        if let Some(age) = age {
+            let mtime = SystemTime::now() - age;
+            let f = std::fs::File::options()
+                .write(true)
+                .open(&p)
+                .expect("open for times");
+            f.set_times(FileTimes::new().set_modified(mtime))
+                .expect("set mtime");
+        }
+        p
+    }
+
+    #[test]
+    fn old_files_pruned_new_and_protected_kept() {
+        let dir = scratch("old");
+        let now = SystemTime::now();
+        let retention = std::time::Duration::from_secs(7 * 24 * 3600);
+        let stale = touch(&dir, "stale.log", Some(retention * 2));
+        let fresh = touch(&dir, "fresh.log", Some(std::time::Duration::from_secs(60)));
+        let ancient_but_kept = touch(&dir, "kept-protected.log", Some(retention * 4));
+
+        let pruned = sweep_old_logs(&dir, now, retention, 1, Some(&ancient_but_kept));
+        assert_eq!(pruned, vec![stale], "only the stale unprotected file");
+        assert!(fresh.exists(), "fresh file survives");
+        assert!(ancient_but_kept.exists(), "the protected file survives");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_newest_n_always_survive_regardless_of_age() {
+        let dir = scratch("newest");
+        let now = SystemTime::now();
+        let retention = std::time::Duration::from_secs(3600);
+        // Three ancient files with distinct ages: `a` newest (10×), `b`
+        // middle (11×), `c` oldest (12×). keep_newest=2 → `a` and `b`
+        // survive, only the oldest `c` is swept.
+        let a = touch(&dir, "a.log", Some(retention * 10));
+        let b = touch(&dir, "b.log", Some(retention * 11));
+        let c = touch(&dir, "c.log", Some(retention * 12));
+        let pruned = sweep_old_logs(&dir, now, retention, 2, None);
+        assert_eq!(pruned, vec![c], "only the oldest of the three");
+        assert!(a.exists() && b.exists(), "the newest two survive");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_dir_and_subdirs_are_not_errors() {
+        let dir = scratch("missing").join("nope");
+        assert!(
+            sweep_old_logs(&dir, SystemTime::now(), std::time::Duration::ZERO, 0, None).is_empty()
+        );
+        // A subdirectory is never touched.
+        let real = scratch("subdir");
+        std::fs::create_dir_all(real.join("nested")).expect("subdir");
+        let _ = touch(
+            &real,
+            "old.log",
+            Some(std::time::Duration::from_secs(10_000_000)),
+        );
+        let pruned = sweep_old_logs(
+            &real,
+            SystemTime::now(),
+            std::time::Duration::from_secs(60),
+            0,
+            None,
+        );
+        assert_eq!(pruned.len(), 1, "only the file, never the dir");
+        assert!(real.join("nested").is_dir(), "subdirectory untouched");
+        std::fs::remove_dir_all(&real).ok();
     }
 }

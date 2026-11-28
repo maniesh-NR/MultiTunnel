@@ -149,6 +149,12 @@ const BIND_WAIT: Duration = Duration::from_secs(8);
 const BIND_POLL: Duration = Duration::from_millis(10);
 /// `ServiceEvent` broadcast buffer (slow GUI receivers lag, never block).
 const EVENT_BUFFER: usize = 256;
+/// S23 (v2rayN 7.25.6 parity): stale-log retention — files in the log
+/// dir older than this are pruned at service construction.
+const LOG_RETENTION_SECS: u64 = 7 * 24 * 3600;
+/// S23: the newest N log files always survive the sweep (an active
+/// diagnostics burst never loses its newest material).
+const LOG_SWEEP_KEEP_NEWEST: usize = 40;
 /// The flow the engine pins (mt-engine hardcodes vision in its config).
 const ENGINE_FLOW: &str = "xtls-rprx-vision";
 /// S19: overall budget for one exit-IP probe (unchanged; the temp-tunnel
@@ -580,41 +586,10 @@ pub(crate) struct SettingsFile {
 impl Default for SettingsFile {
     fn default() -> Self {
         Self {
-            settings: SettingsView {
-                // Default seed: the Material baseline primary #6750A4.
-                theme_seed: 0x6750A4,
-                dark_mode: false,
-                // S18: fresh installs follow the OS appearance (the user's
-                // ask); the legacy dark_mode stays false so an old binary
-                // reading this file lands on light, matching what a
-                // light-mode OS user sees.
-                theme_mode: "system".to_string(),
-                system_proxy: false,
-                // D23: "balanced" spreads new connections across the
-                // ticked adapters by LIVE byte load — the v0.7.0 default.
-                // Round-robin's connection-count evenness let one fat
-                // flow dominate a single adapter (the "one adapter hogs
-                // everything" report); failover (v0.5.0's default) left
-                // the second adapter idle entirely.
-                merge_policy: "balanced".to_string(),
-                autostart: false,
-                bonded_adapters: Vec::new(),
-                bond_mode: "per-connection".to_string(),
-                merge_port: 7443,
-                socks_port: DEFAULT_SOCKS_PORT,
-                http_port: DEFAULT_HTTP_PORT,
-                allow_lan: false,
-                log_level: "warning".to_string(),
-                probe_target: DEFAULT_PROBE_TARGET.to_string(),
-                exit_probe_url: "http://ip-api.com/json".to_string(),
-                close_to_tray: false,
-                always_on_top: false,
-                kill_switch: false,
-                diagnostics: false,
-                speed_test_url: default_speed_test_url(),
-                speed_test_upload_url: default_speed_test_upload_url(),
-                qos_fair: false,
-            },
+            // S23: the stock view is the single source of truth
+            // (mt-service `Default for SettingsView`) — every field this
+            // literal used to spell out is now defined there once.
+            settings: SettingsView::default(),
             // Stock rules = the LAN/private bypass (S6-REV-C P1-4): a fresh
             // settings.json must carry private-CIDR → direct rules, mirroring
             // v0.2's `geoip:private → direct` invariant, so router admin
@@ -631,18 +606,6 @@ impl Default for SettingsFile {
 /// Current settings schema version (D20 = 1: stock failover →
 /// round-robin; D23 = 2: stock round-robin → balanced).
 const SETTINGS_VERSION: u32 = 2;
-
-/// S19: the default speed-test URL (mirrors the mt-service serde default
-/// so a fresh SettingsFile and a freshly-parsed one agree).
-fn default_speed_test_url() -> String {
-    "http://speed.cloudflare.com/__down?bytes=25000000".to_string()
-}
-
-/// S22: the default upload-test URL (mirrors the mt-service serde
-/// default, same reason).
-fn default_speed_test_upload_url() -> String {
-    "http://speed.cloudflare.com/__up".to_string()
-}
 
 impl SettingsFile {
     fn load(path: &Path) -> Self {
@@ -939,6 +902,27 @@ impl RealService {
                         )));
                     }
                 }
+            }
+        }
+        // S23 (v2rayN 7.25.6 parity): stale-log hygiene at every service
+        // construction — files older than 7 days are pruned, the newest
+        // 40 always survive, and the file the (possibly just restored)
+        // diagnostics sink is writing is never touched. Best-effort: a
+        // failed sweep is logged and forgotten (never fatal).
+        {
+            let pruned = crate::diagnostics::sweep_old_logs(
+                &svc.core.paths.log_dir,
+                SystemTime::now(),
+                std::time::Duration::from_secs(LOG_RETENTION_SECS),
+                LOG_SWEEP_KEEP_NEWEST,
+                crate::diagnostics::path().as_deref(),
+            );
+            if !pruned.is_empty() {
+                svc.core.emit(ServiceEvent::LogLine(format!(
+                    "INFO  log cleanup: removed {} stale file(s) older than {} days",
+                    pruned.len(),
+                    LOG_RETENTION_SECS / (24 * 3600)
+                )));
             }
         }
         svc
@@ -3112,31 +3096,16 @@ mod tests {
     /// files — exactly the v0.5.0 stock default case).
     fn write_settings(paths: &ServicePaths, echo_port: u16, system_proxy: bool) {
         let file = SettingsFile {
-            settings: SettingsView {
-                theme_seed: 0x6750A4,
-                dark_mode: false,
+            settings: {
                 // v0.5-era file shape: NO theme_mode key (the S18 legacy
-                // migration tests build on files like this one).
-                theme_mode: String::new(),
-                system_proxy,
-                merge_policy: "failover".to_string(),
-                autostart: false,
-                bonded_adapters: Vec::new(),
-                bond_mode: "per-connection".to_string(),
-                merge_port: 7443,
-                socks_port: DEFAULT_SOCKS_PORT,
-                http_port: DEFAULT_HTTP_PORT,
-                allow_lan: false,
-                log_level: "warning".to_string(),
-                probe_target: DEFAULT_PROBE_TARGET.to_string(),
-                exit_probe_url: "http://ip-api.com/json".to_string(),
-                close_to_tray: false,
-                always_on_top: false,
-                kill_switch: false,
-                diagnostics: false,
-                speed_test_url: default_speed_test_url(),
-                speed_test_upload_url: default_speed_test_upload_url(),
-                qos_fair: false,
+                // migration tests build on files like this one) — the
+                // stock view with exactly that field blanked.
+                SettingsView {
+                    theme_mode: String::new(),
+                    system_proxy,
+                    merge_policy: "failover".to_string(),
+                    ..SettingsView::default()
+                }
             },
             rules: Vec::new(),
             socks_port: 0,
@@ -3517,6 +3486,57 @@ mod tests {
         let dir = svc.log_dir().await;
         assert_eq!(dir, paths.log_dir.display().to_string());
         assert!(paths.log_dir.ends_with("logs"), "{dir}");
+    }
+
+    /// S23 (v2rayN 7.25.6 parity): service construction prunes stale
+    /// log files (7-day retention) while fresh ones survive. The sweep
+    /// keeps the newest 40 files unconditionally, so the fixture needs
+    /// MORE than 40 files for anything to become eligible.
+    #[tokio::test]
+    async fn s23_construction_sweeps_stale_logs() {
+        use std::fs::FileTimes;
+        let echo = spawn_echo().await;
+        let paths = scratch("sweep");
+        std::fs::create_dir_all(&paths.log_dir).expect("log dir");
+        let stale_mtime =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(9 * 24 * 3600);
+        let pin = |p: &std::path::Path| {
+            std::fs::File::options()
+                .write(true)
+                .open(p)
+                .expect("open")
+                .set_times(FileTimes::new().set_modified(stale_mtime))
+                .expect("mtime");
+        };
+        // 46 nine-day-old files (all eligible, only the oldest 6 exceed
+        // the newest-40 cap) + 2 fresh files.
+        for i in 0..46 {
+            let p = paths.log_dir.join(format!("engine-stale-{i:03}.log"));
+            std::fs::write(&p, b"x").expect("write");
+            pin(&p);
+        }
+        for i in 0..2 {
+            std::fs::write(paths.log_dir.join(format!("fresh-{i}.log")), b"x").expect("write");
+        }
+
+        let _svc = RealService::with(paths, Arc::new(FakeFactory { echo, fail: false }));
+        // Count what survived directly from the log dir.
+        let log_dir = std::path::PathBuf::from(_svc.log_dir().await);
+        let survived: Vec<String> = std::fs::read_dir(&log_dir)
+            .expect("log dir readable")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(survived.len(), 40, "48 files − 8 beyond the newest-40 cap");
+        assert!(
+            survived.iter().any(|n| n.starts_with("fresh-")),
+            "fresh kept"
+        );
+        // All 46 stale files share ONE pinned mtime (9 days old); the
+        // newest-40 cap counts the 2 fresh files too, so 38 stale files
+        // survive and 8 are swept.
+        let stale_left = survived.iter().filter(|n| n.contains("stale")).count();
+        assert_eq!(stale_left, 38, "38 stale + 2 fresh = the kept 40");
     }
 
     /// S22: a diagnostics toggle persisted ON writes again after a
@@ -4496,25 +4516,11 @@ mod tests {
             theme_seed: 0xEA4335,
             dark_mode: true,
             theme_mode: "dark".to_string(),
-            system_proxy: false, // never true in tests: autostart/sysproxy touch the host
             merge_policy: "lowestlatency".to_string(),
-            autostart: false,
-            bonded_adapters: Vec::new(),
-            bond_mode: "per-connection".to_string(),
-            merge_port: 7443,
             socks_port: 0, // ephemeral — tests never bind fixed ports
             http_port: 0,
-            allow_lan: false,
-            log_level: "warning".to_string(),
-            probe_target: "connectivitycheck.gstatic.com:80".to_string(),
-            exit_probe_url: "http://ip-api.com/json".to_string(),
-            close_to_tray: false,
-            always_on_top: false,
-            kill_switch: false,
-            diagnostics: false, // never true here: the sink is process-global
-            speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
-            speed_test_upload_url: "http://speed.cloudflare.com/__up".to_string(),
             qos_fair: true, // round-trips a non-default value
+            ..SettingsView::default()
         };
         svc.set_settings(view.clone()).await.expect("save settings");
         assert_eq!(svc.settings().await, view);
@@ -4546,6 +4552,124 @@ mod tests {
         );
         assert_eq!(svc2.settings().await, view);
         assert_eq!(svc2.routing_rules().await, rules);
+    }
+
+    /// S23: the reset-to-defaults service round trip — the two calls the
+    /// GUI's reset button dispatches (`set_settings(stock)` +
+    /// `set_bonded_adapters([])`) leave a DIRTY install stock on disk:
+    /// every settings field, the bonded selection, the legacy mirror
+    /// fields — while profiles and routing rules survive untouched.
+    #[tokio::test]
+    async fn s23_reset_round_trip_persists() {
+        let echo = spawn_echo().await;
+        let paths = scratch("reset");
+        let svc = RealService::with(paths.clone(), Arc::new(FakeFactory { echo, fail: false }));
+
+        // Dirty: non-default settings + rules + a profile. The bonded
+        // selection needs a REAL adapter id when the host has one (the
+        // machine-independent parts run either way).
+        let dirty = SettingsView {
+            theme_seed: 0xEA4335,
+            merge_policy: "priority".to_string(),
+            bond_mode: "stream".to_string(),
+            kill_switch: true,
+            window_w: 1400,
+            window_h: 900,
+            ..SettingsView::default()
+        };
+        svc.set_settings(dirty.clone()).await.expect("dirty save");
+        let host_adapter = svc
+            .adapters()
+            .await
+            .iter()
+            .find(|a| a.up || !a.ipv4.is_empty())
+            .map(|a| a.id.clone());
+        if let Some(id) = &host_adapter {
+            svc.set_bonded_adapters(vec![id.clone()])
+                .await
+                .expect("dirty adapters");
+        }
+        let rules = vec![RuleView {
+            kind: "domainSuffix".to_string(),
+            value: "keep-me.example.org".to_string(),
+            action: "direct".to_string(),
+        }];
+        svc.set_routing_rules(rules.clone()).await.expect("rules");
+        let profile = svc.import_link(VLESS_REALITY).await.expect("import");
+        svc.set_active_profile(&profile.id).await.expect("active");
+        assert_eq!(
+            svc.status().await.active_profile.as_deref(),
+            Some(profile.tag.as_str()),
+            "fixture sanity: the dirty profile is active"
+        );
+
+        // The reset: stock settings + empty bonded selection.
+        svc.set_settings(SettingsView::default())
+            .await
+            .expect("reset save");
+        svc.set_bonded_adapters(Vec::new())
+            .await
+            .expect("reset adapters");
+
+        // A fresh instance over the same paths reads the STOCK state
+        // (legacy mirror fields agree — no top-level socksPort leftover).
+        let svc2 = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: "127.0.0.1:9".parse().expect("addr"),
+                fail: false,
+            }),
+        );
+        assert_eq!(svc2.settings().await, SettingsView::default());
+        assert_eq!(
+            svc2.adapters().await.iter().filter(|a| a.selected).count(),
+            0
+        );
+        // Profiles and rules are NOT part of the reset.
+        assert_eq!(svc2.routing_rules().await, rules);
+        let profiles = svc2.profiles().await;
+        assert_eq!(profiles.len(), 1, "profiles survive the reset");
+        assert_eq!(
+            svc2.status().await.active_profile.as_deref(),
+            Some(profile.tag.as_str())
+        );
+    }
+
+    /// S23: the remembered window size round-trips through settings.json
+    /// (a custom size persists; the stock view keeps 1080×720 and
+    /// `window_size_is_default` flips accordingly).
+    #[tokio::test]
+    async fn s23_window_size_round_trip() {
+        let echo = spawn_echo().await;
+        let paths = scratch("winsize");
+        let svc = RealService::with(paths.clone(), Arc::new(FakeFactory { echo, fail: false }));
+
+        let custom = SettingsView {
+            window_w: 1400,
+            window_h: 900,
+            ..SettingsView::default()
+        };
+        svc.set_settings(custom.clone()).await.expect("save");
+        assert_eq!(svc.settings().await, custom);
+        assert!(!svc.settings().await.window_size_is_default());
+
+        let svc2 = RealService::with(
+            paths,
+            Arc::new(FakeFactory {
+                echo: "127.0.0.1:9".parse().expect("addr"),
+                fail: false,
+            }),
+        );
+        let reloaded = svc2.settings().await;
+        assert_eq!((reloaded.window_w, reloaded.window_h), (1400, 900));
+
+        // Reset restores the stock size.
+        svc2.set_settings(SettingsView::default())
+            .await
+            .expect("reset");
+        let stock = svc2.settings().await;
+        assert_eq!((stock.window_w, stock.window_h), (1080, 720));
+        assert!(stock.window_size_is_default());
     }
 
     #[tokio::test]

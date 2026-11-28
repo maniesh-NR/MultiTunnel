@@ -673,28 +673,15 @@ mod tests {
     #[test]
     fn theme_from_settings_and_rederive() {
         let mut t = MtTheme::from_settings(&SettingsView {
+            // S23: one base-line diff off the stock view (the fields
+            // from_settings actually reads: seed + mode; the system_proxy
+            // / merge_policy values keep the original test's "unrelated
+            // fields are ignored" coverage).
             theme_seed: 0x4285F4,
-            dark_mode: false,
             theme_mode: "light".into(),
             system_proxy: true,
             merge_policy: "failover".into(),
-            autostart: false,
-            bonded_adapters: Vec::new(),
-            bond_mode: "per-connection".into(),
-            merge_port: 7443,
-            socks_port: 10808,
-            http_port: 10809,
-            allow_lan: false,
-            log_level: "warning".into(),
-            probe_target: String::new(),
-            exit_probe_url: String::new(),
-            close_to_tray: false,
-            always_on_top: false,
-            kill_switch: false,
-            diagnostics: false,
-            speed_test_url: String::new(),
-            speed_test_upload_url: String::new(),
-            qos_fair: false,
+            ..SettingsView::default()
         });
         assert_eq!(t.palette.seed(), 0x4285F4);
         assert!(!t.dark);

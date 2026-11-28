@@ -33,6 +33,26 @@ pub const BOND_IDLE_GC: Duration = Duration::from_secs(60);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// GC sweep cadence.
 const GC_INTERVAL: Duration = Duration::from_secs(15);
+/// S23: SO_SNDBUF/SO_RCVBUF for the daemon's WAN-facing streams. 1 MiB
+/// covers the bandwidth-delay product of a ~150 Mbps carrier at ~50 ms
+/// RTT (18.75 MB/s × 50 ms ≈ 0.94 MiB) without double-buffering orders
+/// of magnitude beyond it; the OS default (often 128–256 KiB without
+/// autotuning) caps a single carrier's throughput on high-BDP paths.
+/// Loopback legs (the client side's engine hops) keep OS defaults —
+/// buffers there only cost memory.
+const TUNED_SOCKET_BUFS: usize = 1024 * 1024;
+
+/// S23: apply the WAN-stream socket tuning: TCP_NODELAY (S21) plus
+/// 1 MiB send/receive buffers. Best-effort — every option is advisory
+/// (an OS may clamp or ignore it) and a failure never kills the stream.
+fn tune_wan_stream(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
+    let sock = socket2::SockRef::from(stream);
+    // SAFETY-free: socket2 wraps the raw fd; setsockopt is fallible and
+    // its errors are advisory here (documented in TUNED_SOCKET_BUFS).
+    let _ = sock.set_send_buffer_size(TUNED_SOCKET_BUFS);
+    let _ = sock.set_recv_buffer_size(TUNED_SOCKET_BUFS);
+}
 
 /// Poison-tolerant lock (repo rule).
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -85,11 +105,12 @@ async fn accept_loop(
         };
         let bonds = Arc::clone(bonds);
         tokio::spawn(async move {
-            // S21 P1 perf: the carrier leg is bulk+latency mixed; Nagle on
-            // the public-internet carrier turns each 16 KiB frame's tail
-            // segment into a delayed-ACK stall (~40 ms per frame on Linux
-            // peers) — TCP_NODELAY, matching the client side.
-            let _ = conn.set_nodelay(true);
+            // S21 P1 perf + S23: the carrier leg is bulk+latency mixed;
+            // Nagle on the public-internet carrier turns each 16 KiB
+            // frame's tail segment into a delayed-ACK stall (~40 ms per
+            // frame on Linux peers), and the WAN buffers (see
+            // TUNED_SOCKET_BUFS) keep a full-BDP window in flight.
+            tune_wan_stream(&conn);
             if let Err(e) = handle_conn(bonds, conn).await {
                 tracing::debug!("bond carrier connection ended: {e}");
             }
@@ -269,20 +290,14 @@ async fn session_pump(
 /// Resolve + dial a target (no dependency on a resolver crate: tokio's
 /// `ToSocketAddrs` handles domains via getaddrinfo).
 async fn dial_target(target: &TargetAddr) -> anyhow::Result<TcpStream> {
-    match &target.host {
-        Host::Domain(d) => {
-            let stream = TcpStream::connect((d.as_str(), target.port)).await?;
-            // S21 P1 perf: Nagle here stalls the session pump's 16 KiB
-            // writes behind the target's delayed ACK.
-            let _ = stream.set_nodelay(true);
-            Ok(stream)
-        }
-        Host::Ip(ip) => {
-            let stream = TcpStream::connect(SocketAddr::new(*ip, target.port)).await?;
-            let _ = stream.set_nodelay(true);
-            Ok(stream)
-        }
-    }
+    let stream = match &target.host {
+        // S21 P1 perf (Nagle stalls the session pump's 16 KiB writes
+        // behind the target's delayed ACK) + S23 buffer sizing.
+        Host::Domain(d) => TcpStream::connect((d.as_str(), target.port)).await?,
+        Host::Ip(ip) => TcpStream::connect(SocketAddr::new(*ip, target.port)).await?,
+    };
+    tune_wan_stream(&stream);
+    Ok(stream)
 }
 
 /// Periodic GC: drop bonds whose carriers are all dead for BOND_IDLE_GC.
@@ -324,5 +339,32 @@ mod tests {
             .await
             .expect("serve task")
             .expect("serve returns Ok on shutdown");
+    }
+
+    /// S23: the WAN tuning applies without error to a real connected
+    /// stream (loopback pair). The actual buffer sizes are OS policy —
+    /// this proves the setsockopt plumbing, not kernel clamps.
+    #[tokio::test]
+    async fn tune_wan_stream_applies_to_a_live_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            stream
+        });
+        let client = TcpStream::connect(addr).await.unwrap();
+        let accepted = server.await.unwrap();
+        // Neither side may fail (failures are swallowed by design — so
+        // assert the OBSERVABLE nodelay, which socket2 reads back).
+        tune_wan_stream(&client);
+        tune_wan_stream(&accepted);
+        assert!(
+            accepted.nodelay().unwrap_or(false),
+            "tuning includes TCP_NODELAY"
+        );
+        // The requested buffer landed (or was clamped UP — never zero).
+        let sock = socket2::SockRef::from(&accepted);
+        assert!(sock.recv_buffer_size().unwrap_or(0) >= 128 * 1024);
+        assert!(sock.send_buffer_size().unwrap_or(0) >= 128 * 1024);
     }
 }

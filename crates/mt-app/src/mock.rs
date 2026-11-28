@@ -75,43 +75,21 @@ impl MockService {
         let (tx, _) = broadcast::channel(512);
         let profiles = seed_profiles();
         let active = profiles.first().map(|p| p.id.clone());
+        // S23: stock base (theme/system/balanced/…) with ONE demo
+        // deviation — the bonded adapters below.
+        // D22/D23: ALL THREE wired adapters bonded — mirrors the demo
+        // setup (balanced needs ≥2 ticked adapters to show its point)
+        // and gives every Status-tab adapter graph traffic. The mock's
+        // byte split is deliberately UNEVEN (Wi-Fi ≫ Ethernet ≫
+        // Cellular) — the "one adapter hogs everything" shape the
+        // balanced policy exists to fix.
         let settings = SettingsView {
-            theme_seed: 0x6750A4,
-            dark_mode: false,
-            // S18: follow the OS (mirrors the service default).
-            theme_mode: "system".to_string(),
-            system_proxy: false,
-            // D23: mirror the service default (balanced — live byte-load
-            // spreading; round-robin's connection-count evenness let one
-            // fat flow dominate a single adapter).
-            merge_policy: "balanced".to_string(),
-            autostart: false,
-            // D22/D23: ALL THREE wired adapters bonded — mirrors the demo
-            // setup (balanced needs ≥2 ticked adapters to show its point)
-            // and gives every Status-tab adapter graph traffic. The mock's
-            // byte split is deliberately UNEVEN (Wi-Fi ≫ Ethernet ≫
-            // Cellular) — the "one adapter hogs everything" shape the
-            // balanced policy exists to fix.
             bonded_adapters: vec![
                 "mock-wifi".to_string(),
                 "mock-ethernet".to_string(),
                 "mock-cellular".to_string(),
             ],
-            bond_mode: "per-connection".to_string(),
-            merge_port: 7443,
-            socks_port: 10808,
-            http_port: 10809,
-            allow_lan: false,
-            log_level: "warning".to_string(),
-            probe_target: "connectivitycheck.gstatic.com:80".to_string(),
-            exit_probe_url: "http://ip-api.com/json".to_string(),
-            close_to_tray: false,
-            always_on_top: false,
-            kill_switch: false,
-            diagnostics: false,
-            speed_test_url: "http://speed.cloudflare.com/__down?bytes=25000000".to_string(),
-            speed_test_upload_url: "http://speed.cloudflare.com/__up".to_string(),
-            qos_fair: false,
+            ..SettingsView::default()
         };
         let inner = Inner {
             state: ServiceState::Disconnected,
