@@ -464,6 +464,26 @@ GUI, no new dependencies):
   size) was regenerated so the glyph fills the tile — the mark grew
   ~24% in the tray after a dead gradient band was cropped out of the
   source and the margins tightened (93–97% width, 75–77% height fill).
+- **v0.16.0 — Open log folder truly fixed, reset-to-defaults, and a
+  changelog-driven stability pass**: the "Open log folder" button failed
+  on real Windows with *"The request is not supported. (os error 50)"*
+  — the app is a GUI-subsystem binary whose null standard handles were
+  inherited by the spawned `explorer.exe` (a trap console apps never
+  hit). It now opens the folder via **`ShellExecuteW`**, the shell's
+  own open verb (with an `explorer.exe` fallback whose stdio is null on
+  all three streams), and any failure names everything that was tried —
+  never a bare error code. Settings gained a **Reset all settings to
+  defaults** card (two-click confirm; every setting returns to stock
+  while **servers and routing rules are kept** — the caption says so
+  and round-trip tests pin it). Three improvements adopted from the
+  changelogs of similar clients (v2rayN, Clash Verge Rev, Hiddify,
+  Speedify — survey in `docs/research/`): stale log files are swept
+  automatically at startup (7-day retention, newest 40 always kept),
+  the **window size is remembered** across restarts (clamped to the
+  880×580 minimums, debounced writes), and the merge daemon sizes its
+  WAN socket buffers to 1 MiB (≈ the bandwidth-delay product of a
+  150 Mbps × 50 ms carrier) so a single high-BDP path is not capped by
+  the OS default 128–256 KiB buffers.
 - **Quick Settings on right-click**: the tray menu is built fresh from
   live state — Connect/Disconnect (state-reflecting), the server list
   (radio-checked on the active profile), Open MultiTunnel and Exit.

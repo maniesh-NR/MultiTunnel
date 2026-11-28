@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "21fd59f 2026-11-25T19:24:03Z",
+  "as_of": "0b684f1 2026-11-28T09:08:39+06:30",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 300,
-  "edge_count": 308,
+  "node_count": 313,
+  "edge_count": 314,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -256,6 +256,30 @@
       ]
     },
     {
+      "id": "commit:0b684f1",
+      "type": "commit",
+      "title": "Merge PR #3: S23 — open log folder fix, reset-to-defaults, changelog research pass (v0.16.0 material)",
+      "tags": [
+        "2026-11-28"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "0b684f1"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Merge PR #3: S23 — open log folder fix, reset-to-defaults, changelog research pass (v0.16.0 material)",
+          "kind": "title"
+        },
+        {
+          "text": "Merge S23: ShellExecuteW open-folder fix (os error 50), reset-all-settings, changelog-driven stability/UI pass. CI green on all four required checks; substitute critical review recorded in PR comments (Copilot quota-rejected at max/balanced/lite).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "commit:0bdfaf4",
       "type": "commit",
       "title": "s20 close: LEDGER + Playbook (S20 CLOSED — Copilot review completed, v0.13.1 shipped), transcript archive",
@@ -456,6 +480,26 @@
       ]
     },
     {
+      "id": "commit:1eaf80f",
+      "type": "commit",
+      "title": "backup(s23-pr-open): 2026-11-27 PR #3 opened, copilot reviewer requested (entitlement-dropped, documented)",
+      "tags": [
+        "2026-11-27"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "1eaf80f"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s23-pr-open): 2026-11-27 PR #3 opened, copilot reviewer requested (entitlement-dropped, documented)",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:21fd59f",
       "type": "commit",
       "title": "backup(s22-release-prep): 2026-11-25T19:24:03Z",
@@ -552,6 +596,30 @@
         {
           "text": "backup(s17-tag-v0.11.0): 2026-11-20T15:47:04Z [no changes]",
           "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:2b5b38b",
+      "type": "commit",
+      "title": "feat: reset-all-settings button + remembered window size",
+      "tags": [
+        "2026-11-27"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "2b5b38b"
+        }
+      ],
+      "passages": [
+        {
+          "text": "feat: reset-all-settings button + remembered window size",
+          "kind": "title"
+        },
+        {
+          "text": "RESET TO DEFAULTS (user ask): a Settings 'Reset' card with a two-click confirm (first press arms — button relabels, status line names the exact scope; second press executes; any other settings mutation disarms). The reset applies mt_service::SettingsView::default() — now the SINGLE source of truth for stock values (impl Default, previously spelled out in five diverging literals: real_service's SettingsFile, the GUI placeholder, the mock, theme/real_service test fixtures). - Scope: every Settings-screen field; servers (profiles.json) and routing rules are explicitly NOT touched — stated in the card caption. - bonded_adapters is cleared through set_bonded_adapters([]) — the real service's set_settings deliberately never clobbers it (stale-GUI-copy guard); the Adapters tab rows reload selected=false. - Always-on-top is UN-applied when stock(false) — apply_window_level handles both directions now (the old load path only raised). - SettingsSaved shows a reset-specific completion note.",
+          "kind": "body"
         }
       ]
     },
@@ -1636,6 +1704,30 @@
       ]
     },
     {
+      "id": "commit:8949522",
+      "type": "commit",
+      "title": "build(deps): bump zip",
+      "tags": [
+        "2026-11-26"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "8949522"
+        }
+      ],
+      "passages": [
+        {
+          "text": "build(deps): bump zip",
+          "kind": "title"
+        },
+        {
+          "text": "Bumps the cargo group with 1 update in the / directory: [zip](https://github.com/zip-rs/zip2).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "commit:8fdf7d1",
       "type": "commit",
       "title": "backup(s22-log-folder): 2026-11-25T18:42:08Z",
@@ -1651,6 +1743,26 @@
       "passages": [
         {
           "text": "backup(s22-log-folder): 2026-11-25T18:42:08Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:978da2b",
+      "type": "commit",
+      "title": "backup(s23-pr-ready): 2026-11-27 memory + gates + rig evidence",
+      "tags": [
+        "2026-11-27"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "978da2b"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s23-pr-ready): 2026-11-27 memory + gates + rig evidence",
           "kind": "title"
         }
       ]
@@ -1696,6 +1808,26 @@
       ]
     },
     {
+      "id": "commit:a0e0ccb",
+      "type": "commit",
+      "title": "chore: clippy/fmt pass (struct-update idioms, sort_by_key, drop dead default fns)",
+      "tags": [
+        "2026-11-27"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "a0e0ccb"
+        }
+      ],
+      "passages": [
+        {
+          "text": "chore: clippy/fmt pass (struct-update idioms, sort_by_key, drop dead default fns)",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:a3b9e5f",
       "type": "commit",
       "title": "backup(recovery-incident2-fixed): 2026-11-12T16:31:08Z",
@@ -1711,6 +1843,26 @@
       "passages": [
         {
           "text": "backup(recovery-incident2-fixed): 2026-11-12T16:31:08Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:a5ca2f7",
+      "type": "commit",
+      "title": "backup(s22-close-v0.15.0): 2026-11-25T19:41:20Z",
+      "tags": [
+        "2026-11-25"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "a5ca2f7"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s22-close-v0.15.0): 2026-11-25T19:41:20Z",
           "kind": "title"
         }
       ]
@@ -1792,6 +1944,30 @@
         {
           "text": "backup(s6-wave3-root-wiring): 2026-11-17T17:16:00Z",
           "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:ab91166",
+      "type": "commit",
+      "title": "perf(mt-bond): 1 MiB WAN socket buffers on the merge daemon + research doc",
+      "tags": [
+        "2026-11-27"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "ab91166"
+        }
+      ],
+      "passages": [
+        {
+          "text": "perf(mt-bond): 1 MiB WAN socket buffers on the merge daemon + research doc",
+          "kind": "title"
+        },
+        {
+          "text": "Speedify-style per-path window sizing applied to the two WAN socket populations MultiTunnel owns (the Xray engine legs stay on OS defaults — loopback buffers only cost memory): - accepted carrier streams (client ⇄ daemon); - dialed target streams (daemon ⇄ real target).",
+          "kind": "body"
         }
       ]
     },
@@ -2256,6 +2432,30 @@
       ]
     },
     {
+      "id": "commit:e1ec5cc",
+      "type": "commit",
+      "title": "feat: automatic stale-log cleanup at startup (v2rayN 7.25.6 parity)",
+      "tags": [
+        "2026-11-27"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "e1ec5cc"
+        }
+      ],
+      "passages": [
+        {
+          "text": "feat: automatic stale-log cleanup at startup (v2rayN 7.25.6 parity)",
+          "kind": "title"
+        },
+        {
+          "text": "v2rayN 7.25.6 made 'automatic cleanup time for logs and temporary files default to 7 days' — the same hygiene for MultiTunnel's log dir, whose engine logs and diagnostics files otherwise accumulate forever.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "commit:e2b9fa2",
       "type": "commit",
       "title": "backup(s2-clippy-clean): 2026-11-13T05:57:55Z",
@@ -2512,6 +2712,30 @@
         {
           "text": "backup(s19-impl): 2026-11-21T13:22:22Z [no changes]",
           "kind": "title"
+        }
+      ]
+    },
+    {
+      "id": "commit:fc90e47",
+      "type": "commit",
+      "title": "fix(mt-app): open log folder via ShellExecuteW, NUL-stdio fallback (os error 50)",
+      "tags": [
+        "2026-11-27"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "fc90e47"
+        }
+      ],
+      "passages": [
+        {
+          "text": "fix(mt-app): open log folder via ShellExecuteW, NUL-stdio fallback (os error 50)",
+          "kind": "title"
+        },
+        {
+          "text": "v0.15.0 spawned explorer.exe through std::process::Command with default (inherited) stdio. mt-app is a Windows GUI-subsystem binary — its standard handles are NULL, so Rust's spawn duplicates null handles into the child and CreateProcessW fails with ERROR_NOT_SUPPORTED: 'The request is not supported. (os error 50)' — exactly the reported Settings failure.",
+          "kind": "body"
         }
       ]
     },
@@ -5164,6 +5388,69 @@
       ]
     },
     {
+      "id": "ledger:s23",
+      "type": "ledger",
+      "title": "Stage s23 ledger",
+      "tags": [
+        "s23",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s23"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-27T12:10Z | IMPLEMENTED (three asks; PR-flow session). Sandbox recycled AGAIN (rustup 1.100.0 + clippy/rustfmt components + ziglang 0.14.1 re-PyPI'd — the wheel was INCOMPLETE for the THIRD time, no lib/libc/include; xkblibs re-extracted to /tmp/xkblibs; python-xlib to tools/pypkgs-xlib). (1) OPEN LOG FOLDER, OS ERROR 50 (user: \"could not open the log folder: The request is not supported. (os error 50)\"): root cause pinned — v0.15.0 spawned explorer.exe with DEFAULT (inherited) stdio; mt-app is a Windows GUI-subsystem binary whose standard handles are NULL, Rust's spawn duplicates them into the child (STARTF_USESTDHANDLES) and CreateProcessW fails with ERROR_NOT_SUPPORTED; console-subsystem parents never hit it (why every manual probe passed while the user's GUI failed). FIX: crates/mt-app/src/shell_open.rs — Windows ShellExecuteW primary (windows-sys Win32_UI_Shell, already a tray dep; verb \"open\", rc>32 = ok, documented SE_* code table) + explorer.exe fallback now with Stdio::null() on ALL THREE streams (the inheritance trap is unreachable by construction); macOS open(1)/other xdg-open(1), all NUL-stdio; failures name every mechanism tried + the folder (never silent; Settings status + Logs WARN). Rig: click → \"could not open the log folder: xdg-open is not installed (tried to open /tmp/MultiTunnel-mock-logs)\" — the actionable format, vs the old bare \"(os error 50)\".",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "ledger:s23-cont",
+      "type": "ledger",
+      "title": "LEDGER stream: s23-cont",
+      "tags": [
+        "s23-cont",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s23-cont"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-28T03:10Z | PR #3 MERGED (0b684f1) + v0.16.0 RELEASE-PREP + GATES. The continuation session (context handoff) executed the review-then-merge flow the s23-pr session had staged: CI on the PR head (1eaf80f) verified all four required checks GREEN (run 45995734937: test ubuntu 64s / test windows 150s / lint 47s / cross-check 117s — zero flake rounds this time). COPILOT CODE REVIEW: triggered via the S20 REST method (POST /pulls/3/copilot-code-review) — max effort ACCEPTED (201/PENDING) but landed quota-rejected (review 6088319039), balanced the same (6088442391), lite the same (6088493808) — the account's Copilot review quota is exhausted at EVERY tier today (S20 got lite to run; quota resets over days). The reviewer REQUEST via requested_reviewers remains in place exactly as the user asked (documented in the PR). Per the S19/S20 precedent a substitute critical review ran and was recorded in the PR (comment 7232494998): shell_open.rs ShellExecuteW contract (NUL-terminated wide strings, >32 success, SE_* table, NUL-stdio fallback), SettingsView::default single-source (serde-defaults parity pinned), reset two-click flow (validated save path, profiles/rules pinned to survive, bonded_adapters via set_bonded_adapters([])), window persistence (debounced, clamped, D8-additive), tune_wan_stream (BDP-sized, advisory, loopback-exempt), sweep_old_logs (newest-40 floor, protected live file, clock-skew safe) — no findings. MERGED via API (enforce_admins=false, all required checks green).",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "ledger:s23-pr",
+      "type": "ledger",
+      "title": "LEDGER stream: s23-pr",
+      "tags": [
+        "s23-pr",
+        "append-only"
+      ],
+      "sources": [
+        {
+          "file": "harness/memory/LEDGER.md",
+          "anchor": "s23-pr"
+        }
+      ],
+      "passages": [
+        {
+          "text": "2026-11-27T12:40Z | PR FLOW EXECUTED (the user's delivery instruction): branch s23-open-folder-reset-perf pushed (5 feature commits + backup), PR #3 opened via REST (https://github.com/maniesh-NR/MultiTunnel/pull/3 — full root-cause/write-up body; the plugin create_pull_request tool errored twice, curl worked first try). @copilot REVIEWER REQUESTED exactly as asked — POST /pulls/3/requested_reviewers {\"reviewers\":[\"copilot\"]} (the API equivalent of gh pr edit --add-reviewer @copilot; no gh binary in the sandbox) — GitHub ACCEPTED the call but SILENTLY DROPPED the reviewer (requested_reviewers returns empty; same entitlement finding as S19/S20/S21 — no Copilot code review on this repo/PAT). Documented in a PR comment with the re-request command for an entitled machine. CI kicked off on the PR: lint + test(ubuntu) + test(windows) + cross-check all running. NO tag/release this session by design (review first); v0.16.0 material is ready when the PR merges.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
       "id": "ledger:s3",
       "type": "ledger",
       "title": "Stage s3 ledger",
@@ -5843,7 +6130,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: S22 CLOSED — v0.15.0 released (tag on 21fd59f). The user's five asks shipped: (1) Exit & speed panel split into TWO columns — exit-IP outputs LEFT (heading, IP, location/ISP chips, verdict card), speed-test outputs RIGHT (heading, Mbps, volume chips, download note), quiet placeholders while idle; pure view change, D24-safe. (2) UPLOAD SPEED TEST: \"Test upload speed\" button appears ONLY after the download test concluded, result in the right column; speed_test_upload_url setting (serde default cloudflare __up, D8), RealService::speed_test_upload POSTs 25 MiB through the same tunnel selection (S20 profile_id rule; clock after connect; 30 s/5 s stall/ 64 MiB caps; partial stands; status guard only on clean completion); Settings → Advanced \"upload test URL\" field; diag header redacts it. (3) PER-LINK ADAPTER: `via <adapter>` dim line UNDER each link row — mt_service::adapter_of_link_name parses \"<tag> [adapter]\" (dedup \" #N\" stripped; \"Wi-Fi Direct\"/\"Ethernet 2\" verbatim), populated in link_status_of + carrier_snapshot map + mock; survives util::short truncation. (4) OPEN LOG FOLDER FIXED: root cause = the diag-file gate (diag_path None after restart → \"turn diagnostics on first\"); new MtService::log_dir() (always resolvable) + handler create_dir_all + opens the folder itself via open_folder_command (explorer/open/xdg-open; spawn-result reported; Settings status + Logs-tab WARN, never silent); fetched at boot in BOTH init paths; ADJACENT: diagnostics persisted ON re-enables the sink AT CONSTRUCTION (RealService::with) — the toggle no longer lies after a restart.",
+          "text": "- **Stage**: S23 IMPLEMENTED, delivered as PR `s23-open-folder-reset-perf` with @copilot requested as reviewer (the user's explicit delivery instruction — PR + review instead of direct-to-main; NO tag/release until the review lands). The user's three asks shipped on the branch: (1) OPEN LOG FOLDER, OS ERROR 50 FIXED — root cause: v0.15.0 spawned explorer.exe with inherited stdio; mt-app is a Windows GUI-subsystem binary (NULL standard handles) and Rust's spawn passes them with STARTF_USESTDHANDLES → CreateProcessW fails ERROR_NOT_SUPPORTED (\"os error 50\") — console parents never hit it, which is why every manual probe passed while the user's GUI failed. FIX: mt-app/src/shell_open.rs — Windows ShellExecuteW (shell open-verb, no handle inheritance; windows-sys Win32_UI_Shell was already the tray dep; documented SE_* ≤32 code table) + explorer.exe fallback with Stdio::null() on ALL three streams; macOS open(1)/other xdg-open(1), NUL-stdio; failures name every mechanism tried + the folder (never silent). (2) RESET ALL SETTINGS — Settings \"Reset\" card (ErrorText, TWO-CLICK confirm; first press arms: relabel + scope status; second executes; any other settings mutation disarms). Stock source is now ONE: mt_service::SettingsView::default() (five diverging literals collapsed; serde-defaults == Default test-pinned; theme_mode's absent-key legacy semantics documented).",
           "kind": "body"
         },
         {
@@ -8227,7 +8514,7 @@
     {
       "id": "state:current",
       "type": "state",
-      "title": "STATE — current position (last update: S19 (server editing + offline probes + speed test + diagnostics + kill switch, v0.13.0)",
+      "title": "STATE — current position (last update: S23 (open-log-folder os-error-50 fix + reset-to-defaults + changelog-research pass; PR flow)",
       "tags": [
         "durable"
       ],
@@ -8239,15 +8526,15 @@
       ],
       "passages": [
         {
-          "text": "# STATE — rewritten at the end of every stage. Last update: S19 (server editing + offline probes + speed test + diagnostics + kill switch, v0.13.0)",
+          "text": "# STATE — rewritten at the end of every stage. Last update: S23 (open-log-folder os-error-50 fix + reset-to-defaults + changelog-research pass; PR flow)",
           "kind": "title"
         },
         {
-          "text": "## Current position - Stage: S19 IMPLEMENTED, all local gates green, review fixes in, releasing v0.13.0. - The user's six asks shipped: (1) SERVER EDITING — Servers tab per-card Edit button → full-window modal (name/remark/address/port/UUID + REALITY fields for reality profiles); mt-service ProfileDetails round-trip (profile_details → update_profile); ProfileStore::update replaces BY ID in place (id/position/active preserved, no dedupe on explicit edit); RealService validates primitives + a capability-regression check (an edit that would break a convertible profile is rejected with the reason). (2) EXIT IP WHILE OFFLINE — exit_probe prefers the live session, falls back to temp_link_for() (the same factory path test_latency uses); ExitInfo.via_temp_tunnel drives a \"temporary probe tunnel\" chip. (3) SPEED TEST — Status card; speed_test(None) rides the live session for the active profile (else the temp tunnel); downloads settings.speed_test_url (default http://speed.cloudflare.com/__down?bytes=25000000, plain-HTTP verified); clock starts after connect (engine spawn excluded); 5 s stall / 30 s budget / 64 MiB caps; ≥400 rejected. (4) DIAGNOSTICS MODE — src/diagnostics.rs: one redacted paste-ready <log_dir>/diagnostics-YYYYMMDD-HHMMSS.log (header + GUI LogLine tee + ALL tracing events via a hand-rolled global subscriber; engine level forced debug; UUID/pbk never written — test-pinned); Settings card with the path + \"Open log folder\".",
+          "text": "## Current position - Stage: S23 IMPLEMENTED, all local gates green, delivered as the PR `s23-open-folder-reset-perf` requesting @copilot review (the user's explicit delivery instruction this session — NO tag/release until the review lands). - The user's three asks shipped on the branch: (1) OPEN LOG FOLDER FIXED FOR REAL — the v0.15.0 explorer.exe spawn hit ERROR_NOT_SUPPORTED (os error 50) because a GUI-subsystem binary passes NULL stdio handles into CreateProcessW; the fix is crates/mt-app/src/shell_open.rs: ShellExecuteW (shell's open-verb path, no handle inheritance) with an explorer.exe fallback that now uses Stdio::null() on all three streams; failures name every mechanism tried + the folder. (2) RESET ALL SETTINGS — a Settings \"Reset\" card (ErrorText, two-click confirm, scope caption: servers and routing rules untouched; bonded_adapters cleared through set_bonded_adapters([]); mt_service::SettingsView::default() is the single stock source — five diverging literals collapsed; reset note in SettingsSaved). (3) CHANGELOG RESEARCH APPLIED — docs/research/2026-11-27-stability-changelog-survey.md: adopted the v2rayN 7.25.6 7-day stale-log sweep (diagnostics::sweep_old_logs at every RealService::with), the desktop-client remembered window size (window_w/h serde-default, debounced save, restored on load), and 1 MiB SO_SNDBUF/SO_RCVBUF on the merge daemon's WAN streams via socket2 (transitive dep, zero new lockfile entries).",
           "kind": "title"
         },
         {
-          "text": "## Next actions 1. Tag v0.13.0 → release.yml; watch the run; verify assets by download+unzip (PE32+ in zip, ELFs, README/QUICKSTART carried). 2. User-side Windows verification: Edit dialog against a real profile (save + reconnect-apply), speed test + offline exit IP against the real server, diagnostics file paste-readiness (turn on, connect, reproduce an issue, paste), kill switch behavior after killing the VM side. 3. Review PR #1: request Copilot from an entitled machine (`gh pr edit 1 --add-reviewer Copilot`) if the account gains a Copilot seat; otherwise close it after the release.",
+          "text": "## Prior stages (compressed) ## Next actions 1. Tag v0.13.0 → release.yml; watch the run; verify assets by download+unzip (PE32+ in zip, ELFs, README/QUICKSTART carried). 2. User-side Windows verification: Edit dialog against a real profile (save + reconnect-apply), speed test + offline exit IP against the real server, diagnostics file paste-readiness (turn on, connect, reproduce an issue, paste), kill switch behavior after killing the VM side. 3. Review PR #1: request Copilot from an entitled machine (`gh pr edit 1 --add-reviewer Copilot`) if the account gains a Copilot seat; otherwise close it after the release.",
           "kind": "title"
         },
         {
@@ -8579,6 +8866,12 @@
       "evidence": "subject stage label (s10)"
     },
     {
+      "src": "commit:1eaf80f",
+      "dst": "ledger:s23-pr",
+      "rel": "part_of",
+      "evidence": "subject stage label (s23-pr)"
+    },
+    {
       "src": "commit:21fd59f",
       "dst": "ledger:s22",
       "rel": "part_of",
@@ -8873,6 +9166,12 @@
       "evidence": "subject stage label (s22)"
     },
     {
+      "src": "commit:978da2b",
+      "dst": "ledger:s23-pr",
+      "rel": "part_of",
+      "evidence": "subject stage label (s23-pr)"
+    },
+    {
       "src": "commit:9d4111b",
       "dst": "ledger:s18",
       "rel": "part_of",
@@ -8889,6 +9188,12 @@
       "dst": "ledger:recovery",
       "rel": "part_of",
       "evidence": "subject stage label (recovery)"
+    },
+    {
+      "src": "commit:a5ca2f7",
+      "dst": "ledger:s22",
+      "rel": "part_of",
+      "evidence": "subject stage label (s22)"
     },
     {
       "src": "commit:a7f5caa",
@@ -9732,6 +10037,24 @@
     },
     {
       "src": "ledger:s22",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
+      "src": "ledger:s23",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
+      "src": "ledger:s23-cont",
+      "dst": "project:multitunnel",
+      "rel": "part_of",
+      "evidence": "project ledger"
+    },
+    {
+      "src": "ledger:s23-pr",
       "dst": "project:multitunnel",
       "rel": "part_of",
       "evidence": "project ledger"

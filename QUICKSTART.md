@@ -118,6 +118,15 @@ needed for the usual per-user system-proxy writes (expect the SmartScreen
 > writes again after a restart); the app icon fills its tile — the
 > glyph grew ~24% in the tray.
 >
+> v0.16: the **Open log folder** button works on real Windows again —
+> the old spawn hit os error 50 (a GUI-subsystem binary's null handles
+> inherited by explorer.exe); it now opens via ShellExecuteW and any
+> failure says exactly what was tried. Settings has a **Reset all
+> settings to defaults** card (two-click confirm; servers and routing
+> rules are kept). Also: stale log files are swept after 7 days at
+> startup, the window size is remembered across restarts, and the merge
+> daemon's WAN sockets use 1 MiB buffers for high-bandwidth carriers.
+>
 > v0.13.1 (Copilot code-review round): kill-switch hardening — the
 > black-hole port is owned BEFORE the proxy points at it, the proxy
 > hand-off is serialized with disconnect, a failed restore keeps the
