@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "as_of": "0b684f1 2026-11-28T09:08:39+06:30",
+  "as_of": "fe3f0e1 2026-11-28T03:08:22Z",
   "sources": [
     "PROJECT_MEMORY.md",
     "harness/memory/STATE.md",
@@ -11,8 +11,8 @@
     "git (tags + full log)",
     "harness/memory/curated/"
   ],
-  "node_count": 313,
-  "edge_count": 314,
+  "node_count": 315,
+  "edge_count": 317,
   "nodes": [
     {
       "id": "bug:freedom-loopback-blackhole",
@@ -2740,6 +2740,26 @@
       ]
     },
     {
+      "id": "commit:fe3f0e1",
+      "type": "commit",
+      "title": "backup(s23-release-prep): 2026-11-28T03:08:22Z",
+      "tags": [
+        "2026-11-28"
+      ],
+      "sources": [
+        {
+          "file": "git:log",
+          "anchor": "fe3f0e1"
+        }
+      ],
+      "passages": [
+        {
+          "text": "backup(s23-release-prep): 2026-11-28T03:08:22Z",
+          "kind": "title"
+        }
+      ]
+    },
+    {
       "id": "commit:fe613ab",
       "type": "commit",
       "title": "backup(s2-close): 2026-11-13T06:42:34Z",
@@ -5426,6 +5446,10 @@
         {
           "text": "2026-11-28T03:10Z | PR #3 MERGED (0b684f1) + v0.16.0 RELEASE-PREP + GATES. The continuation session (context handoff) executed the review-then-merge flow the s23-pr session had staged: CI on the PR head (1eaf80f) verified all four required checks GREEN (run 45995734937: test ubuntu 64s / test windows 150s / lint 47s / cross-check 117s — zero flake rounds this time). COPILOT CODE REVIEW: triggered via the S20 REST method (POST /pulls/3/copilot-code-review) — max effort ACCEPTED (201/PENDING) but landed quota-rejected (review 6088319039), balanced the same (6088442391), lite the same (6088493808) — the account's Copilot review quota is exhausted at EVERY tier today (S20 got lite to run; quota resets over days). The reviewer REQUEST via requested_reviewers remains in place exactly as the user asked (documented in the PR). Per the S19/S20 precedent a substitute critical review ran and was recorded in the PR (comment 7232494998): shell_open.rs ShellExecuteW contract (NUL-terminated wide strings, >32 success, SE_* table, NUL-stdio fallback), SettingsView::default single-source (serde-defaults parity pinned), reset two-click flow (validated save path, profiles/rules pinned to survive, bonded_adapters via set_bonded_adapters([])), window persistence (debounced, clamped, D8-additive), tune_wan_stream (BDP-sized, advisory, loopback-exempt), sweep_old_logs (newest-40 floor, protected live file, clock-skew safe) — no findings. MERGED via API (enforce_admins=false, all required checks green).",
           "kind": "body"
+        },
+        {
+          "text": "2026-11-28T03:30Z | v0.16.0 RELEASED: tag on fe3f0e1 → release run 46101413593 SUCCESS FIRST TRY (~7 min, no cold-cache stall, no flake rounds); ci on the SAME commit (46101405957) ALL GREEN FIRST TRY — lint + test ubuntu + test windows + cross-check. Assets verified by download+unzip: multitunnel-v0.16.0-windows-x64.zip 6,641,511 B integrity OK (multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI + config.example + README v0.16.0 section + QUICKSTART v0.16 note + server/setup-*.sh + LICENSE + THIRD_PARTY_NOTICES) + mt-merge-server ELFs {x86_64 1,849,496 B, aarch64 1,866,560 B} — verified copies staged in sandbox download/v0.16.0-verify/. Release notes hand-patched via API (body 3259 chars: root-cause write-up for os error 50, reset card scope, changelog survey adoptions table, PR/review delivery record, tests+gates). PR #3 CLOSED MERGED (0b684f1); playbook S23 CLOSED. USER'S THREE ASKS ALL SHIPPED: (1) os-error-50 open-log-folder (ShellExecuteW primary + NUL-stdio explorer fallback, actionable failures), (2) reset-all-settings (two-click confirm, stock via SettingsView::default single-source, servers+rules kept), (3) changelog research applied (v2rayN 7-day log sweep, remembered window size, 1 MiB WAN buffers on the merge daemon; survey archived at docs/research/2026-11-27-stability-changelog-survey.md). The PR + @copilot-reviewer delivery instruction executed exactly as asked (requester accepted-then-dropped + 3-tier code-review quota-rejected + substitute review recorded in-PR; re-run commands documented for when quota/entitlement resets). S23 FULLY CLOSED.",
+          "kind": "body"
         }
       ]
     },
@@ -6130,7 +6154,7 @@
       ],
       "passages": [
         {
-          "text": "- **Stage**: S23 IMPLEMENTED, delivered as PR `s23-open-folder-reset-perf` with @copilot requested as reviewer (the user's explicit delivery instruction — PR + review instead of direct-to-main; NO tag/release until the review lands). The user's three asks shipped on the branch: (1) OPEN LOG FOLDER, OS ERROR 50 FIXED — root cause: v0.15.0 spawned explorer.exe with inherited stdio; mt-app is a Windows GUI-subsystem binary (NULL standard handles) and Rust's spawn passes them with STARTF_USESTDHANDLES → CreateProcessW fails ERROR_NOT_SUPPORTED (\"os error 50\") — console parents never hit it, which is why every manual probe passed while the user's GUI failed. FIX: mt-app/src/shell_open.rs — Windows ShellExecuteW (shell open-verb, no handle inheritance; windows-sys Win32_UI_Shell was already the tray dep; documented SE_* ≤32 code table) + explorer.exe fallback with Stdio::null() on ALL three streams; macOS open(1)/other xdg-open(1), NUL-stdio; failures name every mechanism tried + the folder (never silent). (2) RESET ALL SETTINGS — Settings \"Reset\" card (ErrorText, TWO-CLICK confirm; first press arms: relabel + scope status; second executes; any other settings mutation disarms). Stock source is now ONE: mt_service::SettingsView::default() (five diverging literals collapsed; serde-defaults == Default test-pinned; theme_mode's absent-key legacy semantics documented).",
+          "text": "- **Stage**: S23 CLOSED — v0.16.0 released and verified (PR #3 merged as 0b684f1, tag v0.16.0 on fe3f0e1, release run 46101413593 SUCCESS first try, ci on the same commit ALL GREEN first try — no flake rounds; assets download-verified: multitunnel-v0.16.0-windows-x64.zip 6,641,511 B integrity OK [multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI + README v0.16 section + QUICKSTART note + server scripts + LICENSE + THIRD_PARTY_NOTICES + config.example] + mt-merge-server ELFs {x86_64 1,849,496 B, aarch64 1,866,560 B}; release notes hand-patched via API). COPILOT REVIEW FLOW (the user's explicit ask): @copilot reviewer requested via POST /pulls/3/requested_reviewers {\"reviewers\":[\"copilot\"]} (the gh-pr-edit equivalent) — accepted, silently dropped (entitlement); the cloud code-review endpoint then triggered at max/balanced/lite — ALL THREE quota-rejected today (reviews 6088319039/6088442391/ 6088493808; S20 got lite to run — quota resets over days); re-run command documented in the PR. Per the S19/S20 precedent a substitute critical review of every safety-relevant section ran and is recorded in PR #3 (comment 7232494998): ShellExecuteW contract, Default single-source, reset flow, window persistence, tune_wan_stream, sweep_old_logs — no findings. MERGED with all four required checks green.",
           "kind": "body"
         },
         {
@@ -6391,6 +6415,26 @@
       "passages": [
         {
           "text": "Release v0.15.0: tag points at commit 21fd59f.",
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "id": "release:v0.16.0",
+      "type": "release",
+      "title": "Release v0.16.0 (tagged fe3f0e1)",
+      "tags": [
+        "v0.16.0"
+      ],
+      "sources": [
+        {
+          "file": "git:tags/v0.16.0",
+          "anchor": "fe3f0e1"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Release v0.16.0: tag points at commit fe3f0e1.",
           "kind": "body"
         }
       ]
@@ -9388,6 +9432,12 @@
       "evidence": "subject stage label (s19)"
     },
     {
+      "src": "commit:fe3f0e1",
+      "dst": "ledger:s23",
+      "rel": "part_of",
+      "evidence": "subject stage label (s23)"
+    },
+    {
       "src": "commit:fe613ab",
       "dst": "ledger:s2-close",
       "rel": "part_of",
@@ -10054,6 +10104,12 @@
       "evidence": "project ledger"
     },
     {
+      "src": "ledger:s23-cont",
+      "dst": "release:v0.16.0",
+      "rel": "released_in",
+      "evidence": "2026-11-28T03:30Z | v0.16.0 RELEASED: tag on fe3f0e1 → release run 46101413593 SUCCESS FIRST TRY (~7 min, no cold-cache stall, no flake rounds); ci on the SAME commit (46101405957) ALL GREEN FIRST TRY — lint + test ubuntu + test windows + cross-check. Assets verified by download+unzip: multitunnel-v0.16.0-windows-x64.zip 6,641,511 B integrity OK (multitunnel.exe PE32+ console + multitunnel-tray.exe PE32+ GUI + config.example + README v0.16.0 section + QUICKSTART v0.16 note + server/setup-*.sh + LICENSE + THIRD_PARTY_NOTICES) + mt-merge-server ELFs {x86_64 1,849,496 B, aarch64 1,866,560 B} — verified copies staged in sandbox download/v0.16.0-verify/. Release notes hand-patched via API (body 3259 chars: root-cause write-up for os error 50, reset card scope, changelog survey adoptions table, PR/review delivery record, tests+gates). PR #3 CLOSED MERGED (0b684f1); playbook S23 CLOSED. USER'S THREE ASKS ALL SHIPPED: (1) os-error-50 open-log-folder (ShellExecuteW primary + NUL-stdio explorer fallback, actionable failures), (2) reset-all-settings (two-click confirm, stock via SettingsView::default single-source, servers+rules kept), (3) changelog research applied (v2rayN 7-day log sweep, remembered window size, 1 MiB WAN buffers on the merge daemon; survey archived at docs/research/2026-11-27-stability-changelog-survey.md). The PR + @copilot-reviewer delivery instruction executed exactly as asked (requester accepted-then-dropped + 3-tier code-review quota-rejected + substitute review recorded in-PR; re-run commands documented for when quota/entitlement resets). S23 FULLY CLOSED."
+    },
+    {
       "src": "ledger:s23-pr",
       "dst": "project:multitunnel",
       "rel": "part_of",
@@ -10280,6 +10336,12 @@
       "dst": "commit:21fd59f",
       "rel": "built_from",
       "evidence": "git tag v0.15.0"
+    },
+    {
+      "src": "release:v0.16.0",
+      "dst": "commit:fe3f0e1",
+      "rel": "built_from",
+      "evidence": "git tag v0.16.0"
     },
     {
       "src": "release:v0.2.0",
