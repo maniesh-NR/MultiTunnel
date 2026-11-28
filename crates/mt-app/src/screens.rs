@@ -367,7 +367,10 @@ pub fn status(app: &App) -> Element<'_> {
     let profile_line = snap
         .as_ref()
         .and_then(|x| x.active_profile.clone())
-        .map_or_else(|| "no active server".to_string(), |p| format!("via {}", util::short(&p, 32)));
+        .map_or_else(
+            || "no active server".to_string(),
+            |p| format!("via {}", util::short(&p, 32)),
+        );
     let meta_line = snap.as_ref().map_or_else(String::new, |x| {
         let since = x.up_since.clone().unwrap_or_else(|| "—".into());
         format!("up since {since}   ·   restarts: {}", x.restarts)
@@ -584,7 +587,12 @@ pub fn status(app: &App) -> Element<'_> {
                         s.on_surface_variant,
                     )
                 } else {
-                    chip("live tunnel", app, s.tertiary_container, s.on_tertiary_container)
+                    chip(
+                        "live tunnel",
+                        app,
+                        s.tertiary_container,
+                        s.on_tertiary_container,
+                    )
                 };
                 exit_out = exit_out
                     .push(
@@ -595,13 +603,10 @@ pub fn status(app: &App) -> Element<'_> {
                     )
                     .push(route)
                     .push(
-                        text(format!(
-                            "{} · {} · {}",
-                            info.country, info.city, info.isp
-                        ))
-                        .size(ts.body_s.size)
-                        .color(s.on_surface_variant)
-                        .width(Length::Fill),
+                        text(format!("{} · {} · {}", info.country, info.city, info.isp))
+                            .size(ts.body_s.size)
+                            .color(s.on_surface_variant)
+                            .width(Length::Fill),
                     )
                     .push(
                         container(
@@ -647,7 +652,12 @@ pub fn status(app: &App) -> Element<'_> {
                         s.on_surface_variant,
                     )
                 } else {
-                    chip("live tunnel", app, s.tertiary_container, s.on_tertiary_container)
+                    chip(
+                        "live tunnel",
+                        app,
+                        s.tertiary_container,
+                        s.on_tertiary_container,
+                    )
                 };
                 speed_out = speed_out
                     .push(
@@ -726,7 +736,12 @@ pub fn status(app: &App) -> Element<'_> {
                             s.on_surface_variant,
                         )
                     } else {
-                        chip("live tunnel", app, s.tertiary_container, s.on_tertiary_container)
+                        chip(
+                            "live tunnel",
+                            app,
+                            s.tertiary_container,
+                            s.on_tertiary_container,
+                        )
                     };
                     speed_out = speed_out
                         .push(
@@ -1771,7 +1786,7 @@ pub fn adapters(app: &App) -> Element<'_> {
         )
         .size(ts.body_s.size)
         .color(s.on_surface_variant)
-            .width(Length::Fill),
+        .width(Length::Fill),
     ]
     .spacing(6);
 
